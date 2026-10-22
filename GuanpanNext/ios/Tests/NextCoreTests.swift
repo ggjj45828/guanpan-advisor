@@ -661,6 +661,124 @@ final class NextCoreTests: XCTestCase {
         XCTAssertNil(NextBenchmark.returnPercent(samples: [], from: start, to: start))
     }
 
+    // MARK: - 红利买入时机打分
+
+    private func bar(_ day: Int, low: Decimal, high: Decimal, close: Decimal) -> NextChartSample {
+        let start = Date(timeIntervalSince1970: 1792375200)
+        return NextChartSample(timestamp: start.addingTimeInterval(Double(day) * 86_400),
+                               open: close, high: high, low: low, close: close, iopv: nil, volume: 1)
+    }
+
+    func testDividendBuyScoreNeedsVerifiedPerShareAndPrice() {
+        // 没有已核实派息：不打分
+        XCTAssertNil(DividendBuyScoreEngine.evaluate(code: "563020", perShare: 0, price: 1, iopv: nil,
+            samples: [bar(0, low: 1, high: 1, close: 1)], dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+        // 没有行情：不打分
+        XCTAssertNil(DividendBuyScoreEngine.evaluate(code: "563020", perShare: 0.05, price: nil, iopv: nil,
+            samples: [bar(0, low: 1, high: 1, close: 1)], dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+    }
+
+    func testDividendBuyScoreComponentsSumToTotalAndTierFollowsTotal() {
+        // 近三个自然年都有已核实派息 → 稳定 10 分。
+        let events = [
+            NextETFDividendEvent(code: "563020", date: "2024-06-10", amountPerShare: Decimal(string: "0.012")!),
+            NextETFDividendEvent(code: "563020", date: "2025-06-10", amountPerShare: Decimal(string: "0.012")!),
+            NextETFDividendEvent(code: "563020", date: "2026-06-10", amountPerShare: Decimal(string: "0.012")!)
+        ]
+        // 窗口低 1.0 高 2.0；现价 1.0（贴区间下沿）→ 位置 35；回撤 50% → 回撤 15。
+        let samples = [bar(0, low: 1, high: 2, close: 1), bar(1, low: 1, high: 2, close: 1)]
+        // 每份 0.05、现价 1.0 → 股息率 5%，目标 4% → 拿满 40。
+        let score = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.05")!,
+            price: 1, iopv: nil, samples: samples, dividendEvents: events, today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(score?.yieldPoints, 40)
+        XCTAssertEqual(score?.positionPoints, 35)
+        XCTAssertEqual(score?.drawdownPoints, 15)
+        XCTAssertEqual(score?.stabilityPoints, 10)
+        XCTAssertEqual(score?.total, 100)
+        XCTAssertEqual(score?.tier, .attention)
+        XCTAssertTrue(score?.missing.isEmpty ?? false)
+    }
+
+    func testDividendBuyScoreScalesYieldPositionDrawdownAndStability() {
+        // 股息率只有目标的一半 → 20 分。
+        let halfYield = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.02")!,
+            price: 1, iopv: nil, samples: [], dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(halfYield?.yieldPoints, 20)
+        // 没有日 K：位置与回撤记缺失、计 0，不拿中性分冒充。
+        XCTAssertEqual(halfYield?.positionPoints, 0)
+        XCTAssertEqual(halfYield?.drawdownPoints, 0)
+        XCTAssertTrue(halfYield?.missing.contains("日K") ?? false)
+        // 没有派息事件：稳定 0。
+        XCTAssertEqual(halfYield?.stabilityPoints, 0)
+
+        // 现价贴区间上沿 → 位置 0；回撤 0 → 回撤分 0。
+        let samples = [bar(0, low: 1, high: 2, close: 2), bar(1, low: 1, high: 2, close: 2)]
+        let atHigh = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.02")!,
+            price: 2, iopv: nil, samples: samples, dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(atHigh?.positionPoints, 0)
+        XCTAssertEqual(atHigh?.drawdownPoints, 0)
+
+        // 回撤 10%（满分线 20% 的一半）→ 8 分（四舍五入）。
+        let halfDrawdown = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.02")!,
+            price: Decimal(string: "1.8")!, iopv: nil, samples: samples, dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(halfDrawdown?.drawdownPoints, 8)
+
+        // 只有一年有已核实派息 → 4 分；推测事件不算。
+        let events = [
+            NextETFDividendEvent(code: "563020", date: "2026-06-10", amountPerShare: Decimal(string: "0.012")!),
+            NextETFDividendEvent(code: "563020", date: "2026-09-10", amountPerShare: Decimal(string: "0.012")!, isEstimated: true)
+        ]
+        let oneYear = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.02")!,
+            price: 1, iopv: nil, samples: [], dividendEvents: events, today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(oneYear?.stabilityPoints, 4)
+    }
+
+    func testDividendBuyScoreUsesIOPVForETFAndTargetYieldGate() {
+        // ETF 有 IOPV：股息率按净值算。每份 0.05、现价 1.2、IOPV 1.0 → 5%。
+        let samples = [bar(0, low: 1, high: 1, close: 1)]
+        let byNav = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.05")!,
+            price: Decimal(string: "1.2")!, iopv: 1, samples: samples, dividendEvents: [], today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(byNav?.yieldBase, 1)
+        XCTAssertEqual(byNav?.yieldPercent ?? 0, 5, accuracy: 0.0001)
+        XCTAssertEqual(byNav?.yieldPoints, 40)
+
+        // 目标股息率没设（≤0）：股息率项 0 分并记缺失。
+        let noTarget = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.05")!,
+            price: 1, iopv: nil, samples: samples, dividendEvents: [], today: "2026-10-20", targetYieldPercent: 0))
+        XCTAssertEqual(noTarget?.yieldPoints, 0)
+        XCTAssertTrue(noTarget?.missing.contains("目标股息率") ?? false)
+    }
+
+    func testDividendBuyScoreTierBoundaries() {
+        let events = [
+            NextETFDividendEvent(code: "563020", date: "2024-06-10", amountPerShare: Decimal(string: "0.012")!),
+            NextETFDividendEvent(code: "563020", date: "2025-06-10", amountPerShare: Decimal(string: "0.012")!),
+            NextETFDividendEvent(code: "563020", date: "2026-06-10", amountPerShare: Decimal(string: "0.012")!)
+        ]
+        let samples = [bar(0, low: 1, high: 2, close: 1), bar(1, low: 1, high: 2, close: 1)]
+        // 全拿满：40 + 35 + 15 + 10 = 100 → 值得关注。
+        let high = try? XCTUnwrap(DividendBuyScoreEngine.evaluate(code: "563020", perShare: Decimal(string: "0.05")!,
+            price: 1, iopv: nil, samples: samples, dividendEvents: events, today: "2026-10-20", targetYieldPercent: 4))
+        XCTAssertEqual(high?.total, 100)
+        XCTAssertEqual(high?.tier, .attention)
+        // 边界用组件分直接验证档位划分。
+        let batch = DividendBuyScore(code: "563020", price: 1, perShare: 0.03, yieldBase: 1,
+            yieldPercent: 3, targetYieldPercent: 4, yieldPoints: 30, positionPoints: 20, drawdownPoints: 8,
+            stabilityPoints: 7, windowLow: nil, windowHigh: nil, missing: [])
+        XCTAssertEqual(batch.total, 65)
+        XCTAssertEqual(batch.tier, .batch)
+        let observe = DividendBuyScore(code: "563020", price: 1, perShare: 0.01, yieldBase: 1,
+            yieldPercent: 1, targetYieldPercent: 4, yieldPoints: 10, positionPoints: 20, drawdownPoints: 8,
+            stabilityPoints: 4, windowLow: nil, windowHigh: nil, missing: [])
+        XCTAssertEqual(observe.total, 42)
+        XCTAssertEqual(observe.tier, .observe)
+        let wait = DividendBuyScore(code: "563020", price: 1, perShare: 0.001, yieldBase: 1,
+            yieldPercent: 0.1, targetYieldPercent: 4, yieldPoints: 1, positionPoints: 20, drawdownPoints: 8,
+            stabilityPoints: 4, windowLow: nil, windowHigh: nil, missing: [])
+        XCTAssertEqual(wait.total, 33)
+        XCTAssertEqual(wait.tier, .wait)
+    }
+
 }
 
 private extension Data {

@@ -2582,6 +2582,8 @@ private struct DividendHistoryScreen: View {
                     GPStatus(title: "还没有收息记录", detail: "点上方「记录预期分红 / 收息」登记待收计划；券商实际到账后再确认，税后净额会计入真实现金。", symbol: "yensign.circle")
                 }
             }
+            // 红利买入时机 · 自选打分：价格越跌、股息率越高，分数越高；全部本机可复算。
+            DividendBuyScoreCard()
             // 股息买入参考（按 IMG_5912 的口径：股息率 / 目标买入价 / 收盘价 / 下次分红），默认折叠。
             DisclosureGroup(isExpanded: $adviceExpanded) {
                 DividendAdviceCard()
