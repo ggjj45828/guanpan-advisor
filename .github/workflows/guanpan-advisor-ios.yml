@@ -57,7 +57,16 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/Device \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tail -150
+            2>&1 | tee build-device.log
+
+      - name: Upload device build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guanpan-advisor-device-build-log
+          path: GuanpanNext/ios/build-device.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Package unsigned IPA
         working-directory: GuanpanNext/ios

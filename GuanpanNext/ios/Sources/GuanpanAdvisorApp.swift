@@ -741,7 +741,7 @@ private struct DecisionScreen: View {
                 }
                 // 账户体检：按报告方法论，先看账户（集中度、现金覆盖），再看单只资产，最后看执行。
                 EditorialSection(title: "账户体检 · 一键扫描", trailing: inspecting ? "扫描中" : "本机规则", accent: p.forest) {
-                    GPActionButton(title: inspecting ? "扫描中…" : "一键体检全部持仓", systemImage: "stethoscope", secondary: true) { runInspection() }
+                    GPActionButton(title: inspecting ? "扫描中…" : "一键体检全部持仓", secondary: true, systemImage: "stethoscope") { runInspection() }
                     if let inspectSummary { Text(inspectSummary).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true) }
                     if !inspectResults.isEmpty {
                         let totalMV = inspectResults.reduce(Decimal.zero) { acc, r in
