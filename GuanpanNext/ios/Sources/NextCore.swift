@@ -359,6 +359,10 @@ enum NextTencentMinuteParser {
 // settlement rules from an ETF label, code prefix, or a hard-coded T+0 flag.
 enum NextSettlementRule: String, Codable { case t0, t1, unknown }
 enum NextAssetClass: String, Codable { case etf, equity, other, unknown }
+/// ETF 每笔固定手续费 ¥0.10：来自用户指定的核验规则，不按券商公告推断。
+enum NextTradeFees {
+    static let etfPerTrade = Decimal(string: "0.10")!
+}
 struct NextInstrumentRules: Codable, Equatable {
     let code: String
     let market: String
@@ -369,7 +373,6 @@ struct NextInstrumentRules: Codable, Equatable {
     let source: String
     let verifiedAt: Date?
     var isVerified: Bool { assetClass != .unknown && settlement != .unknown && lotSize != nil && feePerTrade != nil && verifiedAt != nil && !source.isEmpty && !market.isEmpty }
-    var isHistoricalBacktestEligible: Bool { assetClass == .etf && lotSize != nil && feePerTrade == NextExperiment.fee && verifiedAt != nil && !source.isEmpty && !market.isEmpty }
     static func verifiedETFMarketRule(code: String, market: String, at date: Date = Date()) -> NextInstrumentRules? {
         guard code.count == 6, code.allSatisfy(\.isNumber),
               (code.hasPrefix("15") && market == "SZSE") || ((code.hasPrefix("5") || code.hasPrefix("56")) && market == "SSE") else { return nil }
@@ -377,7 +380,7 @@ struct NextInstrumentRules: Codable, Equatable {
             ? "SSE ETF FAQ https://www.sse.com.cn/assortment/fund/etf/question/c/c_20240118_5734754.shtml · 100份；用户指定费率¥0.10；交收未知"
             : "SZSE 基金竞价交易说明 https://investor.szse.cn/knowledge/fund/trade/t20171113_538865.html · 100份；用户指定费率¥0.10；交收未知"
         return NextInstrumentRules(code: code, market: market, assetClass: .etf, settlement: .unknown,
-            lotSize: 100, feePerTrade: NextExperiment.fee, source: provenance, verifiedAt: date)
+            lotSize: 100, feePerTrade: NextTradeFees.etfPerTrade, source: provenance, verifiedAt: date)
     }
     func validate() throws {
         guard code.count == 6, code.allSatisfy(\.isNumber),
@@ -856,7 +859,7 @@ struct NextBuyOpportunity: Codable, Equatable {
         }
         try research.validate(evidence: evidence)
         guard let rules, rules.code == code, rules.isVerified, rules.assetClass == .etf,
-              let fee = rules.feePerTrade, fee == NextExperiment.fee, let lotSize = rules.lotSize else {
+              let fee = rules.feePerTrade, fee == NextTradeFees.etfPerTrade, let lotSize = rules.lotSize else {
             reasons.append("该证券类别、交易单位或 ETF 固定手续费未核实，暂不生成限价数量。")
             return NextBuyOpportunity(code: code, evidence: evidence, priceResearch: research, limitSteps: [], riskSummary: reasons.joined(separator: " "), status: "交易规则待核验", canSavePlan: false)
         }
@@ -909,14 +912,6 @@ struct NextPatientLimitPlan: Codable, Identifiable, Equatable {
               triggeredAt.map({ $0 >= createdAt && $0 <= expiresAt }) ?? true else {
             throw NextError.invalid("耐心限价计划的证券、目标价、份额或有效期无效")
         }
-    }
-}
-
-enum NextTwinStrategy: String, Codable, CaseIterable, Identifiable, Hashable {
-    case A, B, C, D, E, F, G, H
-    var id: String { rawValue }
-    var title: String {
-        switch self { case .A: "不操作基准"; case .B: "原始权重"; case .C: "目标权重"; case .D: "定期再平衡"; case .E: "估值与红利调仓"; case .F: "趋势风控减仓"; case .G: "AI 多因子自主模拟交易"; case .H: "用户自定义策略" }
     }
 }
 
@@ -1079,8 +1074,6 @@ struct NextNASResearch: Codable, Equatable {
 struct NextAppArchive: Codable, Equatable {
     var schemaVersion = 1
     var book = NextBook()
-    var experiment = NextExperiment()
-    var twins = NextTwinLedger()
     var goal = NextGoal()
     var watch = ["159941", "563020", "159545", "159352"]
     var navigation = NextNavigationState()
@@ -1094,16 +1087,13 @@ struct NextAppArchive: Codable, Equatable {
     var nasResearch: [String: NextNASResearch] = [:]
     var dividendEvents: [String: [NextETFDividendEvent]] = [:]
     var patientLimitPlans: [NextPatientLimitPlan] = []
-    var twinBacktests: [String: NextTwinBacktest] = [:]
     var theme: NextTheme = .light
-    private enum CodingKeys: String, CodingKey { case schemaVersion, book, experiment, twins, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, twinBacktests, theme }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, theme }
     init() {}
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try values.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         book = try values.decodeIfPresent(NextBook.self, forKey: .book) ?? NextBook()
-        experiment = try values.decodeIfPresent(NextExperiment.self, forKey: .experiment) ?? NextExperiment()
-        twins = try values.decodeIfPresent(NextTwinLedger.self, forKey: .twins) ?? NextTwinLedger()
         goal = try values.decodeIfPresent(NextGoal.self, forKey: .goal) ?? NextGoal()
         watch = try values.decodeIfPresent([String].self, forKey: .watch) ?? ["159941", "563020", "159545", "159352"]
         navigation = try values.decodeIfPresent(NextNavigationState.self, forKey: .navigation) ?? NextNavigationState()
@@ -1117,18 +1107,13 @@ struct NextAppArchive: Codable, Equatable {
         nasResearch = try values.decodeIfPresent([String: NextNASResearch].self, forKey: .nasResearch) ?? [:]
         dividendEvents = try values.decodeIfPresent([String: [NextETFDividendEvent]].self, forKey: .dividendEvents) ?? [:]
         patientLimitPlans = try values.decodeIfPresent([NextPatientLimitPlan].self, forKey: .patientLimitPlans) ?? []
-        twinBacktests = try values.decodeIfPresent([String: NextTwinBacktest].self, forKey: .twinBacktests) ?? [:]
         theme = try values.decodeIfPresent(NextTheme.self, forKey: .theme) ?? .light
     }
     func validate() throws {
         guard schemaVersion == 1 else { throw NextError.invalid("本机数据版本不受支持") }
-        try book.validate(); try goal.validate(); try twins.validate(); try experiment.validate()
+        try book.validate(); try goal.validate()
         guard Set(patientLimitPlans.map(\.id)).count == patientLimitPlans.count else { throw NextError.invalid("耐心限价计划存在重复编号") }
         for plan in patientLimitPlans { try plan.validate() }
-        for (strategy, run) in twinBacktests {
-            guard strategy == run.strategy else { throw NextError.invalid("数字孪生回测缓存键不匹配") }
-            try run.validate()
-        }
         for (code, events) in dividendEvents {
             guard code.count == 6, code.allSatisfy(\.isNumber), events.allSatisfy({ $0.code == code }) else { throw NextError.invalid("分红历史代码与记录不一致") }
             for event in events { try event.validate() }
@@ -1181,208 +1166,6 @@ struct NextArchiveEnvelope: Codable, Equatable {
         let value = try JSONDecoder().decode(NextAppArchive.self, from: payload)
         try value.validate()
         return value
-    }
-}
-
-// Entirely independent experiment ledger. No real-book reference or write API.
-struct NextExperiment: Codable, Equatable {
-    struct Order: Codable, Identifiable, Equatable {
-        var id = UUID()
-        let code: String
-        let limit: Decimal
-        let units: Int
-        let placedAt: Date
-        let expiresAt: Date
-        var state = "等待"
-        var filledAt: Date?
-        var averageFillPrice: Decimal?
-    }
-    var cash: Decimal = 10000
-    var positions: [NextPosition] = []
-    var orders: [Order] = []
-    static let fee = Decimal(string: "0.10")!
-    var reserved: Decimal { orders.filter { $0.state == "等待" }.reduce(0) { $0 + $1.limit * Decimal($1.units) + Self.fee } }
-    var available: Decimal { cash - reserved }
-    func validate() throws {
-        guard !cash.isNaN, cash >= 0,
-              positions.allSatisfy({ $0.units >= 0 && $0.bookCost >= 0 && $0.code.count == 6 }),
-              orders.allSatisfy({ $0.limit > 0 && $0.units > 0 && $0.expiresAt > $0.placedAt && $0.code.count == 6 }),
-              reserved <= cash else { throw NextError.invalid("模拟账本校验失败") }
-    }
-    mutating func place(code: String, limit: Decimal, units: Int, rules: NextInstrumentRules, at now: Date, until expiry: Date) throws {
-        expire(at: now)
-        try rules.validate()
-        guard rules.isVerified, rules.code == code, rules.assetClass == .etf,
-              rules.feePerTrade == Self.fee,
-              let lot = rules.lotSize, code.count == 6, code.allSatisfy(\.isNumber),
-              !limit.isNaN, limit > 0, limit <= 100000, units > 0, units <= 100000000, units % lot == 0,
-              expiry > now, limit * Decimal(units) + Self.fee <= available else { throw NextError.invalid("仅可在证券类别、交易单位和规则来源经核验后模拟 ETF 限价单；请检查数量、有效期和虚拟资金") }
-        orders.append(Order(code: code, limit: limit, units: units, placedAt: now, expiresAt: expiry))
-    }
-    mutating func expire(at now: Date) {
-        for i in orders.indices where orders[i].state == "等待" && orders[i].expiresAt <= now { orders[i].state = "到期" }
-    }
-    mutating func cancel(_ id: UUID) {
-        if let i = orders.firstIndex(where: { $0.id == id && $0.state == "等待" }) { orders[i].state = "已撤销" }
-    }
-    // Last-trade prices are not execution evidence. Quote-only refreshes never fill an order.
-    mutating func observe(_ quote: NextQuote, now: Date, marketOpen: Bool) {
-        expire(at: now)
-        guard marketOpen, quote.isFresh(at: now) else { return }
-    }
-    mutating func observe(_ book: NextOrderBookSnapshot, rules: NextInstrumentRules, now: Date, marketOpen: Bool) throws {
-        expire(at: now)
-        try book.validate(); try rules.validate()
-        guard marketOpen, rules.isVerified, rules.assetClass == .etf, rules.feePerTrade == Self.fee, rules.code == book.code,
-              book.observedAt <= now, now.timeIntervalSince(book.observedAt) <= 5 else { return }
-        for i in orders.indices where orders[i].state == "等待" && orders[i].code == book.code {
-            let o = orders[i]
-            guard book.observedAt > o.placedAt, book.observedAt < o.expiresAt else { continue }
-            var remaining = o.units
-            var gross: Decimal = 0
-            for level in book.asks where level.price <= o.limit && remaining > 0 {
-                let fillUnits = min(remaining, level.units)
-                gross += level.price * Decimal(fillUnits)
-                remaining -= fillUnits
-            }
-            guard remaining == 0 else { continue }
-            let amount = gross + Self.fee
-            guard amount <= cash else { continue }
-            cash -= amount
-            let averagePrice = gross / Decimal(o.units)
-            if let j = positions.firstIndex(where: { $0.code == o.code }) { positions[j].units += o.units; positions[j].bookCost += amount }
-            else { positions.append(NextPosition(code: o.code, name: o.code, units: o.units, bookCost: amount)) }
-            orders[i].state = "触价模拟"
-            orders[i].filledAt = book.observedAt
-            orders[i].averageFillPrice = averagePrice
-        }
-    }
-}
-
-struct NextTwinAccount: Codable, Equatable, Identifiable {
-    var id: String { strategy.rawValue }
-    let strategy: NextTwinStrategy
-    var simulation: NextExperiment
-    var isPaused = false
-    var seedSource = "空白模拟账户"
-}
-struct NextTwinFunding: Codable, Identifiable, Equatable {
-    var id = UUID()
-    let date: Date
-    let amount: Decimal
-    let reason: String
-}
-struct NextTwinLedger: Codable, Equatable {
-    var accounts: [String: NextTwinAccount] = Dictionary(uniqueKeysWithValues: NextTwinStrategy.allCases.map { strategy in
-        (strategy.rawValue, NextTwinAccount(strategy: strategy, simulation: NextExperiment(), seedSource: "空白模拟账户"))
-    })
-    var funding: [NextTwinFunding] = []
-    mutating func fundAll(_ amount: Decimal, reason: String, at date: Date) throws {
-        guard amount > 0, !amount.isNaN, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              accounts.count == NextTwinStrategy.allCases.count,
-              NextTwinStrategy.allCases.allSatisfy({ accounts[$0.rawValue]?.strategy == $0 }) else { throw NextError.invalid("注资金额、用途或 A–H 模拟账户校验失败") }
-        var next = accounts
-        for strategy in NextTwinStrategy.allCases {
-            guard var account = next[strategy.rawValue] else { throw NextError.invalid("模拟账户不完整，未注资") }
-            account.simulation.cash += amount
-            next[strategy.rawValue] = account
-        }
-        accounts = next
-        funding.append(NextTwinFunding(date: date, amount: amount, reason: reason))
-    }
-    func validate() throws {
-        guard accounts.count == NextTwinStrategy.allCases.count,
-              NextTwinStrategy.allCases.allSatisfy({ accounts[$0.rawValue]?.strategy == $0 }) else { throw NextError.invalid("数字孪生账户不完整") }
-        for account in accounts.values { try account.simulation.validate() }
-        guard funding.allSatisfy({ $0.amount > 0 && !$0.reason.isEmpty }) else { throw NextError.invalid("模拟资金流水无效") }
-    }
-    mutating func setPaused(_ paused: Bool, strategy: NextTwinStrategy) throws {
-        guard var account = accounts[strategy.rawValue] else { throw NextError.invalid("模拟账户不存在") }
-        account.isPaused = paused
-        accounts[strategy.rawValue] = account
-    }
-}
-
-/// Cached historical strategy run. It is separate from the live twin account
-/// balance and has no write path to the real asset ledger.
-struct NextTwinBacktest: Codable, Equatable, Identifiable {
-    struct Point: Codable, Equatable, Identifiable {
-        var id: String { date }
-        let date: String
-        let equity: String
-        let cash: String
-        let nav: String
-        let externalFlow: String
-    }
-    struct Fill: Codable, Equatable, Identifiable {
-        var id: String { "\(date)-\(code)-\(side)-\(units)" }
-        let date: String
-        let code: String
-        let side: String
-        let units: Int
-        let price: String
-        let fee: String
-        let gross: String
-    }
-    let runId: String
-    let strategy: String
-    let engine: String
-    let realOrder: Bool
-    let queueAccuracy: String
-    let aiSignalAccuracy: String
-    let source: String
-    let startDate: String
-    let endDate: String
-    let sessions: Int
-    let codes: [String]
-    let initialWeights: [String: String]
-    let parameters: [String: Int]
-    let feePerFill: String
-    let initialCash: String
-    let externalContributions: String
-    let endingEquity: String
-    let totalReturn: String
-    let annualizedReturn: String
-    let annualizedVolatility: String
-    let sharpe: String
-    let calmar: String
-    let maxDrawdown: String
-    let feesPaid: String
-    let tradeCount: Int
-    let openPositions: [String: Int]
-    let pendingOrders: [String]
-    let curve: [Point]
-    let fills: [Fill]
-    var id: String { runId }
-
-    func validate() throws {
-        let ordered = curve.map(\.date)
-        let customWindowsValid = strategy != "H" || (parameters["fastWindow"].map { $0 >= 2 } == true
-            && parameters["slowWindow"].map { $0 <= 250 } == true
-            && (parameters["fastWindow"] ?? 0) < (parameters["slowWindow"] ?? 0))
-        guard !runId.isEmpty, NextTwinStrategy(rawValue: strategy) != nil, !realOrder,
-              customWindowsValid,
-              sessions >= 2, curve.count == sessions, codes.count > 0,
-              Set(codes).count == codes.count, Set(initialWeights.keys) == Set(codes),
-              zip(ordered, ordered.dropFirst()).allSatisfy({ pair in pair.0 < pair.1 }),
-              curve.allSatisfy({ Decimal(string: $0.equity).map({ $0 > 0 && !$0.isNaN }) == true && Decimal(string: $0.cash).map({ $0 >= 0 && !$0.isNaN }) == true && Decimal(string: $0.nav).map({ $0 >= 0 && !$0.isNaN }) == true }),
-              fills.allSatisfy({ $0.units > 0 && Decimal(string: $0.price).map({ $0 > 0 && !$0.isNaN }) == true && Decimal(string: $0.fee).map({ $0 == NextExperiment.fee }) == true }),
-              Decimal(string: feesPaid).map({ $0 >= 0 && !$0.isNaN }) == true else {
-            throw NextError.invalid("NAS 回测结果未通过本机验证")
-        }
-    }
-
-    func equityChartDataset() -> NextChartDataset? {
-        guard let code = codes.first, curve.count >= 2 else { return nil }
-        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withFullDate]
-        let samples = curve.compactMap { point -> NextChartSample? in
-            guard let timestamp = formatter.date(from: point.date), let close = Decimal(string: point.equity), close > 0 else { return nil }
-            return NextChartSample(timestamp: timestamp, open: nil, high: nil, low: nil, close: close, iopv: nil, volume: nil)
-        }
-        guard samples.count == curve.count else { return nil }
-        let dataset = NextChartDataset(code: code, interval: .day, samples: samples, costPerUnit: nil,
-            costObservedAt: nil, priceSource: "NAS 策略历史权益 · \(startDate) 至 \(endDate)", iopvSource: nil, observedAt: Date())
-        do { try dataset.validate(); return dataset } catch { return nil }
     }
 }
 

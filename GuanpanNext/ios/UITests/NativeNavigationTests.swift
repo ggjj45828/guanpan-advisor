@@ -95,7 +95,7 @@ final class NativeNavigationTests: XCTestCase {
         attach(app, "market-swipe-ai-context")
     }
 
-    func testGlobalSearchCanOpenAIAnalysisAndTwinStrategy() throws {
+    func testGlobalSearchCanOpenAIAnalysis() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-ui-testing", "1"]
         app.launch()
@@ -113,20 +113,6 @@ final class NativeNavigationTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["私人投资顾问"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "159941")).firstMatch.exists)
         attach(app, "global-search-security-to-ai")
-
-        let searchAgain = byLabel(app, "全局搜索证券")
-        XCTAssertTrue(searchAgain.waitForExistence(timeout: 10))
-        searchAgain.tap()
-        let strategySearch = app.textFields["输入代码或名称"]
-        XCTAssertTrue(strategySearch.waitForExistence(timeout: 3))
-        if app.buttons["search.clear"].exists { app.buttons["search.clear"].tap() }
-        strategySearch.tap()
-        strategySearch.typeText("G")
-        let strategyHit = app.buttons["search.hit.strategy-G"]
-        XCTAssertTrue(strategyHit.waitForExistence(timeout: 5))
-        strategyHit.tap()
-        XCTAssertTrue(app.navigationBars["策略详情"].waitForExistence(timeout: 5))
-        attach(app, "global-search-twin-strategy")
     }
 
     func testLightDarkComfortAndAccessibilityTextSizes() throws {

@@ -2644,8 +2644,8 @@ private struct BackupRestoreScreen: View {
     @State private var confirmRestore = false
     var body: some View {
         GPPageBackground {
-            GPStatus(title: "本机备份与可验证恢复", detail: "导出文件包含独立账本、A–H 模拟账户、行情缓存、图表、交易规则和审计记录，并带 SHA-256 校验。", symbol: "externaldrive")
-            DataPanel(title: "操作前保护") { GPDataRow(title: "真实账本", value: "独立文件 · iOS 文件保护"); GPDataRow(title: "模拟账户", value: "独立文件与账户模型"); GPDataRow(title: "恢复前副本", value: "自动保存到本机恢复目录"); GPDataRow(title: "旧版资产", value: "不自动迁移或覆盖") }
+            GPStatus(title: "本机备份与可验证恢复", detail: "导出文件包含独立账本、行情缓存、图表、交易规则和审计记录，并带 SHA-256 校验。", symbol: "externaldrive")
+            DataPanel(title: "操作前保护") { GPDataRow(title: "真实账本", value: "独立文件 · iOS 文件保护"); GPDataRow(title: "行情与规则", value: "独立文件缓存"); GPDataRow(title: "恢复前副本", value: "自动保存到本机恢复目录"); GPDataRow(title: "旧版资产", value: "不自动迁移或覆盖") }
             NASBookVersionsPanel()
             GPActionButton(title: "导出完整备份", secondary: true, systemImage: "square.and.arrow.up") {
                 do { document = GuanpanBackupDocument(data: try JSONEncoder().encode(model.makeBackup())); isExporting = true }

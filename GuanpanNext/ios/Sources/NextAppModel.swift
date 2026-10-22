@@ -41,7 +41,7 @@ struct LocalPreferences: Codable {
     }
 }
 
-/// The real ledger, simulations, and app preferences use separate versioned files.
+/// The real ledger and app preferences use separate versioned files.
 /// No legacy defaults or mixed OTC records are silently imported.
 @MainActor final class NextLocalRepository {
     private let directory: URL
@@ -100,8 +100,6 @@ struct LocalPreferences: Codable {
         let encoder = JSONEncoder()
         let files: [(String, Data)] = [
             ("real-ledger-v1.json", try encoder.encode(NextAuditedBook(current: archive.book, events: archive.audits))),
-            ("simulation-ledger-v1.json", try encoder.encode(archive.experiment)),
-            ("digital-twins-v1.json", try encoder.encode(archive.twins)),
             ("preferences-v1.json", try encoder.encode(LocalPreferences(goal: archive.goal, watch: archive.watch, navigation: archive.navigation, theme: GPTheme(rawValue: archive.theme.rawValue) ?? .light, notifications: archive.notifications))),
             ("cached-quotes-v1.json", try encoder.encode(archive.cachedQuotes)),
             ("chart-history-v1.json", try encoder.encode(archive.chartData)),
@@ -110,8 +108,7 @@ struct LocalPreferences: Codable {
             ("decision-history-v1.json", try encoder.encode(archive.decisionHistory)),
             ("nas-research-v1.json", try encoder.encode(archive.nasResearch)),
             ("dividend-history-v1.json", try encoder.encode(archive.dividendEvents)),
-            ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans)),
-            ("twin-backtests-v1.json", try encoder.encode(archive.twinBacktests))
+            ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans))
         ]
         let parent = directory.deletingLastPathComponent()
         let staging = parent.appendingPathComponent("GuanpanProNative-staging-\(UUID().uuidString)", isDirectory: true)
@@ -141,8 +138,6 @@ struct LocalPreferences: Codable {
 
 @MainActor final class NextAppModel: ObservableObject {
     @Published var ledger: NextAuditedBook { didSet { reportSave(repository.save(ledger, filename: "real-ledger-v1.json")) } }
-    @Published var experiment: NextExperiment { didSet { reportSave(repository.save(experiment, filename: "simulation-ledger-v1.json")) } }
-    @Published var twins: NextTwinLedger { didSet { reportSave(repository.save(twins, filename: "digital-twins-v1.json")) } }
     @Published var preferences: LocalPreferences { didSet { reportSave(repository.save(preferences, filename: "preferences-v1.json")) } }
     @Published var quotes: [String: NextCachedQuote] { didSet { reportSave(repository.save(quotes, filename: "cached-quotes-v1.json")) } }
     @Published var chartData: [String: NextChartDataset] { didSet { reportSave(repository.save(chartData, filename: "chart-history-v1.json")) } }
@@ -153,11 +148,6 @@ struct LocalPreferences: Codable {
     @Published var researchStatus: [String: String] = [:]
     @Published var dividendEvents: [String: [NextETFDividendEvent]] { didSet { reportSave(repository.save(dividendEvents, filename: "dividend-history-v1.json")) } }
     @Published var patientLimitPlans: [NextPatientLimitPlan] { didSet { reportSave(repository.save(patientLimitPlans, filename: "patient-limit-plans-v1.json")) } }
-    @Published var twinBacktests: [String: NextTwinBacktest] { didSet { reportSave(repository.save(twinBacktests, filename: "twin-backtests-v1.json")) } }
-    @Published var backtestStatus = "尚无本机策略回测"
-    @Published var nasGAccount: NextNASGAccount?
-    @Published var nasGRevision: Int?
-    @Published var nasGStatus = "尚未读取 NAS G 模拟账户"
     @Published var gridStatus: NextNASGridStatus?
     @Published var gridStatusMessage = "尚未读取 NAS 网格状态"
     @Published var status = "行情尚未刷新 · 缓存可离线查看"
@@ -186,13 +176,6 @@ struct LocalPreferences: Codable {
     }
     var theme: GPTheme { preferences.theme }
 
-    /// 模拟/回测用的标的池：**有真实持仓就用持仓**（按份额从大到小），没有才退回自选。
-    /// 以前一律用自选，等于让策略去跑一堆自己没买的标的。
-    var simulationUniverse: [String] {
-        let held = book.positions.filter { $0.units > 0 }.sorted { $0.units > $1.units }.map(\.code)
-        return held.isEmpty ? watch : held
-    }
-
     /// 真实账本口径的总资产 = 现金 + 持仓市值（缺报价的按成本兜底，并保证不漏算）。
     var realBookEquity: Decimal {
         var total = book.cash
@@ -204,29 +187,6 @@ struct LocalPreferences: Codable {
             }
         }
         return total
-    }
-
-    /// 把真实账本的当前状态复制成 A–H 的起点：同样的份额、同样的成本、同样的现金。
-    /// 只填充**还空着**的账户（没有订单也没有持仓），不会覆盖已经在跑的模拟。
-    @discardableResult
-    func seedTwinsFromRealBook() -> String {
-        let holdings = book.positions.filter { $0.units > 0 }
-        guard !holdings.isEmpty else { return "真实账本还没有持仓，先录入再复制为模拟起点" }
-        var next = twins
-        var seeded = 0
-        let source = "真实账本 · \(holdings.count) 只持仓 + 现金 ¥\(NextMoney.text(book.cash))"
-        for strategy in NextTwinStrategy.allCases {
-            guard var account = next.accounts[strategy.rawValue] else { continue }
-            guard account.simulation.orders.isEmpty, account.simulation.positions.isEmpty else { continue }
-            account.simulation.positions = holdings
-            account.simulation.cash = book.cash
-            account.seedSource = source
-            next.accounts[strategy.rawValue] = account
-            seeded += 1
-        }
-        guard seeded > 0 else { return "A–H 都已有模拟记录，未覆盖；要重新开始请在对应策略里先清空" }
-        twins = next
-        return "已把 \(holdings.count) 只持仓 + 现金 ¥\(NextMoney.text(book.cash)) 复制为 \(seeded) 个策略的起点"
     }
 
     /// 名称解析统一入口：账本里存的名称 > 报价里的 > 名称簿（跨启动）> 内置目录 > 代码本身。
@@ -262,8 +222,6 @@ struct LocalPreferences: Codable {
         self.repository = repository
         let real = repository.load(NextAuditedBook.self, filename: "real-ledger-v1.json", fallback: NextAuditedBook(current: NextBook()))
         self.ledger = real
-        self.experiment = repository.load(NextExperiment.self, filename: "simulation-ledger-v1.json", fallback: NextExperiment())
-        self.twins = repository.load(NextTwinLedger.self, filename: "digital-twins-v1.json", fallback: NextTwinLedger())
         self.preferences = repository.load(LocalPreferences.self, filename: "preferences-v1.json", fallback: LocalPreferences())
         self.quotes = repository.load([String: NextCachedQuote].self, filename: "cached-quotes-v1.json", fallback: [:])
         self.chartData = repository.load([String: NextChartDataset].self, filename: "chart-history-v1.json", fallback: [:])
@@ -273,7 +231,6 @@ struct LocalPreferences: Codable {
         self.nasResearch = repository.load([String: NextNASResearch].self, filename: "nas-research-v1.json", fallback: [:])
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
-        self.twinBacktests = repository.load([String: NextTwinBacktest].self, filename: "twin-backtests-v1.json", fallback: [:])
         self.errorMessage = repository.integrityWarning
         // 启动时把「只有代码、没有名字」的标的补一次：账本里的旧数据、旧自选都能认出来。
         Task { await backfillNamesIfNeeded() }
@@ -780,43 +737,6 @@ struct LocalPreferences: Codable {
         preferences.navigation.routes = routes
         preferences = preferences
     }
-    func createSimulatedOrder(code: String, price: Decimal, units: Int, expiry: Date) throws {
-        guard let rules = rules[code], rules.isVerified, rules.lotSize != nil else { throw NextError.invalid("尚未取得这只证券经核实的交易规则，不能创建模拟委托") }
-        guard units % (rules.lotSize ?? 1) == 0 else { throw NextError.invalid("数量不符合该证券经核实的交易单位") }
-        try experiment.place(code: code, limit: price, units: units, rules: rules, at: Date(), until: expiry)
-    }
-    func addTwinFunding(_ amount: Decimal, reason: String) throws { try twins.fundAll(amount, reason: reason, at: Date()) }
-    func runTwinBacktest(_ strategy: NextTwinStrategy, fastWindow: Int = 20, slowWindow: Int = 60,
-                        monthlyContribution: Decimal = 0) async {
-        guard !preferences.nasBaseURL.isEmpty else { backtestStatus = "回测未运行 · 请先连接 NAS"; return }
-        let eligible = simulationUniverse.filter { rules[$0]?.isHistoricalBacktestEligible == true }
-        guard !eligible.isEmpty else { backtestStatus = "回测未运行 · 持仓/自选里缺少已核验 ETF 交易单位与费率；未猜测手数"; return }
-        let virtualCash = twins.accounts[strategy.rawValue]?.simulation.cash ?? 0
-        // 起点资金优先用真实总资产：以前固定一万，和账户规模完全不搭。
-        let capital = realBookEquity > 0 ? realBookEquity : virtualCash
-        guard capital > 0 else { backtestStatus = "回测未运行 · 没有可用的起始资金"; return }
-        backtestStatus = "NAS 正在读取日 K 并回放 \(strategy.rawValue) 策略…"
-        do {
-            let result = try await NextNASService.runBacktest(strategy: strategy, codes: eligible, initialCash: capital,
-                baseURL: preferences.nasBaseURL, rules: rules, monthlyContribution: monthlyContribution,
-                fastWindow: fastWindow, slowWindow: slowWindow)
-            twinBacktests[strategy.rawValue] = result
-            backtestStatus = "历史回测完成 · \(result.sessions) 个交易日 · 数据截至 \(result.endDate)"
-        } catch {
-            backtestStatus = "回测未完成 · \(error.localizedDescription)"
-        }
-    }
-    func refreshNASGAccount() async {
-        guard !preferences.nasBaseURL.isEmpty else { nasGStatus = "请先连接 NAS"; return }
-        let baseURL = preferences.nasBaseURL
-        nasGStatus = "正在读取 NAS G 模拟账户…"
-        do {
-            let result = try await NextNASService.readGAccount(baseURL: baseURL)
-            guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址已变化；未采用旧连接结果") }
-            nasGRevision = result.revision; nasGAccount = result.account
-            nasGStatus = result.account.map { "NAS G · 修订 \(result.revision) · \($0.status)" } ?? "NAS G 尚未启动；真实账本未受影响"
-        } catch { nasGStatus = "NAS G 读取失败 · \(error.localizedDescription)" }
-    }
     /// 拉取 NAS 网格引擎状态与「明日挂单表」。网格不预测涨跌，只给出现价附近的买卖档位与可达成数量。
     func refreshGridStatus() async {
         guard !preferences.nasBaseURL.isEmpty else { gridStatusMessage = "请先在「我的」里连接 NAS"; return }
@@ -834,39 +754,6 @@ struct LocalPreferences: Codable {
                 gridStatusMessage = "NAS 网格已连接，但无汇总数据"
             }
         } catch { gridStatusMessage = "NAS 网格读取失败 · \(error.localizedDescription)" }
-    }
-    func startNASGAccount(initialCash: Decimal) async {
-        guard !preferences.nasBaseURL.isEmpty else { nasGStatus = "启动失败 · 请先连接 NAS"; return }
-        guard initialCash > 0 else { nasGStatus = "启动失败 · 虚拟初始资金必须大于零"; return }
-        let eligible = simulationUniverse.filter { rules[$0]?.isHistoricalBacktestEligible == true }
-        guard !eligible.isEmpty, eligible.count <= 12 else {
-            nasGStatus = "启动失败 · 自选中需要 1–12 只已核验的 ETF、交易单位和 ¥0.10 手续费规则"; return
-        }
-        let lotSizes = Dictionary(uniqueKeysWithValues: eligible.compactMap { code in rules[code]?.lotSize.map { (code, $0) } })
-        let fees = Dictionary(uniqueKeysWithValues: eligible.compactMap { code in rules[code]?.feePerTrade.map { (code, $0) } })
-        let baseURL = preferences.nasBaseURL
-        nasGStatus = "正在确认 NAS G 版本并创建独立虚拟账户…"
-        do {
-            let current = try await NextNASService.readGAccount(baseURL: baseURL)
-            guard preferences.nasBaseURL == baseURL, current.account.map({ $0.status == "reset" }) ?? true else { throw NextError.invalid("NAS G 已有账户；请先暂停或确认重置") }
-            let created = try await NextNASService.startGAccount(baseURL: baseURL, expectedRevision: current.revision,
-                initialCash: initialCash, lotSizes: lotSizes, fees: fees)
-            nasGRevision = created.revision; nasGAccount = created.account
-            nasGStatus = "NAS G 已启动 · \(eligible.count) 只核验 ETF · 仅模拟，不会向券商下单"
-        } catch { nasGStatus = "NAS G 启动失败 · \(error.localizedDescription)" }
-    }
-    func setNASGPaused(_ paused: Bool) async {
-        await mutateNASG(paused ? "pause" : "resume")
-    }
-    func mutateNASG(_ action: String, amount: Decimal? = nil) async {
-        guard !preferences.nasBaseURL.isEmpty, let revision = nasGRevision else { nasGStatus = "请先读取 NAS G 账户"; return }
-        let baseURL = preferences.nasBaseURL
-        do {
-            let result = try await NextNASService.actOnGAccount(action, baseURL: baseURL, expectedRevision: revision, amount: amount)
-            guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址已变化；请刷新账户") }
-            nasGRevision = result.revision; nasGAccount = result.account
-            nasGStatus = "NAS G · 修订 \(result.revision) · \(result.account?.status ?? "未知")"
-        } catch { nasGStatus = "NAS G 操作失败 · \(error.localizedDescription)" }
     }
     func recordDecision(_ decision: NextDecision) {
         decisions.removeAll { $0.id == decision.id }
@@ -1149,8 +1036,6 @@ struct LocalPreferences: Codable {
     func acceptOrderBook(_ snapshot: NextOrderBookSnapshot, marketOpen: Bool) throws {
         try snapshot.validate()
         orderBooks[snapshot.code] = snapshot
-        guard let rule = rules[snapshot.code] else { return }
-        try experiment.observe(snapshot, rules: rule, now: Date(), marketOpen: marketOpen)
     }
     func makeBackup() throws -> NextArchiveEnvelope {
         guard repository.integrityWarning == nil else { throw NextError.invalid("本机数据完整性待恢复；为避免导出不完整账本，备份导出已停止") }
@@ -1164,15 +1049,12 @@ struct LocalPreferences: Codable {
         else { try repository.writeRawSafetyCopy() }
         try repository.replaceAll(with: incoming)
         ledger = NextAuditedBook(current: incoming.book, events: incoming.audits)
-        experiment = incoming.experiment
-        twins = incoming.twins
         preferences = LocalPreferences(goal: incoming.goal, watch: incoming.watch, navigation: incoming.navigation, theme: GPTheme(rawValue: incoming.theme.rawValue) ?? .light, appearance: preferences.appearance, notifications: incoming.notifications, nasBaseURL: preferences.nasBaseURL, legacyWebBaseURL: preferences.legacyWebBaseURL, nasRevision: nil)
         quotes = incoming.cachedQuotes; chartData = incoming.chartData; rules = incoming.instrumentRules; orderBooks = incoming.orderBooks
         decisions = incoming.decisionHistory
         nasResearch = incoming.nasResearch
         dividendEvents = incoming.dividendEvents
         patientLimitPlans = incoming.patientLimitPlans
-        twinBacktests = incoming.twinBacktests
     }
     func research(for code: String?) -> NextDecision? {
         do {
@@ -1198,7 +1080,7 @@ struct LocalPreferences: Codable {
     }
     private func makeArchive() -> NextAppArchive {
         var archive = NextAppArchive()
-        archive.book = book; archive.experiment = experiment; archive.twins = twins
+        archive.book = book
         archive.goal = goal; archive.watch = watch; archive.navigation = preferences.navigation
         archive.cachedQuotes = quotes; archive.chartData = chartData; archive.instrumentRules = rules; archive.orderBooks = orderBooks
         archive.notifications = preferences.notifications; archive.audits = ledger.events
@@ -1206,7 +1088,6 @@ struct LocalPreferences: Codable {
         archive.nasResearch = nasResearch
         archive.dividendEvents = dividendEvents
         archive.patientLimitPlans = patientLimitPlans
-        archive.twinBacktests = twinBacktests
         archive.theme = NextTheme(rawValue: theme.rawValue) ?? .light
         return archive
     }

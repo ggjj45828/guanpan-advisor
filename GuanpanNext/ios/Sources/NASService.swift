@@ -91,11 +91,6 @@ struct NextAdvisorAnalysis: Decodable {
     let news: [News]
     let ai: AI
 }
-struct NextNASGEnvelope: Decodable {
-    let strategy: String
-    let revision: Int
-    let account: NextNASGAccount?
-}
 enum NextJSONValue: Decodable {
     case string(String), number(Double), bool(Bool), object([String: NextJSONValue]), array([NextJSONValue]), null
     init(from decoder: Decoder) throws {
@@ -115,51 +110,6 @@ enum NextJSONValue: Decodable {
         case .null: return "—"
         case .object, .array: return "数据"
         }
-    }
-}
-struct NextNASGAccount: Decodable {
-    struct Order: Decodable, Identifiable {
-        let id: String
-        let code: String
-        let side: String
-        let units: Int
-        let remainingUnits: Int?
-        let status: String
-        let executionSession: String?
-    }
-    struct CurvePoint: Decodable, Identifiable {
-        var id: String { date }
-        let date: String
-        let equity: String
-        let nav: String?
-        let drawdown: String?
-    }
-    let strategy: String
-    let status: String
-    let realOrder: Bool
-    let cash: String
-    let positions: [String: Int]
-    let orders: [Order]
-    let fills: [NextJSONValue]
-    let decisions: [NextJSONValue]
-    let aiRuns: [NextJSONValue]
-    let curve: [CurvePoint]
-
-    func equityChartDataset() -> NextChartDataset? {
-        guard let code = positions.keys.sorted().first, curve.count >= 2 else { return nil }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai"); formatter.dateFormat = "yyyy-MM-dd"
-        var byDay: [String: CurvePoint] = [:]
-        for point in curve { byDay[String(point.date.prefix(10))] = point }
-        let samples = byDay.keys.sorted().compactMap { day -> NextChartSample? in
-            guard let point = byDay[day] else { return nil }
-            guard let timestamp = formatter.date(from: day), let equity = Decimal(string: point.equity), equity > 0 else { return nil }
-            return NextChartSample(timestamp: timestamp, open: nil, high: nil, low: nil, close: equity, iopv: nil, volume: nil)
-        }
-        guard samples.count >= 2 else { return nil }
-        let dataset = NextChartDataset(code: code, interval: .day, samples: samples, costPerUnit: nil,
-            costObservedAt: nil, priceSource: "NAS G 虚拟账户权益曲线 · 日 K 开盘代理撮合", iopvSource: nil, observedAt: Date())
-        do { try dataset.validate(); return dataset } catch { return nil }
     }
 }
 struct NextAIProviderStatus: Decodable {
@@ -226,29 +176,6 @@ enum NextNASService {
         }
         return try JSONDecoder().decode(NextAdvisorInventory.self, from: data)
     }
-    private struct BacktestRequest: Encodable {
-        let strategy: String
-        let codes: [String]
-        let initialCash: String
-        let monthlyContribution: String
-        let fee: String
-        let weights: [String: String]
-        let lotSizes: [String: Int]
-        let parameters: [String: Int]
-    }
-    private struct GAccountRequest: Encodable {
-        let action: String
-        let userConfirmed: Bool
-        let expectedRevision: Int
-        let config: GAccountConfig?
-    }
-    private struct GAccountConfig: Encodable {
-        let initialCash: String
-        let codes: [String]
-        let lotSizes: [String: Int]
-        let feesPerFill: [String: String]
-        let weights: [String: String]
-    }
     static func validateURL(_ raw: String) throws -> URL {
         guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
@@ -257,62 +184,6 @@ enum NextNASService {
             throw NextError.invalid("请输入 NAS 的 HTTPS 地址；家庭局域网可用 http://NAS内网地址:8789")
         }
         return url
-    }
-    static func readGAccount(baseURL: String, session: URLSession = .shared) async throws -> NextNASGEnvelope {
-        let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("simulations").appendingPathComponent("G")
-        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 12))
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw NextError.invalid("NAS G 模拟账户读取失败") }
-        let result = try JSONDecoder().decode(NextNASGEnvelope.self, from: data)
-        guard result.strategy == "G", result.revision >= 0,
-              result.account.map({ $0.strategy == "G" && !$0.realOrder }) ?? true else {
-            throw NextError.invalid("NAS 返回的不是隔离的 G 虚拟账户")
-        }
-        return result
-    }
-    static func startGAccount(baseURL: String, expectedRevision: Int, initialCash: Decimal,
-                              lotSizes: [String: Int], fees: [String: Decimal], session: URLSession = .shared) async throws -> NextNASGEnvelope {
-        let codes = lotSizes.keys.sorted()
-        guard !codes.isEmpty, codes.count <= 12, Set(codes) == Set(fees.keys), initialCash > 0 else {
-            throw NextError.invalid("G 启动需要 1–12 只已核验证券、交易单位和独立费率")
-        }
-        let weight = NSDecimalNumber(decimal: Decimal(1) / Decimal(codes.count)).stringValue
-        let weights = Dictionary(uniqueKeysWithValues: codes.map { ($0, weight) })
-        let feeText = fees.mapValues { NSDecimalNumber(decimal: $0).stringValue }
-        let config = GAccountConfig(initialCash: NSDecimalNumber(decimal: initialCash).stringValue,
-            codes: codes, lotSizes: lotSizes, feesPerFill: feeText, weights: weights)
-        return try await mutateGAccount(baseURL: baseURL, request: GAccountRequest(action: "start", userConfirmed: true,
-            expectedRevision: expectedRevision, config: config), session: session)
-    }
-    static func actOnGAccount(_ action: String, baseURL: String, expectedRevision: Int,
-                              amount: Decimal? = nil, session: URLSession = .shared) async throws -> NextNASGEnvelope {
-        guard ["pause", "resume", "fund", "withdraw", "reset"].contains(action) else { throw NextError.invalid("G 账户操作无效") }
-        // Action payload is sent separately because start config is the only optional body field.
-        var body: [String: Any] = ["action": action, "userConfirmed": true, "expectedRevision": expectedRevision]
-        if let amount { body["amount"] = NSDecimalNumber(decimal: amount).stringValue }
-        let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("simulations").appendingPathComponent("G")
-        var request = URLRequest(url: url, timeoutInterval: 15); request.httpMethod = "POST"
-        request.httpBody = try JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        return try await decodeGResponse(request, session: session)
-    }
-    private static func mutateGAccount(baseURL: String, request body: GAccountRequest, session: URLSession) async throws -> NextNASGEnvelope {
-        let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("simulations").appendingPathComponent("G")
-        var request = URLRequest(url: url, timeoutInterval: 20); request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        return try await decodeGResponse(request, session: session)
-    }
-    private static func decodeGResponse(_ request: URLRequest, session: URLSession) async throws -> NextNASGEnvelope {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw NextError.invalid("NAS G 操作没有 HTTP 响应") }
-        guard http.statusCode == 200 else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NextError.invalid("NAS G 操作失败：\(message ?? "HTTP \(http.statusCode)")")
-        }
-        let result = try JSONDecoder().decode(NextNASGEnvelope.self, from: data)
-        guard result.strategy == "G", result.revision > 0,
-              result.account.map({ $0.strategy == "G" && !$0.realOrder }) ?? false else {
-            throw NextError.invalid("NAS G 响应没有返回隔离的模拟账户")
-        }
-        return result
     }
 
     static func validateLegacySourceURL(_ raw: String) throws -> URL {
@@ -520,37 +391,6 @@ enum NextNASService {
         }
     }
 
-    static func runBacktest(strategy: NextTwinStrategy, codes: [String], initialCash: Decimal,
-                            baseURL: String, rules: [String: NextInstrumentRules],
-                            monthlyContribution: Decimal = 0,
-                            fastWindow: Int = 20, slowWindow: Int = 60,
-                            session: URLSession = .shared) async throws -> NextTwinBacktest {
-        guard 2 <= fastWindow, fastWindow < slowWindow, slowWindow <= 250 else {
-            throw NextError.invalid("H 策略窗口必须满足 2 ≤ 快线 < 慢线 ≤ 250")
-        }
-        guard !codes.isEmpty, codes.count <= 12, Set(codes).count == codes.count,
-              initialCash > 0, monthlyContribution >= 0, codes.allSatisfy({ rules[$0]?.isHistoricalBacktestEligible == true }) else {
-            throw NextError.invalid("回测需要 1–12 只 ETF，且每只 ETF 的类别、交易单位和 ¥0.10 手续费规则都必须可核验")
-        }
-        let portion = Decimal(1) / Decimal(codes.count)
-        let weights = Dictionary(uniqueKeysWithValues: codes.map { ($0, NSDecimalNumber(decimal: portion).stringValue) })
-        let lotSizes = Dictionary(uniqueKeysWithValues: codes.compactMap { code in rules[code]?.lotSize.map { (code, $0) } })
-        let body = BacktestRequest(strategy: strategy.rawValue, codes: codes, initialCash: NSDecimalNumber(decimal: initialCash).stringValue,
-            monthlyContribution: NSDecimalNumber(decimal: monthlyContribution).stringValue, fee: "0.10", weights: weights, lotSizes: lotSizes, parameters: ["fastWindow": fastWindow, "slowWindow": slowWindow])
-        let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("backtests").appendingPathComponent(strategy.rawValue)
-        var request = URLRequest(url: url, timeoutInterval: 120); request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw NextError.invalid("NAS 回测请求没有收到 HTTP 状态") }
-        guard http.statusCode == 200 else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NextError.invalid("NAS 历史回测失败：\(message ?? "HTTP \(http.statusCode)")")
-        }
-        let result = try JSONDecoder().decode(NextTwinBacktest.self, from: data)
-        try result.validate()
-        guard result.strategy == strategy.rawValue, result.codes == codes else { throw NextError.invalid("NAS 回测证券或策略与请求不一致") }
-        return result
-    }
     static func analyzeETF(context: [String: Any], baseURL: String, session: URLSession = .shared) async throws -> NextNASAIAnalysis {
         guard let security = context["security"] as? [String: Any],
               let code = security["code"] as? String, code.count == 6, code.allSatisfy(\.isNumber) else {

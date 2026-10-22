@@ -9,7 +9,7 @@ enum NextSubchartKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Shared by ETF detail, full-screen chart, asset history, AI evidence and twin lab.
+/// Shared by ETF detail, full-screen chart, asset history and AI evidence.
 /// Price and IOPV share one dynamically fitted price axis so neither curve is
 /// visually detached. Cost remains a reference overlay and never distorts scale.
 struct UnifiedChartView: View {

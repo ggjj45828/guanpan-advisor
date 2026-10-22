@@ -104,52 +104,6 @@ final class NextCoreTests: XCTestCase {
         let fake = NextOption(id: "fake", title: "方案", rationale: "理由", tradeoff: "未知", evidenceIDs: ["invented"])
         XCTAssertThrowsError(try NextResearch.acceptModelOptions([fake, result.options[0]], evidence: result.evidence))
     }
-    func testDecimalFeesReservationAndCancellation() throws {
-        var sim = NextExperiment()
-        try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(3600))
-        XCTAssertEqual(sim.available, Decimal(string: "9849.90"))
-        sim.cancel(sim.orders[0].id)
-        XCTAssertEqual(sim.available, 10000)
-    }
-    func testNoFillFromOldFuturePreorderOrClosedSession() throws {
-        var sim = NextExperiment()
-        try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(3600))
-        for stamp in [now.addingTimeInterval(-1000), now, now.addingTimeInterval(60)] {
-            sim.observe(quote(time: stamp), now: now, marketOpen: true)
-        }
-        sim.observe(quote(time: now.addingTimeInterval(1)), now: now.addingTimeInterval(1), marketOpen: false)
-        XCTAssertEqual(sim.cash, 10000)
-        XCTAssertTrue(sim.positions.isEmpty)
-    }
-    func testFillOncePaysLimitAndFee() throws {
-        var sim = NextExperiment()
-        try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(3600))
-        let stamp = now.addingTimeInterval(1)
-        let bidPrices = ["1.39", "1.38", "1.37", "1.36", "1.35"]
-        let askPrices = ["1.40", "1.41", "1.42", "1.43", "1.44"]
-        let book = NextOrderBookSnapshot(code: "159941", observedAt: stamp, source: "test", bids: bidPrices.map { NextBookLevel(price: Decimal(string: $0)!, units: 100) }, asks: askPrices.map { NextBookLevel(price: Decimal(string: $0)!, units: 100) })
-        try sim.observe(book, rules: etfRules(), now: stamp, marketOpen: true)
-        let copy = sim
-        try sim.observe(book, rules: etfRules(), now: stamp, marketOpen: true)
-        XCTAssertEqual(sim, copy)
-        XCTAssertEqual(sim.cash, Decimal(string: "9859.90"))
-        XCTAssertEqual(sim.positions[0].bookCost, Decimal(string: "140.10"))
-        XCTAssertEqual(sim.orders[0].averageFillPrice, Decimal(string: "1.40"))
-    }
-    func testInvalidOrderAndOverspendRejected() throws {
-        var sim = NextExperiment(); sim.cash = 200
-        XCTAssertThrowsError(try sim.place(code: "159941", limit: 1, units: 99, rules: etfRules(), at: now, until: now.addingTimeInterval(60)))
-        XCTAssertThrowsError(try sim.place(code: "600000", limit: 1, units: 100, rules: etfRules("600000", assetClass: .equity), at: now, until: now.addingTimeInterval(60)))
-        try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(60))
-        XCTAssertThrowsError(try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(60)))
-        sim.expire(at: now.addingTimeInterval(60))
-        XCTAssertEqual(sim.available, 200)
-    }
-    func testBookAndSimulationIndependentRoundTrips() throws {
-        let book = NextBook(), sim = NextExperiment()
-        XCTAssertEqual(try JSONDecoder().decode(NextBook.self, from: JSONEncoder().encode(book)), book)
-        XCTAssertEqual(try JSONDecoder().decode(NextExperiment.self, from: JSONEncoder().encode(sim)), sim)
-    }
     func testPatientBuyAnalysisRequiresFreshQuoteAndCitedPriceResearch() throws {
         var book = NextBook(); book.cash = 0
         var goal = NextGoal(); goal.monthlyBudget = 1000
@@ -215,12 +169,6 @@ final class NextCoreTests: XCTestCase {
         XCTAssertEqual(roundTrip.selectedSecurity, "159941")
         XCTAssertEqual(roundTrip.chartStates["159941"]?.crosshairTime, now.addingTimeInterval(20))
     }
-    func testAThroughHTwinStrategiesKeepAutonomousAIAndAddCustomStrategy() {
-        XCTAssertEqual(NextTwinStrategy.allCases.map(\.rawValue), ["A", "B", "C", "D", "E", "F", "G", "H"])
-        XCTAssertEqual(Set(NextTwinStrategy.allCases.map(\.title)).count, 8)
-        XCTAssertEqual(NextTwinStrategy.G.title, "AI 多因子自主模拟交易")
-        XCTAssertEqual(NextTwinStrategy.H.title, "用户自定义策略")
-    }
     func testPatientLimitPlanIsAValidatedReminderAndRequiresFreshQuote() throws {
         let plan = NextPatientLimitPlan(id: UUID(), code: "159941", name: "纳指ETF", limitPrice: Decimal(string: "1.35")!, units: 100,
             createdAt: now, expiresAt: now.addingTimeInterval(86400))
@@ -235,22 +183,6 @@ final class NextCoreTests: XCTestCase {
         var invalid = plan
         invalid.state = "已成交"
         XCTAssertThrowsError(try invalid.validate())
-    }
-    func testBacktestResultIsValidatedCachedAndKeptOutOfRealBook() throws {
-        let result = NextTwinBacktest(runId: "test-run", strategy: "B", engine: "point-in-time daily OHLC replay", realOrder: false,
-            queueAccuracy: "daily bars cannot prove order-book queue fills", aiSignalAccuracy: "proxy", source: "NAS daily K",
-            startDate: "2026-10-19", endDate: "2026-10-20", sessions: 2, codes: ["159941"], initialWeights: ["159941": "1"], parameters: [:], feePerFill: "0.10",
-            initialCash: "10000", externalContributions: "0", endingEquity: "10000", totalReturn: "0", annualizedReturn: "0",
-            annualizedVolatility: "0", sharpe: "0", calmar: "0", maxDrawdown: "0", feesPaid: "0", tradeCount: 0,
-            openPositions: ["159941": 0], pendingOrders: [],
-            curve: [.init(date: "2026-10-19", equity: "10000", cash: "10000", nav: "1", externalFlow: "0"),
-                    .init(date: "2026-10-20", equity: "10000", cash: "10000", nav: "1", externalFlow: "0")], fills: [])
-        try result.validate()
-        XCTAssertNotNil(result.equityChartDataset())
-        var archive = NextAppArchive(); archive.twinBacktests["B"] = result
-        let copied = try NextArchiveEnvelope(archive: archive).archive()
-        XCTAssertEqual(copied.twinBacktests["B"], result)
-        XCTAssertTrue(copied.book.positions.isEmpty)
     }
     // IOPV 图层是可选的：关掉时纵轴只按成交价，不被 IOPV 撑开；
     // 打开时才把 IOPV 纳入同一根价格轴（UnifiedChartView 也按 visibleLayers 处理）。
@@ -276,12 +208,12 @@ final class NextCoreTests: XCTestCase {
         let confirmed = NextInstrumentRules(code: "159941", market: "SZ", assetClass: .etf, settlement: .t0, lotSize: 100, feePerTrade: Decimal(string: "0.10"), source: "official", verifiedAt: now)
         XCTAssertTrue(confirmed.isVerified)
     }
-    func testOfficialETFBacktestRuleDoesNotInventSettlement() {
+    func testOfficialETFRuleKeepsSettlementUnknownAndFixedFee() {
         let sz = NextInstrumentRules.verifiedETFMarketRule(code: "159941", market: "SZSE", at: now)
         let sh = NextInstrumentRules.verifiedETFMarketRule(code: "563020", market: "SSE", at: now)
         XCTAssertEqual(sz?.lotSize, 100)
         XCTAssertEqual(sh?.lotSize, 100)
-        XCTAssertTrue(sz?.isHistoricalBacktestEligible == true)
+        XCTAssertEqual(sz?.feePerTrade, NextTradeFees.etfPerTrade)
         XCTAssertFalse(sz?.isVerified ?? true)
         XCTAssertEqual(sz?.settlement, .unknown)
         XCTAssertNil(NextInstrumentRules.verifiedETFMarketRule(code: "123456", market: "SZSE", at: now))
@@ -293,22 +225,6 @@ final class NextCoreTests: XCTestCase {
         XCTAssertTrue(NextMarketClock.isRegularSession(formatter.date(from: "2026-10-20 14:00")!))
         XCTAssertFalse(NextMarketClock.isRegularSession(formatter.date(from: "2026-10-20 12:00")!))
         XCTAssertFalse(NextMarketClock.isRegularSession(formatter.date(from: "2026-10-18 10:00")!))
-    }
-    func testTwinFundingIsMatchedAcrossAThroughHAndNeverTouchesRealBook() throws {
-        let real = NextBook()
-        var twins = NextTwinLedger()
-        try twins.fundAll(500, reason: "统一月度模拟注资", at: now)
-        XCTAssertEqual(twins.accounts.count, 8)
-        XCTAssertTrue(NextTwinStrategy.allCases.allSatisfy { twins.accounts[$0.rawValue]?.simulation.cash == 10_500 })
-        XCTAssertEqual(real.cash, 0)
-        try twins.setPaused(true, strategy: .G)
-        XCTAssertTrue(twins.accounts["G"]?.isPaused == true)
-        XCTAssertFalse(twins.accounts["A"]?.isPaused ?? true)
-    }
-    func testTwinFundingIsAtomicWhenAnAccountIsMissing() {
-        var twins = NextTwinLedger(); twins.accounts.removeValue(forKey: "H")
-        XCTAssertThrowsError(try twins.fundAll(500, reason: "test", at: now))
-        XCTAssertTrue(twins.accounts.values.allSatisfy { $0.simulation.cash == 10000 })
     }
     func testBackupChecksumAndSchemaMustValidateBeforeRestore() throws {
         var archive = NextAppArchive(); archive.book.cash = 250; archive.audits = []
@@ -345,13 +261,6 @@ final class NextCoreTests: XCTestCase {
         XCTAssertEqual(try NextArchiveEnvelope(archive: archive).archive().chartData["159941:day"], daily)
         archive.chartData = ["bad:day": daily]
         XCTAssertThrowsError(try NextArchiveEnvelope(archive: archive))
-    }
-    func testLastTradeQuoteCannotSimulateOrderExecution() throws {
-        var sim = NextExperiment()
-        try sim.place(code: "159941", limit: 1.5, units: 100, rules: etfRules(), at: now, until: now.addingTimeInterval(3600))
-        sim.observe(quote(time: now.addingTimeInterval(1), price: 1), now: now.addingTimeInterval(1), marketOpen: true)
-        XCTAssertEqual(sim.orders[0].state, "等待")
-        XCTAssertTrue(sim.positions.isEmpty)
     }
     func testTencentQuoteParserChecksSymbolFieldsAndSourceTime() {
         XCTAssertEqual(NextTencentQuoteParser.symbol(for: "159941"), "sz159941")
