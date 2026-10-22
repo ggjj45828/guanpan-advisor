@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 收息页「红利买入时机 · 自选打分」卡。对自选与持仓逐只打分，点击进行情详情。
-private struct DividendBuyScoreCard: View {
+struct DividendBuyScoreCard: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.gp) private var p
     @State private var targetYieldText: String = UserDefaults.standard.string(forKey: "guanpan.targetYield") ?? "4"
@@ -101,7 +101,7 @@ private struct DividendBuyScoreCard: View {
     }
 }
 
-private struct DividendBuyScoreRow: View {
+struct DividendBuyScoreRow: View {
     @Environment(\.gp) private var p
     @EnvironmentObject private var model: NextAppModel
     let score: DividendBuyScore
