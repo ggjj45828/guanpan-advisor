@@ -683,9 +683,15 @@ private struct DecisionScreen: View {
                                             NextEvidence(id: "advisor-news-\(UUID().uuidString)", title: "新闻标题与来源链接", detail: newsText.isEmpty ? "本次无可用新闻标题" : newsText, level: "Google News RSS 聚合；标题未核实", observedAt: stamp),
                                             NextEvidence(id: "advisor-ai-\(UUID().uuidString)", title: "在线 AI 综合分析", detail: saved.ai.content ?? saved.ai.message ?? "在线 AI 不可用", level: saved.ai.provider ?? "未连接", observedAt: stamp)
                                         ]
+                                        let manualReviewOption = NextOption(
+                                            id: "manual-review",
+                                            title: "逐项核对后自行决定",
+                                            rationale: "\(saved.notice)\n\(holdingsText)",
+                                            tradeoff: "限价与收益均为条件估算；只有券商内自行核对后手工下单才会执行。",
+                                            evidenceIDs: evidence.map { $0.id })
                                         let next = NextDecision(createdAt: stamp, title: "私人投资顾问 · \(saved.positions.count) 只真实持仓",
                                             evidence: evidence,
-                                            options: [NextOption(id: "manual-review", title: "逐项核对后自行决定", rationale: "\(saved.notice)\n\(holdingsText)", tradeoff: "限价与收益均为条件估算；只有券商内自行核对后手工下单才会执行。", evidenceIDs: evidence.map(\.id)],
+                                            options: [manualReviewOption],
                                             status: "分析已保存 · 不会自动下单", origin: "NAS DeepSeek + 本地交易数据筛选")
                                         model.recordDecision(next)
                                     }
