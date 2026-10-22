@@ -1,0 +1,67 @@
+name: GuanpanAdvisor
+options:
+  bundleIdPrefix: com.guanpan.advisor
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '3.6.0'
+    CURRENT_PROJECT_VERSION: '25'
+targets:
+  GuanpanAdvisor:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: 观盘顾问
+        # 显式写死版本号：GENERATE_INFOPLIST_FILE 关掉后，XcodeGen 会把 plist 里的
+        # $(MARKETING_VERSION) 当字面量，落成默认的 1.0 —— 必须在 properties 里给实际值。
+        CFBundleShortVersionString: '3.6.0'
+        CFBundleVersion: '25'
+        UILaunchScreen: {}
+        # ATS 的 NSAllowsLocalNetworking 是嵌套字典，无法用 INFOPLIST_KEY_* 注入
+        # （Xcode 只支持扁平的 INFOPLIST_KEY_ 项），只能写进 plist 本体，
+        # 否则连 NAS 的 http 地址会被 ATS 直接拒掉。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: 手动连接你配置的 NAS 服务，读取行情和同步你确认的账本。
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.guanpan.advisor.ios
+        PRODUCT_NAME: GuanpanAdvisor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: '1,2'
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGNING_ALLOWED: NO
+  GuanpanAdvisorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: GuanpanAdvisor
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.guanpan.advisor.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  GuanpanAdvisor:
+    build:
+      targets:
+        GuanpanAdvisor: all
+        GuanpanAdvisorUITests: [test]
+    test:
+      targets:
+        - GuanpanAdvisorUITests

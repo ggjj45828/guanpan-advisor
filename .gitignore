@@ -1,0 +1,13 @@
+# Xcode / Swift
+.build/
+DerivedData/
+*.xcodeproj/
+build/
+*.xcresult
+*.ipa
+# Python
+__pycache__/
+*.pyc
+# secrets / local env
+.secrets/
+.env
