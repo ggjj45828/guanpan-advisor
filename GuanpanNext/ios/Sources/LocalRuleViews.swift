@@ -445,13 +445,49 @@ struct PositionRow: View {
         }
     }
 
+    private var validQuote: NextQuote? {
+        guard let quote, quote.usableForDisplay(at: Date()) else { return nil }
+        return quote.quote
+    }
+    private var marketValueText: String {
+        guard let price = validQuote?.price else { return "—" }
+        return "¥\(NextMoney.text(price * Decimal(position.units)))"
+    }
+    private var priceText: String {
+        guard let price = validQuote?.price else { return "—" }
+        return "¥\(NextMoney.text(price, digits: 3))"
+    }
+    private var isETF: Bool { NextDividendRules.isOnExchangeETF(position.code) }
+
     var body: some View {
         HStack(spacing: 4) {
             NavigationLink(value: GPRoute.instrument(position.code)) {
-                VStack(alignment: .leading, spacing: 5) {
-                    InstrumentRow(code: position.code, name: position.name, units: position.units, quote: quote)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 5) {
+                                Text(position.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(p.ink).lineLimit(1)
+                                GPPillBadge(text: isETF ? "ETF" : "股票", color: isETF ? p.jade : p.chartBlue)
+                            }
+                            Text("市值 \(marketValueText) · \(position.units) 份").font(.system(size: 10, design: .monospaced)).foregroundStyle(p.muted).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text(priceText).font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(p.ink)
+                            if let change = validQuote?.changePercent {
+                                Text("\(change >= 0 ? "+" : "")\(NextMoney.text(change, digits: 3))%")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                                    .foregroundStyle(p.changeTone(NextNum.double(change)))
+                            }
+                        }
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).padding(.leading, 2)
+                    }
                     tagRow
                 }
+                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .background(p.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(p.line, lineWidth: 0.8))
             }.buttonStyle(.plain)
             Menu {
                 Button("记录买入", systemImage: "arrow.down.circle") { sheet = .trade(GPTradeRequest(code: position.code, side: "buy")) }

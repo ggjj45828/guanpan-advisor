@@ -1394,39 +1394,59 @@ private struct AssetsScreen: View {
             return total + per * Decimal(pos.units)
         }
     }
-    @ViewBuilder private var overviewStatGrid: some View {
-        let holdingsValue = (valuation.total ?? 0) - model.book.cash
-        HStack(spacing: 10) {
-            overviewStat(title: "持仓市值", value: valuation.total.map { _ in "¥\(NextMoney.text(holdingsValue))" } ?? "—", color: p.chartBlue)
-            overviewStat(title: "现金", value: "¥\(NextMoney.text(model.book.cash))", color: p.jade)
-            overviewStat(title: "当日盈亏", value: valuation.dailyChange.map { "\($0 >= 0 ? "+" : "")\(NextMoney.text($0))" } ?? "—", color: valuation.dailyChange.map { p.changeTone(NextNum.double($0)) } ?? p.muted)
-            overviewStat(title: "预计年股息", value: "¥\(NextMoney.text(annualDividend))", color: p.chartGold)
+    /// 持仓结构：按 ETF / 股票 / 现金 三类汇总市值（份额型百分比保持 1 位小数）。
+    private var donutSegments: [GPDonutSegment] {
+        var etfValue = 0.0, stockValue = 0.0
+        for position in model.book.positions {
+            let price = model.quotes[position.code]?.quote.price ?? 0
+            let marketValue = NextNum.double(price) * Double(position.units)
+            if NextDividendRules.isOnExchangeETF(position.code) { etfValue += marketValue } else { stockValue += marketValue }
         }
+        let cash = NextNum.double(model.book.cash)
+        var segments: [GPDonutSegment] = []
+        if stockValue > 0 { segments.append(GPDonutSegment(title: "股票", value: stockValue, color: p.chartBlue)) }
+        if etfValue > 0 { segments.append(GPDonutSegment(title: "ETF", value: etfValue, color: p.jade)) }
+        if cash > 0 { segments.append(GPDonutSegment(title: "现金", value: cash, color: p.chartGold)) }
+        if segments.isEmpty { segments.append(GPDonutSegment(title: "现金", value: 1, color: p.chartGold)) }
+        return segments
     }
-    @ViewBuilder private func overviewStat(title: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(p.muted)
-            Text(value).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
+    /// 市场温度：自选与持仓今日涨跌的均值映射到 0–100（50 为持平）。本机粗算，不是预测。
+    private var marketTemp: Double {
+        let changes = model.monitoredCodes.compactMap { model.quotes[$0]?.quote.changePercent }.map { NextNum.double($0) }
+        guard !changes.isEmpty else { return 50 }
+        let average = changes.reduce(0, +) / Double(changes.count)
+        return NextNum.clamp(50 + average * 6, 0, 100)
+    }
+    private var marketTempCaption: String {
+        switch marketTemp {
+        case ..<30: return "偏冷 · 观望"
+        case ..<45: return "偏弱 · 耐心等待"
+        case ..<55: return "平稳 · 低价分批"
+        case ..<70: return "偏热 · 别追高"
+        default: return "过热 · 谨慎"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(color.opacity(0.28), lineWidth: 0.8))
     }
     var body: some View {
         GPPageBackground {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("真实资产").font(.system(.title2, design: .serif).weight(.semibold)).padding(.top, 6)
-                DataPanel(title: "场内资产总值", accent: p.jade, caption: "本机真实账本") {
-                    Text(valuation.total.map { "¥\(NextMoney.text($0))" } ?? "行情数据不足").gpFont(size: 32, relativeTo: .largeTitle, weight: .medium, design: .rounded).monospacedDigit().foregroundStyle(p.ink)
-                    Text(valuation.isComplete ? "现金 + 持仓估值 · \(valuation.quality.map { $0 == .live ? "新鲜行情" : "\($0.rawValue)缓存行情" } ?? "仅账本现金")" : "\(valuation.pricedPositions)/\(valuation.totalPositions) 只持仓有报价；不将部分估值标为总资产").font(.caption).foregroundStyle(p.muted)
-                    HStack(spacing: 24) {
-                        GPValue(label: "账本现金", value: "¥\(NextMoney.text(model.book.cash))")
-                        GPValue(label: "持仓成本", value: "¥\(NextMoney.text(model.book.positions.reduce(0) { $0 + $1.bookCost }))")
-                        GPValue(label: "当日盈亏", value: valuation.dailyChange.map { "\($0 >= 0 ? "+" : "")¥\(NextMoney.text($0))" } ?? "—", footnote: valuation.dailyChangePercent.map { "昨收 \(NextMoney.text($0))%" } ?? "需新鲜报价", emphasis: valuation.dailyChange.map { p.changeTone(NextNum.double($0)) })
-                    }.padding(.top, 3)
-                }.padding(.top, 15)
-                overviewStatGrid.padding(.top, 4)
+            VStack(alignment: .leading, spacing: 12) {
+                GPHeroAssetCard(
+                    totalText: valuation.total.map { "¥\(NextMoney.text($0))" } ?? "行情数据不足",
+                    totalCaption: valuation.isComplete ? nil : "\(valuation.pricedPositions)/\(valuation.totalPositions) 只持仓有报价，暂不算总资产",
+                    changeText: valuation.dailyChange.map { "\($0 >= 0 ? "+" : "")¥\(NextMoney.text($0))" },
+                    changePercentText: valuation.dailyChangePercent.map { "\($0 >= 0 ? "+" : "")\(NextNum.signed(NextNum.double($0)))%" },
+                    infoText: "总资产 = 账本现金 + 持仓市值，全部本机计算、不联网。只有持仓与最新报价齐备时才显示合计；缺报价时不会把部分估值当成总资产。",
+                    history: model.book.history
+                )
+                .padding(.top, 6)
+                HStack(spacing: 10) {
+                    GPDonutView(segments: donutSegments, centerValue: "¥\(NextMoney.text(valuation.total ?? 0))", centerLabel: "总资产")
+                    GPGaugeView(value: marketTemp, caption: marketTempCaption)
+                }
+                HStack(spacing: 10) {
+                    GPQuickActionCard(icon: "gauge.with.dots.needle.50percent", title: "值不值得买", detail: "本机规则打分，逐只看依据", tint: p.jade, route: .worthOverview)
+                    GPQuickActionCard(icon: "list.bullet.rectangle", title: "资产流水", detail: "买入卖出与现金留痕", tint: p.chartBlue, route: .fills)
+                    GPQuickActionCard(icon: "clock.arrow.circlepath", title: "决策历史", detail: "历次 AI 与规则结论", tint: p.terracotta, route: .history)
+                }
                 HoldingsBreakdownPanel()
                 EditorialSection(title: "持仓明细", trailing: "\(model.book.positions.count) 项", accent: p.jade) {
                     HStack { Button { addPosition = true } label: { Label("录入已确认持仓", systemImage: "plus") }.font(.caption.weight(.semibold)); Spacer(); NavigationLink(value: GPRoute.fills) { Label("资产流水", systemImage: "list.bullet.rectangle") }.font(.caption) }.tint(p.forest)
