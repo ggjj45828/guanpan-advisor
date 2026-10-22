@@ -359,13 +359,35 @@ private struct MarketScreen: View {
 
 struct InstrumentRow: View {
     @Environment(\.gp) private var p
+    @EnvironmentObject private var model: NextAppModel
     let code: String; let name: String; var units: Int?; let quote: NextCachedQuote?
     private var validQuote: NextQuote? { guard let quote, quote.usableForDisplay(at: Date()) else { return nil }; return quote.quote }
+    private var isETF: Bool { NextDividendRules.isOnExchangeETF(code) }
+    /// 近 30 个日 K 收盘，画迷你走势；不足 2 点不画。
+    private var sparkValues: [Double] {
+        let samples = model.chartData["\(code):day"]?.orderedSamples.suffix(30) ?? []
+        return samples.map { NextNum.double($0.close) }
+    }
+    private var marketValueLine: String {
+        guard let units, let price = validQuote?.price else { return "\(code)\(units.map { " · \($0) 份" } ?? "")" }
+        return "\(code) · 市值 ¥\(NextMoney.text(price * Decimal(units)))"
+    }
     var body: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) { Text(name).gpFont(size: 14, relativeTo: .body, weight: .semibold).foregroundStyle(p.ink); Text("\(code)\(units.map { " · \($0) 份" } ?? "")").gpFont(size: 10, relativeTo: .caption, design: .monospaced).foregroundStyle(p.muted) }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Text(name).gpFont(size: 14, relativeTo: .body, weight: .semibold).foregroundStyle(p.ink).lineLimit(1)
+                    GPPillBadge(text: isETF ? "ETF" : "股票", color: isETF ? p.jade : p.chartBlue)
+                }
+                Text(marketValueLine).gpFont(size: 10, relativeTo: .caption, design: .monospaced).foregroundStyle(p.muted).lineLimit(1)
+            }
             Spacer(minLength: 2)
             VStack(alignment: .trailing, spacing: 4) { Text(validQuote.map { "¥\(NextMoney.text($0.price, digits: 3))" } ?? "—").gpFont(size: 13, relativeTo: .subheadline, weight: .semibold, design: .rounded).monospacedDigit().foregroundStyle(p.ink); if let validQuote, let change = validQuote.changePercent { Text("\(change >= 0 ? "+" : "")\(NextMoney.text(change, digits: 3))%").gpFont(size: 10, relativeTo: .caption, design: .monospaced).foregroundStyle(p.changeTone(NextNum.double(change))) }; Text(quote?.stamp.label(now: Date()) ?? "暂无行情").gpFont(size: 8, relativeTo: .caption2).foregroundStyle(quote?.stamp.quality == .stale ? p.terracotta : p.muted).lineLimit(1) }
+            if sparkValues.count >= 2 {
+                GPSparkline(values: sparkValues,
+                            color: validQuote?.changePercent.map { p.changeTone(NextNum.double($0)) } ?? p.forest,
+                            lineWidth: 1.4, height: 26).frame(width: 44)
+            }
             Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).padding(.leading, 2)
         }.padding(.vertical, 10).contentShape(Rectangle())
     }
@@ -392,13 +414,79 @@ private struct InstrumentDetailScreen: View {
     private var quote: NextQuote? { model.quotes[code]?.quote }
     private var name: String { position?.name ?? quote?.name ?? knownName(code) }
     private var cost: Decimal? { position?.costPerUnit }
+    /// 分时样本（今日）。开/高/低/量只取真实可取到的值，取不到就显示 —，不推算。
+    private var intradaySamples: [NextChartSample] { model.chartData[code]?.orderedSamples ?? [] }
+    private var intradayOpen: Decimal? { intradaySamples.first.flatMap { $0.open ?? $0.close } }
+    private var intradayHigh: Decimal? { intradaySamples.compactMap(\.high).max() }
+    private var intradayLow: Decimal? { intradaySamples.compactMap(\.low).min() }
+    /// 分时成交量为日内累计口径，直接取最后一个样本，不做加总。
+    private var intradayVolume: Decimal? { intradaySamples.last?.volume }
+    private var premiumText: String? {
+        guard let quote, let iopv = quote.iopv, iopv > 0 else { return nil }
+        let premium = (quote.price / iopv - 1) * 100
+        return "\(premium >= 0 ? "+" : "")\(NextMoney.text(premium, digits: 3))%"
+    }
+    private func volumeText(_ value: Decimal) -> String {
+        let amount = NextNum.double(value)
+        if amount >= 100_000_000 { return String(format: "%.3f亿", amount / 100_000_000) }
+        if amount >= 10_000 { return String(format: "%.3f万", amount / 10_000) }
+        return NextMoney.text(value, digits: 0)
+    }
+    @ViewBuilder private func statCell(title: String, value: String, valueColor: Color? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 10)).foregroundStyle(p.muted)
+            Text(value).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(valueColor ?? p.ink).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
     var body: some View {
         GPPageBackground {
             VStack(alignment: .leading, spacing: 0) {
-                HStack { VStack(alignment: .leading, spacing: 5) { Text("\(name) · \(code) · \(quote.map { $0.source } ?? "数据源待接入")").font(.caption.monospaced()).foregroundStyle(p.muted); Text(quote.map { "¥\(NextMoney.text($0.price, digits: 3))" } ?? "暂无有效报价").gpFont(size: 34, relativeTo: .largeTitle, weight: .medium, design: .rounded).monospacedDigit().foregroundStyle(p.ink); if let quote, let change = quote.changePercent { Text("\(change >= 0 ? "+" : "")\(NextMoney.text(change, digits: 3))%　·　\(quote.time.formatted(date: .omitted, time: .shortened))").font(.caption.monospaced()).foregroundStyle(p.changeTone(NextNum.double(change))) } else { Text(model.quotes[code]?.stamp.label(now: Date()) ?? "无数据 · 不计算涨跌").font(.caption).foregroundStyle(p.muted) } }; Spacer(); Button { Task { await model.refreshInstrument(code) } } label: { Image(systemName: "arrow.clockwise").foregroundStyle(p.forest).frame(width: 44, height: 44).contentShape(Rectangle()) }.accessibilityLabel("刷新行情"); Button { if model.watch.contains(code) { model.removeWatch(code) } else { try? model.addWatch(code) } } label: { Image(systemName: model.watch.contains(code) ? "star.fill" : "star").foregroundStyle(p.terracotta).frame(width: 44, height: 44).contentShape(Rectangle()) }.accessibilityLabel(model.watch.contains(code) ? "取消关注" : "关注") }
-                    .padding(.top, 5).padding(.bottom, 14)
-                if let quote, let iopv = quote.iopv { Text("当前 IOPV ¥\(NextMoney.text(iopv, digits: 3)) · 溢折价 \(NextMoney.text((quote.price / iopv - 1) * 100, digits: 3))% · 同源时点 \(quote.time.formatted(date: .omitted, time: .shortened))").font(.caption2.monospaced()).foregroundStyle(p.terracotta).padding(.bottom, 8) }
-                if let stamp = model.quotes[code]?.stamp { Text(stamp.label(now: Date())).font(.caption2).foregroundStyle(p.muted).padding(.bottom, 8) }
+                // 参考设计稿「行情详情」：白卡 + 大字价格 + 六宫格。涨跌走红/绿语义色。
+                let priceTone: Color = quote.map { p.changeTone(NextNum.double($0.changePercent ?? 0)) } ?? p.ink
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(name).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.ink)
+                            Text("\(code) · \(quote.map { $0.source } ?? "数据源待接入")").font(.system(size: 10, design: .monospaced)).foregroundStyle(p.muted)
+                        }
+                        Spacer()
+                        Button { Task { await model.refreshInstrument(code) } } label: { Image(systemName: "arrow.clockwise").foregroundStyle(p.forest).frame(width: 40, height: 40).contentShape(Rectangle()) }.accessibilityLabel("刷新行情")
+                        Button { if model.watch.contains(code) { model.removeWatch(code) } else { try? model.addWatch(code) } } label: { Image(systemName: model.watch.contains(code) ? "star.fill" : "star").foregroundStyle(p.terracotta).frame(width: 40, height: 40).contentShape(Rectangle()) }.accessibilityLabel(model.watch.contains(code) ? "取消关注" : "关注")
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(quote.map { "¥\(NextMoney.text($0.price, digits: 3))" } ?? "暂无有效报价")
+                            .font(.system(size: 36, weight: .medium, design: .rounded)).monospacedDigit()
+                            .foregroundStyle(priceTone)
+                        if let quote, let change = quote.changePercent {
+                            let delta = quote.price - quote.previousClose
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("\(delta >= 0 ? "+" : "")\(NextMoney.text(delta, digits: 3))").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(priceTone)
+                                Text("\(change >= 0 ? "+" : "")\(NextMoney.text(change, digits: 3))%")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(priceTone.opacity(0.12), in: Capsule())
+                                    .foregroundStyle(priceTone)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Text(quote?.time.formatted(date: .omitted, time: .shortened) ?? "").font(.system(size: 10, design: .monospaced)).foregroundStyle(p.muted)
+                    }
+                    if let stamp = model.quotes[code]?.stamp { Text(stamp.label(now: Date())).font(.system(size: 9)).foregroundStyle(stamp.quality == .stale ? p.terracotta : p.muted) }
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        statCell(title: "昨收", value: quote.map { "¥\(NextMoney.text($0.previousClose, digits: 3))" } ?? "—")
+                        statCell(title: "今开", value: intradayOpen.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—")
+                        statCell(title: "最高", value: intradayHigh.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", valueColor: p.gpUp)
+                        statCell(title: "最低", value: intradayLow.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", valueColor: p.gpDown)
+                        statCell(title: "成交量", value: intradayVolume.map { volumeText($0) } ?? "—")
+                        statCell(title: "溢折率", value: premiumText ?? "—", valueColor: premiumText == nil ? nil : p.terracotta)
+                    }
+                }
+                .padding(14)
+                .background(p.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(p.line, lineWidth: 0.8))
+                .padding(.top, 5).padding(.bottom, 12)
                 DataPanel(title: "行情图表", accent: p.chartBlue, caption: model.chartData[code].map { "\($0.priceSource) · \($0.observedAt.formatted(date: .omitted, time: .shortened))" } ?? "暂无本机历史") {
                     UnifiedChartView(dataset: interval == .intraday ? model.chartData[code] : model.chartData["\(code):day"], interval: $interval, costPerUnit: cost, selectedTime: $selectedTime, securityCode: code)
                     if interval != .intraday, let dailyError = model.dailyErrors[code] {
@@ -485,18 +573,41 @@ private struct OrderBookView: View {
     @Environment(\.gp) private var p
     let snapshot: NextOrderBookSnapshot
     private var isFresh: Bool { snapshot.observedAt <= Date() && Date().timeIntervalSince(snapshot.observedAt) <= 5 }
+    private var maxAskUnits: Int { max(snapshot.asks.map(\.units).max() ?? 1, 1) }
+    private var maxBidUnits: Int { max(snapshot.bids.map(\.units).max() ?? 1, 1) }
     var body: some View {
-        VStack(spacing: 3) {
-            HStack { Text("委卖").foregroundStyle(p.muted); Spacer(); Text("价格").foregroundStyle(p.muted); Spacer(); Text("数量").foregroundStyle(p.muted) }.font(.caption2)
-            ForEach(Array(snapshot.asks.reversed().enumerated()), id: \.offset) { index, level in orderRow("卖\(5-index)", level: level, color: p.risk) }
-            Rectangle().fill(p.line).frame(height: 1).padding(.vertical, 3)
-            ForEach(Array(snapshot.bids.enumerated()), id: \.offset) { index, level in orderRow("买\(index+1)", level: level, color: p.jade) }
-            Text("\(snapshot.source) · \(snapshot.observedAt.formatted(date: .omitted, time: .standard)) · \(isFresh ? "数据新鲜" : "数据已过期")").font(.system(size: 9, design: .monospaced)).foregroundStyle(isFresh ? p.muted : p.terracotta).frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 5)
-        }.accessibilityElement(children: .combine).accessibilityLabel("\(snapshot.code) 五档买卖盘口，\(isFresh ? "数据新鲜" : "数据已过期")")
+        VStack(spacing: 8) {
+            // 参考设计稿「五档盘口」：左卖出（绿）/ 右买入（红），每档 价格 + 比例条 + 数量。
+            HStack(spacing: 12) {
+                VStack(spacing: 7) {
+                    Text("卖出").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.gpDown).frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(Array(snapshot.asks.reversed().enumerated()), id: \.offset) { index, level in
+                        bookRow(label: "卖\(5 - index)", level: level, color: p.gpDown, maxUnits: maxAskUnits)
+                    }
+                }
+                VStack(spacing: 7) {
+                    Text("买入").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.gpUp).frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(Array(snapshot.bids.enumerated()), id: \.offset) { index, level in
+                        bookRow(label: "买\(index + 1)", level: level, color: p.gpUp, maxUnits: maxBidUnits)
+                    }
+                }
+            }
+            Text("\(snapshot.source) · \(snapshot.observedAt.formatted(date: .omitted, time: .standard)) · \(isFresh ? "数据新鲜" : "数据已过期")").font(.system(size: 9, design: .monospaced)).foregroundStyle(isFresh ? p.muted : p.terracotta).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine).accessibilityLabel("\(snapshot.code) 五档买卖盘口，\(isFresh ? "数据新鲜" : "数据已过期")")
     }
-    private func orderRow(_ title: String, level: NextBookLevel, color: Color) -> some View {
-        HStack { Text(title).foregroundStyle(p.muted); Spacer(); Text(NextMoney.text(level.price, digits: 3)).foregroundStyle(color); Spacer(); Text("\(level.units)").foregroundStyle(p.ink) }
-            .font(.system(size: 11, design: .monospaced)).padding(.vertical, 4)
+    private func bookRow(label: String, level: NextBookLevel, color: Color, maxUnits: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 9)).foregroundStyle(p.muted).frame(width: 24, alignment: .leading)
+            Text(NextMoney.text(level.price, digits: 3)).font(.system(size: 11, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(color).frame(width: 52, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(color.opacity(0.10)).frame(height: 5)
+                    Capsule().fill(color.opacity(0.45)).frame(width: geo.size.width * CGFloat(level.units) / CGFloat(maxUnits), height: 5)
+                }
+            }.frame(height: 5)
+            Text("\(level.units)").font(.system(size: 10, design: .monospaced)).foregroundStyle(p.muted).frame(width: 40, alignment: .trailing)
+        }
     }
 }
 
@@ -1238,16 +1349,40 @@ private struct GridLabScreen: View {
                 EditorialSection(title: "明日挂单表 · NAS 网格引擎", trailing: model.gridStatus.map { "\($0.ladder.count) 只" }, accent: p.chartViolet) {
                     Text(model.gridStatusMessage).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     if let status = model.gridStatus, status.initialized, let summary = status.summary {
-                        HStack(spacing: 10) {
-                            GPValue(label: "网格账户权益", value: "¥\(NextMoney.text(dec(summary.equity) ?? 0))")
-                            GPValue(label: "累计盈亏", value: "\((dec(summary.pnl) ?? 0) >= 0 ? "+" : "")\(NextMoney.text(dec(summary.pnl) ?? 0))", footnote: "相对建网本金", emphasis: p.changeTone(NextNum.double(dec(summary.pnl) ?? 0)))
+                        // 参考设计稿「量化实验室」：模拟账户英雄卡（紫渐变）+ 统计 trio。
+                        let equity = dec(summary.equity) ?? 0
+                        let pnl = dec(summary.pnl) ?? 0
+                        let pnlPct = NextNum.double(dec(summary.pnlPercent) ?? 0)
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("模拟账户 · 虚拟资金").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white.opacity(0.78))
+                                    Text("¥\(NextMoney.text(equity))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.72)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "sparkles").font(.system(size: 24)).foregroundStyle(Color.white.opacity(0.85))
+                            }
+                            HStack(spacing: 8) {
+                                Text("累计盈亏 \(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                                Text("\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(Color.white.opacity(0.2), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Text("运行 \(summary.days) 天 · 买入/卖出 \(summary.buys)/\(summary.sells) 笔 · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0))").font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.68))
                         }
+                        .padding(16)
+                        .background(
+                            LinearGradient(colors: [Color(hex: 0x5B3CC4), Color(hex: 0x795CE0), Color(hex: 0x9B7BF0)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .shadow(color: Color(hex: 0x795CE0).opacity(0.3), radius: 12, x: 0, y: 6)
                         HStack(spacing: 10) {
-                            GPValue(label: "运行天数", value: "\(summary.days) 天")
-                            GPValue(label: "买入／卖出", value: "\(summary.buys)/\(summary.sells) 笔")
-                            GPValue(label: "手续费", value: "¥\(NextMoney.text(dec(summary.fees) ?? 0))")
+                            GPStatTile(label: "建网本金", value: "¥\(NextMoney.text(dec(summary.startEquity) ?? 0))")
+                            GPStatTile(label: "累计盈亏", value: "\(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))", footnote: "\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%", emphasis: p.changeTone(pnlPct))
+                            GPStatTile(label: "手续费", value: "¥\(NextMoney.text(dec(summary.fees) ?? 0))")
                         }
-                        Text("账户权益 ¥\(NextMoney.text(dec(summary.equity) ?? 0)) · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0)) · 收益率 \(String(format: "%.3f", NextNum.double(dec(summary.pnlPercent) ?? 0)))%").font(.caption2).foregroundStyle(p.muted)
                     } else if let status = model.gridStatus, !status.initialized {
                         GPStatus(title: "NAS 网格尚未初始化", detail: "后台会按你的真实持仓自动建网格；首次连接后稍等片刻再刷新。", symbol: "grid")
                     }

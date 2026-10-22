@@ -146,11 +146,11 @@ struct GPHeroAssetCard: View {
                 GPRangePills(selection: $range)
                 GPSparkline(values: series, color: .white, lineWidth: 1.7, height: 76)
                 HStack {
-                    axisLabel(rangePoints.first?.date)
+                    Text(axisLabel(rangePoints.first?.date))
                     Spacer(minLength: 0)
-                    axisLabel(rangePoints[rangePoints.count / 2].date)
+                    Text(axisLabel(rangePoints[rangePoints.count / 2].date))
                     Spacer(minLength: 0)
-                    axisLabel(rangePoints.last?.date)
+                    Text(axisLabel(rangePoints.last?.date))
                 }
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.6))
