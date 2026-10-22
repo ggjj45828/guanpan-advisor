@@ -264,6 +264,131 @@ enum NextDividendRules {
     }
 }
 
+import SwiftUI
+
+/// 红利买入时机打分（满分 100）。
+///
+/// 口径（全部本机可复算，不预测价格、不预测分红）：
+/// - 股息率 40 分：近 12 个月每份**已核实**派息 ÷ 分母（ETF 有 IOPV 按净值，否则按现价），
+///   达到用户设定的目标股息率即拿满，按比例给分。
+/// - 价格位置 35 分：现价在近 180 个交易日高低区间中的位置，越靠下分越高。
+/// - 高点回撤 15 分：相对近 180 个交易日高点回撤越深分越高（回撤 20% 拿满）。
+/// - 分红稳定性 10 分：近三个自然年里有已核实分红的年份数（3 年 10 分 / 2 年 7 分 / 1 年 4 分）。
+///
+/// 哪项数据缺失，哪项计 0 分并记入 `missing`，界面明示，不拿中性分冒充。
+struct DividendBuyScore: Equatable, Identifiable {
+    var id: String { code }
+    enum Tier: String, Equatable {
+        case attention = "值得关注"
+        case batch = "可分批"
+        case observe = "观望"
+        case wait = "等待"
+    }
+    let code: String
+    let price: Decimal
+    let perShare: Decimal
+    /// 股息率分母：ETF 有 IOPV 时为净值，否则为现价。
+    let yieldBase: Decimal
+    let yieldPercent: Double
+    let targetYieldPercent: Decimal
+    let yieldPoints: Int
+    let positionPoints: Int
+    let drawdownPoints: Int
+    let stabilityPoints: Int
+    let windowLow: Decimal?
+    let windowHigh: Decimal?
+    let missing: [String]
+    var total: Int { yieldPoints + positionPoints + drawdownPoints + stabilityPoints }
+    var tier: Tier {
+        switch total {
+        case 80...: return .attention
+        case 60..<80: return .batch
+        case 40..<60: return .observe
+        default: return .wait
+        }
+    }
+}
+
+/// 打分的唯一实现。纯函数：同样的输入必然得到同样的分数，用户可以逐项核对。
+enum DividendBuyScoreEngine {
+    /// 近 180 个交易日（约半年）的日 K 窗口。
+    static let windowBars = 180
+    /// 回撤满分线：相对窗口高点回撤 20% 即拿满回撤分。
+    static let drawdownFullScale = 0.20
+
+    /// - Parameters:
+    ///   - perShare: 近 12 个月每份已核实派息（0 表示不打分）。
+    ///   - price: 现价（nil 或 ≤0 表示不打分）。
+    ///   - dividendEvents: 已合并的去重派息事件（调用方负责 merged）。
+    ///   - today: `yyyy-MM-dd`，注入以便测试固定时间。
+    static func evaluate(code: String, perShare: Decimal, price: Decimal?, iopv: Decimal?,
+                         samples: [NextChartSample], dividendEvents: [NextETFDividendEvent],
+                         today: String, targetYieldPercent: Decimal) -> DividendBuyScore? {
+        guard perShare > 0, let price, price > 0 else { return nil }
+        var missing: [String] = []
+        var base = price
+        if NextDividendRules.isOnExchangeETF(code), let net = iopv, net > 0 { base = net }
+
+        // 1) 股息率 40 分：达到目标股息率拿满，按比例。
+        let yieldPercent = NextNum.double(perShare) / NextNum.double(base) * 100
+        var yieldPoints = 0
+        if targetYieldPercent > 0 {
+            let target = NextNum.double(targetYieldPercent)
+            yieldPoints = Int((40 * min(yieldPercent / target, 1)).rounded())
+        } else {
+            missing.append("目标股息率")
+        }
+
+        // 2) 3) 位置与回撤共用同一个日 K 窗口；没有日 K 就都记缺失。
+        let window = Array(samples.filter { $0.close > 0 }
+            .sorted { $0.timestamp < $1.timestamp }
+            .suffix(windowBars))
+        var positionPoints = 0
+        var drawdownPoints = 0
+        var windowLow: Decimal?
+        var windowHigh: Decimal?
+        if !window.isEmpty {
+            let lows = window.map { $0.low ?? $0.close }
+            let highs = window.map { $0.high ?? $0.close }
+            windowLow = lows.min()
+            windowHigh = highs.max()
+            if let low = windowLow, let high = windowHigh, high > low {
+                let position = min(max(NextNum.double((price - low) / (high - low)), 0), 1)
+                positionPoints = Int((35 * (1 - position)).rounded())
+            } else {
+                missing.append("日K区间")
+            }
+            if let high = windowHigh, high > 0 {
+                let drawdown = min(max(NextNum.double((high - price) / high), 0), 1)
+                drawdownPoints = Int((15 * min(drawdown / drawdownFullScale, 1)).rounded())
+            } else {
+                missing.append("日K高点")
+            }
+        } else {
+            missing.append("日K")
+        }
+
+        // 4) 分红稳定性 10 分：近三个自然年（含今年）有已核实派息的年份数。
+        let currentYear = Int(today.prefix(4)) ?? 0
+        let years = Set(dividendEvents
+            .filter { $0.isEstimated != true && $0.date <= today }
+            .compactMap { Int($0.date.prefix(4)) }
+            .filter { $0 >= currentYear - 2 && $0 <= currentYear })
+        let stabilityPoints: Int
+        switch years.count {
+        case 3...: stabilityPoints = 10
+        case 2: stabilityPoints = 7
+        case 1: stabilityPoints = 4
+        default: stabilityPoints = 0
+        }
+
+        return DividendBuyScore(code: code, price: price, perShare: perShare, yieldBase: base,
+            yieldPercent: yieldPercent, targetYieldPercent: targetYieldPercent,
+            yieldPoints: yieldPoints, positionPoints: positionPoints, drawdownPoints: drawdownPoints,
+            stabilityPoints: stabilityPoints, windowLow: windowLow, windowHigh: windowHigh, missing: missing)
+    }
+}
+
 // MARK: - 「值不值得买」打分
 
 struct NextScoreLine: Identifiable, Equatable {
