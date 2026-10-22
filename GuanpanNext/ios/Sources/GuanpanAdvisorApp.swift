@@ -1313,24 +1313,25 @@ private struct GridLabScreen: View {
         return (minP, maxP, span, (cur - minP) / span)
     }
     @ViewBuilder private func gridAxisView(_ row: NextNASGridLadderRow) -> some View {
-        guard let m = gridAxisMetrics(row) else { return EmptyView() }
-        GeometryReader { geo in
-            let w = geo.size.width
-            ZStack(alignment: .leading) {
-                Capsule().fill(p.line).frame(height: 4)
-                ForEach(Array(row.rungs.enumerated()), id: \.offset) { _, rung in
-                    if let rp = Decimal(string: rung.price, locale: Locale(identifier: "en_US_POSIX")) {
-                        let f = (NSDecimalNumber(decimal: rp).doubleValue - m.minP) / m.span
-                        Circle().fill(rung.isBuy ? p.gpDown : p.gpUp).frame(width: 9, height: 9)
-                            .position(x: CGFloat(f) * w, y: 14)
+        if let m = gridAxisMetrics(row) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(p.line).frame(height: 4)
+                    ForEach(Array(row.rungs.enumerated()), id: \.offset) { _, rung in
+                        if let rp = Decimal(string: rung.price, locale: Locale(identifier: "en_US_POSIX")) {
+                            let f = (NSDecimalNumber(decimal: rp).doubleValue - m.minP) / m.span
+                            Circle().fill(rung.isBuy ? p.gpDown : p.gpUp).frame(width: 9, height: 9)
+                                .position(x: CGFloat(f) * w, y: 14)
+                        }
                     }
-                }
-                Rectangle().fill(p.forestDeep).frame(width: 2.5, height: 24)
-                    .position(x: CGFloat(m.curFrac) * w, y: 14)
-                Text("现价").font(.system(size: 8, weight: .medium)).foregroundStyle(p.forestDeep)
-                    .position(x: CGFloat(m.curFrac) * w, y: 33)
+                    Rectangle().fill(p.forestDeep).frame(width: 2.5, height: 24)
+                        .position(x: CGFloat(m.curFrac) * w, y: 14)
+                    Text("现价").font(.system(size: 8, weight: .medium)).foregroundStyle(p.forestDeep)
+                        .position(x: CGFloat(m.curFrac) * w, y: 33)
+                }.frame(height: 40)
             }.frame(height: 40)
-        }.frame(height: 40)
+        }
     }
 }
 
