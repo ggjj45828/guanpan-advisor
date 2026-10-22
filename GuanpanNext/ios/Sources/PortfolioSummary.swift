@@ -184,12 +184,12 @@ enum NextPortfolioCalculator {
         let limit = Decimal(string: "0.25")!
         if change > limit || change < -limit {
             let percent = NextNum.double(change) * 100
-            return "报价与昨收偏离 \(String(format: "%.1f", percent))%，疑似行情源串号，已排除在总资产之外"
+            return "报价与昨收偏离 \(String(format: "%.3f", percent))%，疑似行情源串号，已排除在总资产之外"
         }
         guard storedCostPerUnit > 0 else { return nil }
         let ratio = quote.price / storedCostPerUnit
         if ratio > 3 || ratio < Decimal(string: "0.3333")! {
-            return "报价是账本成本的 \(String(format: "%.1f", NextNum.double(ratio))) 倍，疑似行情源串号，已排除在总资产之外"
+            return "报价是账本成本的 \(String(format: "%.3f", NextNum.double(ratio))) 倍，疑似行情源串号，已排除在总资产之外"
         }
         return nil
     }

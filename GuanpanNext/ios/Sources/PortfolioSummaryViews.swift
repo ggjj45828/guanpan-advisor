@@ -215,7 +215,7 @@ struct HoldingsBreakdownPanel: View {
                 }
                 ForEach(data.recentSells) { fill in
                     GPDataRow(title: "卖出 \(fill.code) · \(fill.date.formatted(date: .numeric, time: .omitted))",
-                              value: "\(fill.units) 份 × ¥\(NextMoney.text(fill.price, digits: 4))",
+                              value: "\(fill.units) 份 × ¥\(NextMoney.text(fill.price, digits: 3))",
                               note: "已实现 \(fill.realized >= 0 ? "+" : "")¥\(NextMoney.text(fill.realized)) · 手续费 ¥\(NextMoney.text(fill.fee))",
                               valueColor: p.changeTone(NextNum.double(fill.realized)))
                 }
@@ -251,7 +251,7 @@ private struct HoldingsSummaryRow: View {
                     .font(.system(size: 8.5, weight: .semibold)).foregroundStyle(p.chartViolet)
                     .padding(.horizontal, 5).padding(.vertical, 1.5)
                     .background(p.chartViolet.opacity(0.12), in: Capsule())
-                Text("\(item.units) 份 · 成本 ¥\(NextMoney.text(item.costPerUnit, digits: 4))（\(item.costSource)）")
+                Text("\(item.units) 份 · 成本 ¥\(NextMoney.text(item.costPerUnit, digits: 3))（\(item.costSource)）")
                     .font(.system(size: 9)).foregroundStyle(p.muted.opacity(0.9))
             }
         }
@@ -277,7 +277,7 @@ private struct PerformanceBlock: View {
                             emphasis: p.changeTone(NextNum.double(summary.cumulativePercent)))
                     GPValue(label: "年化", value: summary.annualizedPercent.map { NextNum.signed($0) + "%" } ?? "不足 90 天",
                             footnote: summary.annualizedPercent == nil ? "样本太短不给年化" : "按区间折算")
-                    GPValue(label: "最大回撤", value: "-" + NextNum.percent(summary.maxDrawdownPercent, digits: 1),
+                    GPValue(label: "最大回撤", value: "-" + NextNum.percent(summary.maxDrawdownPercent, digits: 3),
                             footnote: "快照净值峰谷", emphasis: p.terracotta)
                 }
                 if let benchmarkReturn {

@@ -56,13 +56,13 @@ struct WorthBuyPanel: View {
                 if let yield = assessment.dividendYieldPercent {
                     GPDataRow(title: "股息率（近 12 个月）",
                               value: NextNum.percent(yield),
-                              note: "每份 ¥\(NextMoney.text(assessment.dividendPerShare ?? 0, digits: 4)) · " + (NextDividendRules.isOnExchangeETF(code) ? "ETF 按 IOPV 优先计算" : "按现价计算"))
+                              note: "每份 ¥\(NextMoney.text(assessment.dividendPerShare ?? 0, digits: 3)) · " + (NextDividendRules.isOnExchangeETF(code) ? "ETF 按 IOPV 优先计算" : "按现价计算"))
                 } else {
                     GPDataRow(title: "股息率", value: "无可用派息记录", note: "没有可核实的近 12 个月派息；本项按 0 分处理，不代表标的好坏")
                 }
                 if let position, let gap = assessment.costGapPercent {
                     GPDataRow(title: "相对账面成本", value: "\(NextNum.signed(gap))%",
-                              note: "成本 ¥\(NextMoney.text(position.costPerUnit, digits: 4)) · 只作参考，不参与打分", valueColor: p.changeTone(NextNum.double(gap)))
+                              note: "成本 ¥\(NextMoney.text(position.costPerUnit, digits: 3)) · 只作参考，不参与打分", valueColor: p.changeTone(NextNum.double(gap)))
                 }
                 ForEach(assessment.notes, id: \.self) { note in
                     Text(note).font(.caption2).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
@@ -248,10 +248,10 @@ private struct GridCheckRow: View {
         .accessibilityLabel("\(name) 网格适合度 \(check.score) 分，\(check.grade.rawValue)")
     }
     private var metricLine: String {
-        let volatility = check.annualVolatilityPercent.map { String(format: "波动 %.0f%%", $0) } ?? "波动 —"
-        let amplitude = check.avgAmplitudePercent.map { String(format: "振幅 %.2f%%", $0) } ?? "振幅 —"
-        let turnover = check.avgTurnoverYi.map { String(format: "成交 %.2f亿", $0) } ?? "成交 —"
-        let range = check.rangeBoundRatio.map { String(format: "震荡 %.0f%%", $0 * 100) } ?? "震荡 —"
+        let volatility = check.annualVolatilityPercent.map { String(format: "波动 %.3f%%", $0) } ?? "波动 —"
+        let amplitude = check.avgAmplitudePercent.map { String(format: "振幅 %.3f%%", $0) } ?? "振幅 —"
+        let turnover = check.avgTurnoverYi.map { String(format: "成交 %.3f亿", $0) } ?? "成交 —"
+        let range = check.rangeBoundRatio.map { String(format: "震荡 %.3f%%", $0 * 100) } ?? "震荡 —"
         return "\(volatility) · \(amplitude) · \(turnover) · \(range)"
     }
 }
@@ -486,7 +486,7 @@ struct PositionRow: View {
                 Text("浮动 \(pnl >= 0 ? "+" : "")\(NextMoney.text(pnl))").font(.system(size: 10, weight: .medium)).monospacedDigit().foregroundStyle(p.changeTone(NextNum.double(pnl)))
             }
             if let yieldPct = dividendYieldPercent, yieldPct > 0 {
-                Text("股息率 \(NextMoney.text(yieldPct, digits: 2))%").font(.system(size: 10, weight: .medium)).monospacedDigit().foregroundStyle(p.chartGold)
+                Text("股息率 \(NextMoney.text(yieldPct, digits: 3))%").font(.system(size: 10, weight: .medium)).monospacedDigit().foregroundStyle(p.chartGold)
             }
             Spacer(minLength: 0)
         }.padding(.leading, 2)
@@ -530,10 +530,10 @@ struct PositionEditSheet: View {
                 Section("\(position.name) · \(position.code)") {
                     TextField("持有份数", text: $units).keyboardType(.numberPad)
                     TextField("每份成本（元）", text: $perShareCost).keyboardType(.decimalPad)
-                    Text("当前 \(position.units) 份 · 每份 ¥\(NextMoney.text(position.costPerUnit, digits: 4)) · 合计 ¥\(NextMoney.text(position.bookCost))")
+                    Text("当前 \(position.units) 份 · 每份 ¥\(NextMoney.text(position.costPerUnit, digits: 3)) · 合计 ¥\(NextMoney.text(position.bookCost))")
                         .font(.caption).foregroundStyle(.secondary)
                     if canSave, let totalCostValue, let parsedUnits {
-                        Text("修改后合计成本 ¥\(NextMoney.text(totalCostValue))（\(parsedUnits) 份 × ¥\(NextMoney.text(parsedPerShare ?? 0, digits: 4))）")
+                        Text("修改后合计成本 ¥\(NextMoney.text(totalCostValue))（\(parsedUnits) 份 × ¥\(NextMoney.text(parsedPerShare ?? 0, digits: 3))）")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

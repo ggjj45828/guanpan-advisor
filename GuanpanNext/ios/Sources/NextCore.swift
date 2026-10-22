@@ -14,7 +14,7 @@ enum NextMoney {
         }
         return value
     }
-    static func text(_ value: Decimal, digits: Int = 2) -> String {
+    static func text(_ value: Decimal, digits: Int = 3) -> String {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.numberStyle = .decimal

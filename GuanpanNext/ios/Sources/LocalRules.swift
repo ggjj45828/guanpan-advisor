@@ -15,7 +15,7 @@ enum NextNum {
         return Decimal(string: String(format: "%.6f", value), locale: Locale(identifier: "en_US_POSIX")) ?? 0
     }
     static func clamp(_ value: Double, _ low: Double, _ high: Double) -> Double { min(high, max(low, value)) }
-    static func percent(_ value: Double, digits: Int = 2) -> String {
+    static func percent(_ value: Double, digits: Int = 3) -> String {
         String(format: "%.\(digits)f%%", value)
     }
     /// 指数点位等展示用。复用同一个 NumberFormatter，避免在 body 里反复构造。
@@ -25,13 +25,13 @@ enum NextNum {
         formatter.numberStyle = .decimal
         return formatter
     }()
-    static func text(_ value: Double, digits: Int = 2) -> String {
+    static func text(_ value: Double, digits: Int = 3) -> String {
         guard value.isFinite else { return "—" }
         displayFormatter.minimumFractionDigits = digits
         displayFormatter.maximumFractionDigits = digits
         return displayFormatter.string(from: NSNumber(value: value)) ?? "—"
     }
-    static func signed(_ value: Double, digits: Int = 2) -> String {
+    static func signed(_ value: Double, digits: Int = 3) -> String {
         (value >= 0 ? "+" : "") + String(format: "%.\(digits)f", value)
     }
 }
@@ -130,9 +130,9 @@ enum NextSignalEngine {
             let loss = delta.map { max(0, -$0) }.reduce(0, +) / 14
             let rsi = loss == 0 ? (gain == 0 ? 50 : 100) : 100 - 100 / (1 + gain / loss)
             rsiValue = rsi
-            if rsi < 30 { raw += 1; notes.append("RSI14 偏低（\(String(format: "%.1f", rsi))）") }
-            else if rsi > 70 { raw -= 1; notes.append("RSI14 偏高（\(String(format: "%.1f", rsi))）") }
-            else { notes.append("RSI14 中性（\(String(format: "%.1f", rsi))）") }
+            if rsi < 30 { raw += 1; notes.append("RSI14 偏低（\(String(format: "%.3f", rsi))）") }
+            else if rsi > 70 { raw -= 1; notes.append("RSI14 偏高（\(String(format: "%.3f", rsi))）") }
+            else { notes.append("RSI14 中性（\(String(format: "%.3f", rsi))）") }
         }
 
         var macdHistogram: Double?
@@ -494,7 +494,7 @@ enum NextWorthBuyEngine {
             case 0.8..<1.2: liquidityValue = 60
             default: liquidityValue = 30
             }
-            liquidityDetail = "量比 \(String(format: "%.2f", ratio))（最近一日成交量 ÷ 前 20 日均量），越低越难按理想价格成交"
+            liquidityDetail = "量比 \(String(format: "%.3f", ratio))（最近一日成交量 ÷ 前 20 日均量），越低越难按理想价格成交"
             liquidityEstimated = false
         }
         dimensions.append(NextScoreDimension(
@@ -671,19 +671,19 @@ enum NextGridCheckEngine {
         raw = NextNum.clamp(raw, 0, 100)
 
         if let value = metrics.avgTurnoverYi {
-            if value >= 1 { reasons.append("日均成交额 \(String(format: "%.2f", value)) 亿，流动性充足") }
-            else if value >= 0.3 { reasons.append("日均成交额 \(String(format: "%.2f", value)) 亿，流动性尚可") }
-            else { warnings.append("日均成交额仅 \(String(format: "%.2f", value)) 亿，委托可能难成交或滑点大") }
+            if value >= 1 { reasons.append("日均成交额 \(String(format: "%.3f", value)) 亿，流动性充足") }
+            else if value >= 0.3 { reasons.append("日均成交额 \(String(format: "%.3f", value)) 亿，流动性尚可") }
+            else { warnings.append("日均成交额仅 \(String(format: "%.3f", value)) 亿，委托可能难成交或滑点大") }
         }
         if let value = metrics.annualVolatilityPercent {
-            if value >= 15, value <= 30 { reasons.append("年化波动率 \(String(format: "%.1f", value))%，处于 15%–30% 理想区间") }
-            else if value < 15 { warnings.append("年化波动率仅 \(String(format: "%.1f", value))%，网格触发机会少") }
-            else { warnings.append("年化波动率 \(String(format: "%.1f", value))% 偏高，价格容易击穿网格区间") }
+            if value >= 15, value <= 30 { reasons.append("年化波动率 \(String(format: "%.3f", value))%，处于 15%–30% 理想区间") }
+            else if value < 15 { warnings.append("年化波动率仅 \(String(format: "%.3f", value))%，网格触发机会少") }
+            else { warnings.append("年化波动率 \(String(format: "%.3f", value))% 偏高，价格容易击穿网格区间") }
         }
         if let value = metrics.avgAmplitudePercent {
-            if value >= 0.5, value <= 2 { reasons.append("日均振幅 \(String(format: "%.2f", value))%，日内空间足够") }
-            else if value < 0.5 { warnings.append("日均振幅仅 \(String(format: "%.2f", value))%，扣完费用后收益有限") }
-            else { warnings.append("日均振幅 \(String(format: "%.2f", value))% 偏大，需要更宽的资金规划防破网") }
+            if value >= 0.5, value <= 2 { reasons.append("日均振幅 \(String(format: "%.3f", value))%，日内空间足够") }
+            else if value < 0.5 { warnings.append("日均振幅仅 \(String(format: "%.3f", value))%，扣完费用后收益有限") }
+            else { warnings.append("日均振幅 \(String(format: "%.3f", value))% 偏大，需要更宽的资金规划防破网") }
         }
         if let ratio = metrics.rangeBoundRatio {
             if ratio >= 0.7 { reasons.append("近 60 日有 \(Int((ratio * 100).rounded()))% 的交易日收盘贴近 MA20，走势偏震荡") }
@@ -783,7 +783,7 @@ enum NextAccountAdvisor {
                 let gap = (item.price / NextNum.double(item.position.costPerUnit) - 1) * 100
                 if gap <= -10 {
                     findings.append(NextAccountFinding(
-                        title: "\(item.position.name) 较成本回撤 \(NextNum.percent(abs(gap), digits: 1))",
+                        title: "\(item.position.name) 较成本回撤 \(NextNum.percent(abs(gap), digits: 3))",
                         detail: "这是复核信号，不是卖出指令。检查原买入逻辑是否仍成立、仓位是否超限；不要只因为成本价就摊平。",
                         severity: .watch))
                 }

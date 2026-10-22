@@ -618,11 +618,11 @@ private struct DecisionScreen: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
     @ViewBuilder private func inspectRow(_ r: InspectHolding) -> some View {
-        let yldText = r.yieldPercent.map { "股息率 \(NextMoney.text(Decimal($0), digits: 2))%" } ?? "股息率 —"
+        let yldText = r.yieldPercent.map { "股息率 \(NextMoney.text(Decimal($0), digits: 3))%" } ?? "股息率 —"
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(r.name) · \(r.code)").font(.subheadline.weight(.medium)).foregroundStyle(p.ink)
-                Text("占比 \(NextMoney.text(Decimal(r.weight * 100), digits: 0))% · 浮动 \(r.pnlPercent >= 0 ? "+" : "")\(NextMoney.text(Decimal(r.pnlPercent), digits: 1))% · \(yldText)")
+                Text("占比 \(NextMoney.text(Decimal(r.weight * 100), digits: 0))% · 浮动 \(r.pnlPercent >= 0 ? "+" : "")\(NextMoney.text(Decimal(r.pnlPercent), digits: 3))% · \(yldText)")
                     .font(.caption2).foregroundStyle(p.muted)
             }
             Spacer(minLength: 4)
@@ -1247,7 +1247,7 @@ private struct GridLabScreen: View {
                             GPValue(label: "买入／卖出", value: "\(summary.buys)/\(summary.sells) 笔")
                             GPValue(label: "手续费", value: "¥\(NextMoney.text(dec(summary.fees) ?? 0))")
                         }
-                        Text("账户权益 ¥\(NextMoney.text(dec(summary.equity) ?? 0)) · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0)) · 收益率 \(String(format: "%.2f", NextNum.double(dec(summary.pnlPercent) ?? 0)))%").font(.caption2).foregroundStyle(p.muted)
+                        Text("账户权益 ¥\(NextMoney.text(dec(summary.equity) ?? 0)) · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0)) · 收益率 \(String(format: "%.3f", NextNum.double(dec(summary.pnlPercent) ?? 0)))%").font(.caption2).foregroundStyle(p.muted)
                     } else if let status = model.gridStatus, !status.initialized {
                         GPStatus(title: "NAS 网格尚未初始化", detail: "后台会按你的真实持仓自动建网格；首次连接后稍等片刻再刷新。", symbol: "grid")
                     }
@@ -1277,7 +1277,7 @@ private struct GridLabScreen: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("现价 ¥\(NextMoney.text(dec(row.price) ?? 0))").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(p.ink)
-                    Text("步长 \(String(format: "%.2f", NextNum.double(dec(row.stepPercent) ?? 0)))% · 第 \(row.position) 档").font(.caption2).foregroundStyle(p.muted)
+                    Text("步长 \(String(format: "%.3f", NextNum.double(dec(row.stepPercent) ?? 0)))% · 第 \(row.position) 档").font(.caption2).foregroundStyle(p.muted)
                 }
             }
             HStack(spacing: 14) {
@@ -1937,8 +1937,8 @@ private struct SettingsScreen: View {
                         Text("%").font(.subheadline).foregroundStyle(p.muted)
                         Button("保存") {
                             let v = Decimal(string: targetYieldInput.trimmingCharacters(in: .whitespaces)) ?? 0
-                            UserDefaults.standard.set(NextMoney.text(v, digits: 1), forKey: "guanpan.targetYield")
-                            model.notice = "目标股息率已设为 \(NextMoney.text(v, digits: 1))%；股息买入参考与持仓标签会按此计算目标价。"
+                            UserDefaults.standard.set(NextMoney.text(v, digits: 3), forKey: "guanpan.targetYield")
+                            model.notice = "目标股息率已设为 \(NextMoney.text(v, digits: 3))%；股息买入参考与持仓标签会按此计算目标价。"
                         }.font(.caption.weight(.semibold)).tint(p.forest)
                     }
                     Text("用于「收息 → 股息买入参考」的默认目标股息率，也作为持仓股息率标签的对照基准；只影响参考价计算，不构成买入建议。").font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
@@ -2314,12 +2314,12 @@ private struct DividendAdviceCard: View {
         let premium = (price / target - 1) * 100
         let current = NextMoney.text(perShare / price * 100, digits: 3)
         if price <= target {
-            return ("现价不高于目标买入价，值得关注", "当前股息率 \(current)%，已达到目标 \(NextMoney.text(targetYield, digits: 1))%。", p.jade)
+            return ("现价不高于目标买入价，值得关注", "当前股息率 \(current)%，已达到目标 \(NextMoney.text(targetYield, digits: 3))%。", p.jade)
         }
         if premium <= 15 {
-            return ("在目标价 +15% 以内，可分批", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 1))%。", p.chartGold)
+            return ("在目标价 +15% 以内，可分批", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 3))%。", p.chartGold)
         }
-        return ("高于目标价，建议等回落", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 1))%；价越低股息率越高。", p.terracotta)
+        return ("高于目标价，建议等回落", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 3))%；价越低股息率越高。", p.terracotta)
     }
 
     var body: some View {
@@ -2336,7 +2336,7 @@ private struct DividendAdviceCard: View {
                 GPDataRow(title: "现价", value: quote.map { "¥\(NextMoney.text($0.price, digits: 3))" } ?? "—", note: quote.map { "行情 \($0.time.formatted(date: .omitted, time: .shortened))" } ?? "点查询刷新行情")
                 GPDataRow(title: "近12个月每份派息（已核实）", value: perShare > 0 ? "¥\(NextMoney.text(perShare, digits: 3))" : "—", note: perShare > 0 ? "只统计已核实派息" : "无已核实记录")
                 GPDataRow(title: "当前股息率", value: yieldPercent.map { "\(NextMoney.text($0, digits: 3))%" } ?? "—", note: "每份派息 ÷ 现价")
-                GPDataRow(title: "目标买入价", value: targetPrice.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", note: "按目标股息率 \(NextMoney.text(targetYield, digits: 1))% 反推")
+                GPDataRow(title: "目标买入价", value: targetPrice.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", note: "按目标股息率 \(NextMoney.text(targetYield, digits: 3))% 反推")
                 GPDataRow(title: "下次分红", value: nextDividendText ?? "—", note: "按历史除息月份外推，以基金公告为准")
                 if let advice {
                     VStack(alignment: .leading, spacing: 4) {

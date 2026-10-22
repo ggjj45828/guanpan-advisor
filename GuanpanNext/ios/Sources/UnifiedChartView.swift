@@ -280,7 +280,7 @@ struct UnifiedChartView: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityIdentifier("chart.plot")
                         .accessibilityLabel("价格、IOPV、成交量共用价格纵轴的图表")
-                        .accessibilityValue(selectedSample.map { "\($0.timestamp.formatted(date: .numeric, time: .shortened))，价格 ¥\(NextMoney.text($0.close, digits: 4))" } ?? "拖动或使用前后数据点操作查看历史")
+                        .accessibilityValue(selectedSample.map { "\($0.timestamp.formatted(date: .numeric, time: .shortened))，价格 ¥\(NextMoney.text($0.close, digits: 3))" } ?? "拖动或使用前后数据点操作查看历史")
                         .accessibilityAction(named: "放大图表") { guard zoomAllowed else { return }; magnification = min(8, magnification * 1.5); saveChartState() }
                         .accessibilityAction(named: "缩小图表") { guard zoomAllowed else { return }; magnification = max(1, magnification / 1.5); saveChartState() }
                         .accessibilityAction(named: "上一个数据点") { moveCrosshair(-1) }
@@ -309,8 +309,8 @@ struct UnifiedChartView: View {
                     Spacer(minLength: 0)
                     if let point = selectedSample {
                         VStack(alignment: .trailing, spacing: 3) {
-                            Text("¥\(NextMoney.text(point.close, digits: 4)) · \(point.timestamp.formatted(date: .omitted, time: .shortened))")
-                            if let iopv = point.iopv { Text("IOPV ¥\(NextMoney.text(iopv, digits: 4)) · 溢折价 \(NextMoney.text((point.close / iopv - 1) * 100, digits: 2))%") }
+                            Text("¥\(NextMoney.text(point.close, digits: 3)) · \(point.timestamp.formatted(date: .omitted, time: .shortened))")
+                            if let iopv = point.iopv { Text("IOPV ¥\(NextMoney.text(iopv, digits: 3)) · 溢折价 \(NextMoney.text((point.close / iopv - 1) * 100, digits: 3))%") }
                             if let volume = point.volume { Text("成交量 \(NextMoney.text(volume, digits: 0))") }
                         }.font(.system(size: 9, design: .monospaced)).foregroundStyle(p.ink).multilineTextAlignment(.trailing)
                     }
@@ -580,8 +580,8 @@ struct UnifiedChartView: View {
 
     private func amountText(_ value: Decimal) -> String {
         let amount = NextNum.double(value)
-        if amount >= 100_000_000 { return String(format: "%.2f亿", amount / 100_000_000) }
-        if amount >= 10_000 { return String(format: "%.1f万", amount / 10_000) }
+        if amount >= 100_000_000 { return String(format: "%.3f亿", amount / 100_000_000) }
+        if amount >= 10_000 { return String(format: "%.3f万", amount / 10_000) }
         return String(format: "%.0f", amount)
     }
 

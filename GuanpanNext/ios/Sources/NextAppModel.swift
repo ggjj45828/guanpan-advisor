@@ -536,12 +536,12 @@ struct LocalPreferences: Codable {
         }
         for (plan, quote) in triggered {
             postLocalAlert(level: "限价计划", fingerprint: "patient-limit-\(plan.id.uuidString)", title: "\(plan.name) 达到你的观察价",
-                           detail: "最新价 ¥\(NextMoney.text(quote.price, digits: 4))，目标 ¥\(NextMoney.text(plan.limitPrice, digits: 4))，计划数量 \(plan.units) 份。仅为提醒，未下单。",
+                           detail: "最新价 ¥\(NextMoney.text(quote.price, digits: 3))，目标 ¥\(NextMoney.text(plan.limitPrice, digits: 3))，计划数量 \(plan.units) 份。仅为提醒，未下单。",
                            stamp: NextDataStamp(source: quote.source, observedAt: quote.time, quality: .live, detail: "用户耐心限价计划触发"))
         }
         for plan in expired {
             postLocalAlert(level: "限价计划", fingerprint: "patient-limit-expired-\(plan.id.uuidString)", title: "\(plan.name) 观察计划已到期",
-                           detail: "目标价 ¥\(NextMoney.text(plan.limitPrice, digits: 4))，计划 \(plan.units) 份。计划已停止，不会下单。",
+                           detail: "目标价 ¥\(NextMoney.text(plan.limitPrice, digits: 3))，计划 \(plan.units) 份。计划已停止，不会下单。",
                            stamp: NextDataStamp(source: "本机计划时钟", observedAt: now, quality: .live, detail: "耐心限价计划到期"))
         }
     }
@@ -562,8 +562,8 @@ struct LocalPreferences: Codable {
             let relation = rule.direction == .atOrAbove ? "达到或高于" : "达到或低于"
             let metric = rule.resolvedMetric
             let current = rule.value(for: quote) ?? quote.price
-            let currentText = metric == .price ? "¥\(NextMoney.text(current, digits: 4))" : "\(NextNum.signed(NextNum.double(current)))%"
-            let thresholdText = metric == .price ? "¥\(NextMoney.text(rule.price, digits: 4))" : "\(NextNum.signed(NextNum.double(rule.price)))%"
+            let currentText = metric == .price ? "¥\(NextMoney.text(current, digits: 3))" : "\(NextNum.signed(NextNum.double(current)))%"
+            let thresholdText = metric == .price ? "¥\(NextMoney.text(rule.price, digits: 3))" : "\(NextNum.signed(NextNum.double(rule.price)))%"
             let title = metric == .price ? "\(rule.name) 价格提醒" : "\(rule.name) \(metric.title)提醒"
             postLocalAlert(level: metric.title, fingerprint: "price-rule-\(rule.id.uuidString)", title: title,
                            detail: "当前\(metric.title) \(currentText)，已\(relation)你设置的 \(thresholdText)。",
@@ -1183,7 +1183,7 @@ struct LocalPreferences: Codable {
                 if let cached = quotes[code], cached.usableForDisplay(at: Date()) {
                     let quote = cached.quote
                     let quality = quote.isFresh(at: Date()) ? "有效报价" : cached.stamp.label(now: Date())
-                    item = NextEvidence(id: "security-\(code)", title: "证券行情", detail: "\(quote.name) 最新价 ¥\(NextMoney.text(quote.price, digits: 4))；\(quality)；\(quote.source)；源时间 \(quote.time.formatted(date: .numeric, time: .shortened))。", level: quote.isFresh(at: Date()) ? "事实" : "过期数据", observedAt: quote.time)
+                    item = NextEvidence(id: "security-\(code)", title: "证券行情", detail: "\(quote.name) 最新价 ¥\(NextMoney.text(quote.price, digits: 3))；\(quality)；\(quote.source)；源时间 \(quote.time.formatted(date: .numeric, time: .shortened))。", level: quote.isFresh(at: Date()) ? "事实" : "过期数据", observedAt: quote.time)
                 } else {
                     item = NextEvidence(id: "security-\(code)", title: "证券行情待补", detail: "\(code) 当前没有可显示的本机报价缓存；需要刷新后再判断。", level: "缺口", observedAt: Date())
                 }
