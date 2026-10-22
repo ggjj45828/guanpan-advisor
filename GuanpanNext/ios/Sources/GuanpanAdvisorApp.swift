@@ -584,12 +584,12 @@ private struct DecisionScreen: View {
         let targetYield = Decimal(string: UserDefaults.standard.string(forKey: "guanpan.targetYield") ?? "4") ?? 4
         let positions = model.book.positions
         let totalMV = positions.reduce(Decimal.zero) { acc, pos in
-            guard let price = model.quotes[pos.code]?.quote?.price else { return acc }
+            guard let price = model.quotes[pos.code]?.quote.price else { return acc }
             return acc + price * Decimal(pos.units)
         }
         var results: [InspectHolding] = []
         for pos in positions {
-            let price = model.quotes[pos.code]?.quote?.price
+            let price = model.quotes[pos.code]?.quote.price
             let mv = price.map { $0 * Decimal(pos.units) } ?? 0
             let weight = totalMV > 0 ? NSDecimalNumber(decimal: mv).doubleValue / NSDecimalNumber(decimal: totalMV).doubleValue : 0
             let cost = pos.bookCost
@@ -649,7 +649,7 @@ private struct DecisionScreen: View {
                 }.padding(.top, 7)
                 Text(code.map { "围绕 \(knownName($0))，把已知信息整理成下一步" } ?? "先说你想完成什么").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 10)
                 EditorialSection(title: "真实持仓 · 分时数据检查", trailing: "只读", accent: p.forest) {
-                    GPActionButton(title: checkingAdvisorInventory ? "正在检查…" : "检查 NAS 真实持仓", systemImage: "chart.xyaxis.line", secondary: true) {
+                    GPActionButton(title: checkingAdvisorInventory ? "正在检查…" : "检查 NAS 真实持仓", secondary: true, systemImage: "chart.xyaxis.line") {
                         Task {
                             checkingAdvisorInventory = true
                             defer { checkingAdvisorInventory = false }
@@ -659,7 +659,7 @@ private struct DecisionScreen: View {
                             } catch { advisorInventory = nil; advisorInventoryError = error.localizedDescription }
                         }
                     }.disabled(checkingAdvisorInventory || model.preferences.nasBaseURL.isEmpty)
-                    GPActionButton(title: runningAdvisorAnalysis ? "正在分析…" : "授权 AI 综合分析与交易方案", systemImage: "sparkles", secondary: true) {
+                    GPActionButton(title: runningAdvisorAnalysis ? "正在分析…" : "授权 AI 综合分析与交易方案", secondary: true, systemImage: "sparkles") {
                         showAdvisorAIConsent = true
                     }.disabled(runningAdvisorAnalysis || model.preferences.nasBaseURL.isEmpty || model.book.positions.allSatisfy { $0.units == 0 })
                     .confirmationDialog("发送真实持仓给 NAS AI？", isPresented: $showAdvisorAIConsent, titleVisibility: .visible) {
@@ -745,7 +745,7 @@ private struct DecisionScreen: View {
                     if let inspectSummary { Text(inspectSummary).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true) }
                     if !inspectResults.isEmpty {
                         let totalMV = inspectResults.reduce(Decimal.zero) { acc, r in
-                            guard let price = model.quotes[r.code]?.quote?.price else { return acc }
+                            guard let price = model.quotes[r.code]?.quote.price else { return acc }
                             let units = model.book.positions.first(where: { $0.code == r.code })?.units ?? 0
                             return acc + price * Decimal(units)
                         }
@@ -1390,7 +1390,7 @@ private struct AssetsScreen: View {
     @ViewBuilder private var overviewStatGrid: some View {
         let holdingsValue = (valuation.total ?? 0) - model.book.cash
         HStack(spacing: 10) {
-            overviewStat(title: "持仓市值", value: valuation.total.map { "¥\(NextMoney.text(holdingsValue))" } ?? "—", color: p.chartBlue)
+            overviewStat(title: "持仓市值", value: valuation.total.map { _ in "¥\(NextMoney.text(holdingsValue))" } ?? "—", color: p.chartBlue)
             overviewStat(title: "现金", value: "¥\(NextMoney.text(model.book.cash))", color: p.jade)
             overviewStat(title: "当日盈亏", value: valuation.dailyChange.map { "\($0 >= 0 ? "+" : "")\(NextMoney.text($0))" } ?? "—", color: valuation.dailyChange.map { p.changeTone(NextNum.double($0)) } ?? p.muted)
             overviewStat(title: "预计年股息", value: "¥\(NextMoney.text(annualDividend))", color: p.chartGold)
