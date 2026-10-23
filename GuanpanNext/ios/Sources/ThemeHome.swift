@@ -12,6 +12,7 @@ struct HomeSnapshot {
     let positions: [NextPosition]
     let quotes: [String: NextQuote]
     let totalEquity: Decimal
+    let pnlAmount: Decimal?
     let pnlPercent: Double?
     let cashPercent: Double
     let nasConfigured: Bool
@@ -95,7 +96,8 @@ struct HomeSnapshot {
         let items = guidance?.items ?? []
         let lead = items.first(where: { $0.isActionable }) ?? items.first
         return HomeSnapshot(now: Date(), guidance: guidance, lead: lead, positions: positions,
-                            quotes: quotes, totalEquity: equity, pnlPercent: pnl, cashPercent: cashPercent,
+                            quotes: quotes, totalEquity: equity, pnlAmount: costBasis > 0 ? marketValue - costBasis : nil,
+                            pnlPercent: pnl, cashPercent: cashPercent,
                             nasConfigured: !model.preferences.nasBaseURL.isEmpty,
                             nasSyncedAt: model.preferences.nasSyncedAt,
                             actionableCount: items.filter(\.isActionable).count,
@@ -447,7 +449,7 @@ private struct HomeIndexBoard: View {
             .overlay(RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous).stroke(p.line, lineWidth: 0.8))
         case .tiles:
             VStack(alignment: .leading, spacing: 5) {
-                Text(row.fullName).font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).lineLimit(1)
+                Text(row.name).font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).lineLimit(1)
                 Text(NextNum.text(row.price, digits: 2))
                     .font(.system(size: 15, weight: .bold, design: .monospaced)).monospacedDigit()
                     .foregroundStyle(tone).lineLimit(1).minimumScaleFactor(0.6)
@@ -713,11 +715,17 @@ private struct HoldingsSummaryCard: View {
                             .font(.system(size: 17, weight: .bold, design: ThemeType.numberFont(p.theme)))
                             .foregroundStyle(p.ink).lineLimit(1).minimumScaleFactor(0.7)
                     }
-                    HStack(spacing: 6) {
-                        Text("组合盈亏").font(.system(size: 10)).foregroundStyle(p.muted)
+                    HStack(spacing: 5) {
+                        Text("总盈亏").font(.system(size: 10)).foregroundStyle(p.muted)
                         if let pnl = snapshot.pnlPercent {
-                            Text("\(pnl >= 0 ? "+" : "")\(String(format: "%.2f", pnl))%")
-                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(p.changeTone(pnl))
+                            let tone = p.changeTone(pnl)
+                            if let amount = snapshot.pnlAmount {
+                                Text("\(amount >= 0 ? "+" : "-")¥\(NextMoney.text(abs(amount), digits: 0))")
+                                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(tone)
+                                    .lineLimit(1).minimumScaleFactor(0.8)
+                            }
+                            Text("(\(pnl >= 0 ? "+" : "")\(String(format: "%.2f", pnl))%)")
+                                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(tone)
                         } else {
                             Text("—").font(.system(size: 11)).foregroundStyle(p.muted)
                         }
@@ -726,7 +734,7 @@ private struct HoldingsSummaryCard: View {
                 Spacer(minLength: 4)
                 if showsRing { cashRing }
             }
-            ForEach(snapshot.positions.prefix(3)) { position in
+            ForEach(snapshot.positions.prefix(4)) { position in
                 HStack(spacing: 8) {
                     Text(position.name).font(.system(size: 11, weight: .medium)).foregroundStyle(p.ink).lineLimit(1)
                     Text(position.code).font(.system(size: 9, design: .monospaced)).foregroundStyle(p.muted).lineLimit(1)
@@ -831,14 +839,9 @@ private struct EditorialHome: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text(snapshot.guidance?.actionableItems.isEmpty == true
-                 ? "今天没有达到你门槛的机会，继续持有。"
-                 : snapshot.headline)
-                .font(.system(size: 13, weight: .semibold)).foregroundStyle(p.heroInk)
-                .fixedSize(horizontal: false, vertical: true)
-            // 逐只标的的判断：和顶部摘要分工，避免同一句话在首屏出现两次。
+            // 逐只标的的判断：顶部那一块已经写过摘要，这里不重复，直接讲结论与理由。
             ForEach(Array(snapshot.aiLines.prefix(2).enumerated()), id: \.offset) { _, line in
-                Text(line).font(.system(size: 10.5)).foregroundStyle(p.heroMutedInk)
+                Text(line).font(.system(size: 12.5, weight: .medium)).foregroundStyle(p.heroInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 6) {
@@ -907,11 +910,10 @@ private struct ModernHome: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                HomeTopBar(leading: "AI 私人投资顾问")
+                HomeTopBar()
                 VStack(alignment: .leading, spacing: 2) {
                     Text("观盘").font(.system(size: 28, weight: .bold)).foregroundStyle(p.ink)
-                    Text(snapshot.dateText + " · " + snapshot.marketStateText)
-                        .font(.system(size: 11)).foregroundStyle(p.muted)
+                    Text("AI 私人投资顾问").font(.system(size: 11)).foregroundStyle(p.muted)
                 }
                 HStack(spacing: 8) {
                     quickTab("今日机会", active: true, route: .decision(nil))
@@ -945,7 +947,11 @@ private struct ModernHome: View {
                             .font(.system(size: 9.5)).foregroundStyle(p.heroMutedInk)
                     }
                     Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(p.heroMutedInk)
+                    HStack(spacing: 2) {
+                        Text("查看详情").font(.system(size: 9.5, weight: .semibold))
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(p.heroMutedInk)
                 }
                 Text(snapshot.headline)
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(p.heroInk)
@@ -1017,7 +1023,6 @@ private struct DashboardHome: View {
                 aiHero
                 opportunityBoard
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: false)
-                otherHoldings
                 newsRow
             }
             .padding(.horizontal, 14)
@@ -1156,33 +1161,6 @@ private struct DashboardHome: View {
         .buttonStyle(.plain)
     }
 
-    private var otherHoldings: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(snapshot.positions.prefix(4))) { position in
-                let quote = snapshot.quotes[position.code]
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(p.primary.opacity(0.18)).frame(width: 26, height: 26)
-                        .overlay(Text(String(position.name.prefix(1))).font(.system(size: 11, weight: .bold)).foregroundStyle(p.primary))
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(position.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(p.ink).lineLimit(1)
-                        Text("\(position.units) 份").font(.system(size: 9)).foregroundStyle(p.muted)
-                    }
-                    Spacer(minLength: 4)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        if let quote {
-                            Text(NextMoney.text(quote.price, digits: 3))
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(p.ink)
-                        }
-                        ChangePill(percent: quote?.changePercent.map { NextNum.double($0) }, compact: true)
-                    }
-                }
-                .padding(.vertical, 6)
-            }
-        }
-        .padding(.horizontal, 10)
-        .background(p.paper, in: RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous))
-    }
 }
 
 // MARK: - 4. 杂志卡片

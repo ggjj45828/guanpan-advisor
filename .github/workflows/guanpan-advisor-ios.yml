@@ -164,29 +164,43 @@ jobs:
           APP="$(find build/Sim/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)"
           if [ -z "$APP" ]; then echo "没有 .app 产物" >&2; exit 1; fi
           echo "APP=$APP"
-          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((v["udid"] for group in d["devices"].values() for v in group if v.get("isAvailable") and v.get("name", "").startswith("iPhone")), ""))')"
+          pick() {
+            xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin);print(next((v['udid'] for g in d['devices'].values() for v in g if v.get('isAvailable') and v.get('name','').find('$1')>=0),''))"
+          }
+          DEVICE_ID="$(pick iPhone)"
           if [ -z "$DEVICE_ID" ]; then echo "runner 上没有可用 iPhone 模拟器" >&2; exit 1; fi
-          echo "模拟器: $DEVICE_ID"
+          echo "主力模拟器: $DEVICE_ID"
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcrun simctl install "$DEVICE_ID" "$APP"
           mkdir -p ../shots
           shoot() {
-            name="$1"; shift
-            xcrun simctl terminate "$DEVICE_ID" com.guanpan.advisor.ios >/dev/null 2>&1 || true
+            device="$1"; name="$2"; shift 2
+            xcrun simctl terminate "$device" com.guanpan.advisor.ios >/dev/null 2>&1 || true
             sleep 1
-            xcrun simctl launch "$DEVICE_ID" com.guanpan.advisor.ios \
+            xcrun simctl launch "$device" com.guanpan.advisor.ios \
               -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN "$@" || true
             sleep 25
-            xcrun simctl io "$DEVICE_ID" screenshot "../shots/$name.png" || true
+            xcrun simctl io "$device" screenshot "../shots/$name.png" || true
           }
-          shoot 1_editorial -demo -theme editorial
-          shoot 2_modern -demo -theme modern
-          shoot 3_dashboard -demo -theme dashboard
-          shoot 4_magazine -demo -theme magazine
-          shoot 5_puzzle -demo -theme puzzle
-          shoot 6_profile -demo -screen profile
-          shoot 7_profile_editorial -demo -theme editorial -screen profile
+          shoot "$DEVICE_ID" 1_editorial -demo -theme editorial
+          shoot "$DEVICE_ID" 2_modern -demo -theme modern
+          shoot "$DEVICE_ID" 3_dashboard -demo -theme dashboard
+          shoot "$DEVICE_ID" 4_magazine -demo -theme magazine
+          shoot "$DEVICE_ID" 5_puzzle -demo -theme puzzle
+          shoot "$DEVICE_ID" 6_profile -demo -theme editorial -screen profile
+          # 小屏（SE 一档）单独跑一遍首页与拼图：专门看长名称、大金额、四联卡会不会挤爆。
+          SMALL_ID="$(pick 'SE')"
+          if [ -n "$SMALL_ID" ] && [ "$SMALL_ID" != "$DEVICE_ID" ]; then
+            echo "小屏模拟器: $SMALL_ID"
+            xcrun simctl boot "$SMALL_ID" || true
+            xcrun simctl bootstatus "$SMALL_ID" -b
+            xcrun simctl install "$SMALL_ID" "$APP"
+            shoot "$SMALL_ID" 7_small_editorial -demo -theme editorial
+            shoot "$SMALL_ID" 8_small_puzzle -demo -theme puzzle
+          else
+            echo "runner 上没有 SE 一档模拟器，跳过小屏截图"
+          fi
           ls -la ../shots
 
       - name: Upload screenshots
