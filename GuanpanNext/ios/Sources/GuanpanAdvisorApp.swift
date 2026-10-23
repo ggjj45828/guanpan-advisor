@@ -1322,7 +1322,9 @@ private struct DecisionScreen: View {
         let healthText = healthIssues.isEmpty
             ? "数据现状：账本体检没有发现缺口。"
             : "数据现状：账本有 \(healthIssues.count) 项待处理（" + healthIssues.prefix(3).map { "\($0.code) \($0.title)" }.joined(separator: "；") + "），涉及这些标的的数字请说明不确定性。"
-        let prompt = "请分析用户是否应继续观察或制定耐心限价计划。\n\(quoteText)\n\(positionText)\n\(accountText)\n\(healthText)\n投资期限：\(model.goal.years) 年；每月新增预算：¥\(NextMoney.text(model.goal.monthlyBudget))；单一集中度提醒线：\(NextMoney.text(model.goal.concentrationLimit))%。\nETF 固定手续费按用户设定每笔 0.10 元估算；不得把未验证的交易规则或盘口当成事实。请严格按这些小标题逐条作答，每个标题单独起一行：结论、证据、风险、等待条件、失效条件、后续跟踪；并单独给一行「置信度：高/中/低」。数据不足就明确指出，不编造，不承诺收益，不建议自动下单。"
+        let profileLines = NextProfileEngine.promptLines(profile: model.profile)
+        let profileText = profileLines.isEmpty ? "暂无足够行为样本，按默认门槛。" : profileLines.joined(separator: "\n")
+        let prompt = "请分析用户是否应继续观察或制定耐心限价计划。\n\(quoteText)\n\(positionText)\n\(accountText)\n\(healthText)\n投资期限：\(model.goal.years) 年；每月新增预算：¥\(NextMoney.text(model.goal.monthlyBudget))；单一集中度提醒线：\(NextMoney.text(model.goal.concentrationLimit))%。\n[投资画像（只用于判断什么机会适合这个用户）]\n\(profileText)\nETF 固定手续费按用户设定每笔 0.10 元估算；不得把未验证的交易规则或盘口当成事实。请严格按这些小标题逐条作答，每个标题单独起一行：结论、证据、风险、等待条件、失效条件、后续跟踪；并单独给一行「置信度：高/中/低」。数据不足就明确指出，不编造，不承诺收益，不建议自动下单。投资画像只影响推荐优先级与表达方式：不得据此修改行情事实、不得降低数据门槛与风险门槛、不得为了迎合偏好制造交易机会；机会低于画像门槛时，明确说「有机会但低于你的执行门槛」。"
         let profile = UserDefaults.standard.string(forKey: "guanpan.deepseek.profile") ?? "flash"
         do {
             let response = try await DeepSeekMobile.analyze(prompt: prompt, key: key, profile: profile)

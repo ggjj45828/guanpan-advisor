@@ -187,6 +187,16 @@ struct InvestorProfileScreen: View {
                     .font(.system(size: 10)).foregroundStyle(p.risk)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Divider().overlay(p.line)
+            Text("在线 AI 每次只会收到这几行（不包含你的成交明细）")
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(p.ink)
+            ForEach(Array(NextProfileEngine.promptLines(profile: profile).enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 6) {
+                    Circle().fill(p.forest.opacity(0.5)).frame(width: 4, height: 4).padding(.top, 6)
+                    Text(line).font(.system(size: 10)).foregroundStyle(p.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             HStack(spacing: 8) {
                 Button(confirmingReset ? "确认重新学习" : "让 AI 重新学习") {
                     if confirmingReset { model.resetProfileLearning(); confirmingReset = false }
