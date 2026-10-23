@@ -306,7 +306,7 @@ enum NextStrategySelector {
                 return NextStrategyReading(kind: .hold, reasons: reading.reasons + ["单边上涨中频繁做T容易踏空，优先拿住仓位"],
                                            warnings: ["如已接近你的目标仓位，不追加"], referencePrice: nil)
             }
-            let reference = reading.signal?.ma[20]
+            let reference = reading.signal?.ma[20].map { Decimal($0) }
             return NextStrategyReading(kind: .waitBuy, reasons: reading.reasons + ["上涨趋势中不追高，等回调再评估"],
                                        warnings: ["等待买入只是观察价，不是挂单建议"], referencePrice: reference)
         case .trendingDown:

@@ -675,7 +675,7 @@ enum NextGridCheckEngine {
         code.utf8.count == 6 && code.utf8.allSatisfy { (48...57).contains($0) }
     }
 
-    struct Metrics {
+    struct Metrics: Equatable {
         let annualVolatilityPercent: Double?
         let avgAmplitudePercent: Double?
         let avgTurnoverYi: Double?
