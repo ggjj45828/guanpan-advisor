@@ -125,6 +125,7 @@ struct LocalPreferences: Codable {
             ("order-books-v1.json", try encoder.encode(archive.orderBooks)),
             ("decision-history-v1.json", try encoder.encode(archive.decisionHistory)),
             ("nas-research-v1.json", try encoder.encode(archive.nasResearch)),
+            ("decision-memory-v1.json", try encoder.encode(archive.decisionMemory)),
             ("dividend-history-v1.json", try encoder.encode(archive.dividendEvents)),
             ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans)),
             ("candidate-plans-v1.json", try encoder.encode(archive.candidatePlans)),
@@ -174,6 +175,11 @@ struct LocalPreferences: Codable {
     @Published var profile: NextInvestorProfile { didSet { reportSave(repository.save(profile, filename: "investor-profile-v1.json")) } }
     /// AI 给过的每一次具体机会：曝光 → 反馈 → 是否真实成交，画像学习只吃这条链。
     @Published var suggestions: [NextSuggestionRecord] { didSet { reportSave(repository.save(suggestions, filename: "ai-suggestions-v1.json")) } }
+    /// AI 决策记忆：每条建议「当时」的行情/持仓/NAS/新闻/画像/依据/风险/有效期，加上改判轨迹与复盘。
+    @Published var decisionMemory: [NextDecisionRecord] { didSet { reportSave(repository.save(decisionMemory, filename: "decision-memory-v1.json")) } }
+    /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
+    @Published var nasNews: [String: [NextNewsInput]] { didSet { reportSave(repository.save(nasNews, filename: "nas-news-v1.json")) } }
+    @Published var newsStatus: [String: String] = [:]
     @Published var dailyGuidance: NextDailyGuidance?
     @Published var guidanceStatus = "尚未生成今日指导"
     @Published var gridStatus: NextNASGridStatus?
@@ -258,6 +264,8 @@ struct LocalPreferences: Codable {
         self.orderBooks = repository.load([String: NextOrderBookSnapshot].self, filename: "order-books-v1.json", fallback: [:])
         self.decisions = repository.load([NextDecision].self, filename: "decision-history-v1.json", fallback: [])
         self.nasResearch = repository.load([String: NextNASResearch].self, filename: "nas-research-v1.json", fallback: [:])
+        self.decisionMemory = repository.load([NextDecisionRecord].self, filename: "decision-memory-v1.json", fallback: [])
+        self.nasNews = repository.load([String: [NextNewsInput]].self, filename: "nas-news-v1.json", fallback: [:])
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
         self.candidatePlans = repository.load([NextCandidatePlan].self, filename: "candidate-plans-v1.json", fallback: [])
@@ -599,13 +607,65 @@ struct LocalPreferences: Codable {
             if chartData["\(position.code):day"] == nil { await refreshDaily(position.code) }
             if chartData[position.code] == nil { await refreshIntraday(position.code) }
         }
+        // NAS 长期分时统计是「市场状态 / 做T / 网格区间」的输入之一，
+        // 缺了就补、过期就重取——但不允许用本地临时数据假装成 NAS 长期档案。
+        if !preferences.nasBaseURL.isEmpty {
+            guidanceStatus = "正在取 NAS 长期分时统计与相关新闻…"
+            for position in book.positions where position.units > 0 {
+                if let cached = nasResearch[position.code] {
+                    let stats = cached.minuteStats
+                    if stats == nil || stats?.freshness.stale == true { await refreshNASResearch(position.code) }
+                } else {
+                    await refreshNASResearch(position.code)
+                }
+                if nasNews[position.code] == nil { await refreshNASNews(position.code) }
+            }
+        }
         guidanceStatus = "正在扫描全部持仓…"
         let guidance = buildGuidance(now: Date())
         dailyGuidance = guidance
         guidanceStatus = guidance.summary
+        updateDecisionMemory(with: guidance, now: Date())
         evaluateCandidatePlans()
         logGuidanceSuggestions(guidance)
         learnProfile()
+    }
+
+    /// 决策记忆：写入「当时」的快照、把同一天重复条目合并、按有效期与失效条件迁移状态、
+    /// 并对已真实成交的条目做复盘。这里**不会**因为 AI 建议就写任何成交。
+    private func updateDecisionMemory(with guidance: NextDailyGuidance, now: Date) {
+        let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
+        let incoming = NextDecisionMemory.records(from: guidance, quotes: quoteMap, book: book,
+                                                  research: nasResearch, news: nasNews, profile: profile)
+        var merged = NextDecisionMemory.merge(existing: decisionMemory, incoming: incoming)
+        merged = NextDecisionMemory.expire(merged, at: now, quoteFor: { quoteMap[$0]?.price })
+        merged = merged.map { record in
+            guard record.outcome == .filled, record.review.reviewedAt == nil else { return record }
+            var copy = record
+            copy.review = NextDecisionMemory.review(record, laterPrice: quoteMap[record.code]?.price, at: now)
+            return copy
+        }
+        if merged != decisionMemory { decisionMemory = merged }
+    }
+
+    /// 用户确认「我在券商真的成交了」——只有这一步会写进决策记忆的成交字段。
+    /// 账本更新仍然由真实流水入口负责，这里不改持仓、不改现金。
+    func confirmDecisionFilled(id: UUID, price: Decimal, units: Int, at now: Date = Date()) {
+        guard let index = decisionMemory.firstIndex(where: { $0.id == id }) else { return }
+        guard units > 0, price > 0 else { notice = "成交价与份额必须为正值"; return }
+        decisionMemory[index].outcome = .filled
+        decisionMemory[index].outcomeAt = now
+        decisionMemory[index].review.filledPrice = "\(price)"
+        decisionMemory[index].review.filledUnits = units
+        decisionMemory[index].review.reviewedAt = nil
+        notice = "已记录真实成交 \(units) 份 @ ¥\(price)。持仓与现金请在「录入真实成交」里更新。"
+    }
+
+    func markDecisionSkipped(id: UUID, at now: Date = Date()) {
+        guard let index = decisionMemory.firstIndex(where: { $0.id == id }) else { return }
+        decisionMemory[index].outcome = .skipped
+        decisionMemory[index].outcomeAt = now
+        decisionMemory[index].review.note = "我放弃了这次计划，没有成交"
     }
 
     private func buildGuidance(now: Date) -> NextDailyGuidance {
@@ -618,7 +678,7 @@ struct LocalPreferences: Codable {
         }
         return NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
                                            rules: rules, goal: goal, nasAvailable: !preferences.nasBaseURL.isEmpty,
-                                           profile: profile, now: now)
+                                           profile: profile, research: nasResearch, news: nasNews, now: now)
     }
 
     /// 计划状态自动迁移：过期、行情过期、价格突破作废线，都自动标记并留一条提醒。
@@ -1423,6 +1483,29 @@ struct LocalPreferences: Codable {
                 : "NAS 刷新失败 · 当前显示本机缓存"
         }
     }
+    /// 新闻 → 持仓：只取标题，取不到就如实说「本次结论不含新闻」，绝不用本地示例新闻凑数。
+    func refreshNASNews(_ code: String) async {
+        guard !preferences.nasBaseURL.isEmpty else {
+            newsStatus[code] = "未配置 NAS · 没有新闻来源"
+            return
+        }
+        let baseURL = preferences.nasBaseURL
+        do {
+            let result = try await NextNASService.fetchNews(code: code, baseURL: baseURL)
+            guard preferences.nasBaseURL == baseURL else {
+                newsStatus[code] = "NAS 地址已变更 · 保留原新闻缓存，未混用新旧服务"
+                return
+            }
+            if !result.items.isEmpty { nasNews[code] = result.items }
+            newsStatus[code] = result.items.isEmpty
+                ? "新闻源本次没有返回标题"
+                : "已取到 \(result.items.count) 条标题"
+        } catch {
+            newsStatus[code] = nasNews[code] == nil
+                ? "新闻不可用 · 本次结论不含新闻"
+                : "刷新失败 · 沿用上次标题"
+        }
+    }
     func registerNASArchive(_ code: String) async {
         guard !preferences.nasBaseURL.isEmpty else { return }
         do { try await NextNASService.trackInstrument(code: code, baseURL: preferences.nasBaseURL) }
@@ -1494,6 +1577,7 @@ struct LocalPreferences: Codable {
         quotes = incoming.cachedQuotes; chartData = incoming.chartData; rules = incoming.instrumentRules; orderBooks = incoming.orderBooks
         decisions = incoming.decisionHistory
         nasResearch = incoming.nasResearch
+        decisionMemory = incoming.decisionMemory
         dividendEvents = incoming.dividendEvents
         patientLimitPlans = incoming.patientLimitPlans
         candidatePlans = incoming.candidatePlans
@@ -1532,6 +1616,7 @@ struct LocalPreferences: Codable {
         archive.notifications = preferences.notifications; archive.audits = ledger.events
         archive.decisionHistory = decisions
         archive.nasResearch = nasResearch
+        archive.decisionMemory = decisionMemory
         archive.dividendEvents = dividendEvents
         archive.patientLimitPlans = patientLimitPlans
         archive.candidatePlans = candidatePlans

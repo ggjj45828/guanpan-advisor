@@ -9,6 +9,7 @@ from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+import advisor
 from app import make_handler
 from ai import analyze_user_context, AIProviderError
 from domain import Conflict, InvalidData, NextDatabase, convert_legacy_web_book, validate_book_json
@@ -419,6 +420,73 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(value["positions"][0]["code"], "159941")
         self.assertFalse(value["realOrder"])
         self.assertEqual(self.db.get_real("main"), before)
+
+    def test_research_endpoint_returns_long_term_minute_stats(self):
+        """NAS 长期研究必须把真实归档的分时喂进统计，而不是回一份空壳。"""
+        from datetime import timedelta, timezone as tz
+        sh = tz(timedelta(hours=8))
+        base = datetime.fromisoformat("2026-10-19T09:31:00").replace(tzinfo=sh)
+        rows = [{"timestamp": (base + timedelta(minutes=i)).isoformat(), "price": str(1 + i / 1000),
+                 "volume": str(1000 + i), "iopv": None} for i in range(30)]
+        self.db.put_minute("159941", rows, datetime.now(timezone.utc).isoformat())
+        status, value = self.request("GET", "/v1/research/159941")
+        self.assertEqual(status, 200)
+        stats = value["minuteStats"]
+        self.assertEqual(stats["days"], 1)
+        self.assertEqual(stats["minutes"], 30)
+        self.assertIn("1", stats["windows"])
+        self.assertEqual(stats["windows"]["1"]["daysUsed"], 1)
+        self.assertFalse(stats["quality"]["enoughForLongTerm"], "只有一天分时，不能声称够算长期结论")
+        self.assertEqual(stats["freshness"]["lastDay"], "2026-10-19")
+
+    def test_news_endpoint_returns_holdings_headlines_and_caches(self):
+        """新闻入口必须能反复取、且只落标题；抓取失败要如实说不可用。"""
+        from unittest import mock
+        payload = {"state": "ok", "provider": "Google News RSS",
+                   "items": [{"title": "159941 公告：基金份额持有人大会决议停牌", "url": "https://example.com/a",
+                              "publishedAt": "Fri, 23 Oct 2026 02:00:00 GMT", "source": "测试源"}]}
+        with mock.patch.object(advisor, "fetch_headlines", return_value=payload) as fetch:
+            status, first = self.request("GET", "/v1/news/159941")
+            self.assertEqual(status, 200)
+            self.assertFalse(first["cached"])
+            self.assertEqual(first["code"], "159941")
+            self.assertEqual(first["items"][0]["title"], "159941 公告：基金份额持有人大会决议停牌")
+            status, second = self.request("GET", "/v1/news/159941")
+            self.assertEqual(status, 200)
+            self.assertTrue(second["cached"], "15 分钟内应复用缓存，不该反复打外部新闻源")
+            self.assertEqual(fetch.call_count, 1)
+
+    def test_news_endpoint_rejects_bad_code(self):
+        status, value = self.request("GET", "/v1/news/abc")
+        self.assertEqual(status, 400)
+        self.assertIn("error", value)
+
+    def test_research_stats_cache_invalidates_when_archive_grows(self):
+        """统计缓存必须跟着归档走：归档多了一条，结论就必须重算。"""
+        from datetime import timedelta, timezone as tz
+        sh = tz(timedelta(hours=8))
+        base = datetime.fromisoformat("2026-10-19T09:31:00").replace(tzinfo=sh)
+        rows = [{"timestamp": (base + timedelta(minutes=i)).isoformat(), "price": str(1 + i / 1000),
+                 "volume": str(1000 + i), "iopv": None} for i in range(30)]
+        self.db.put_minute("159941", rows, datetime.now(timezone.utc).isoformat())
+        status, first = self.request("GET", "/v1/research/159941")
+        self.assertEqual(status, 200)
+        self.assertEqual(first["minuteStats"]["minutes"], 30)
+        self.assertEqual(self.db.get_research_stats("159941")["stats"]["minutes"], 30)
+        more = rows + [{"timestamp": (base + timedelta(minutes=30)).isoformat(), "price": "1.04",
+                        "volume": "2000", "iopv": None}]
+        self.db.put_minute("159941", more, datetime.now(timezone.utc).isoformat())
+        status, second = self.request("GET", "/v1/research/159941")
+        self.assertEqual(status, 200)
+        self.assertEqual(second["minuteStats"]["minutes"], 31, "归档变了就不能再回旧缓存")
+
+    def test_simulations_endpoints_are_gone(self):
+        """数字孪生/虚拟账户必须真的下线，而不是留着还能建虚拟资金。"""
+        status, value = self.request("GET", "/v1/simulations/g")
+        self.assertEqual(status, 410)
+        self.assertEqual(value["code"], "simulation_removed")
+        status, value = self.request("POST", "/v1/simulations/g", {"action": "start"})
+        self.assertEqual(status, 410)
 
     def test_advisor_analysis_requires_confirmation_and_never_writes_book(self):
         self.db.put_real("main", 0, json.dumps(book()))

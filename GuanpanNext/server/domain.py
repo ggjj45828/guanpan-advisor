@@ -2,7 +2,7 @@
 import json
 import re
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import uuid
 
@@ -342,6 +342,10 @@ class NextDatabase:
                     PRIMARY KEY(code, stamp));
                 CREATE TABLE IF NOT EXISTS research_runs (
                     id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS research_stats (
+                    code TEXT PRIMARY KEY, stamp TEXT NOT NULL, body TEXT NOT NULL, updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS news_cache (
+                    code TEXT PRIMARY KEY, body TEXT NOT NULL, updated_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS tracked_instruments (
                     code TEXT PRIMARY KEY, added_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS worker_status (
@@ -661,6 +665,23 @@ class NextDatabase:
                               (code, day + "%")).fetchall()
         return {"code": code, "day": day, "source": "Tencent minute query", "rows": [json.loads(row[0]) for row in rows]}
 
+    def get_minute_range(self, code, days=120):
+        """取最近 N 个自然日内的全部分时行（升序）。
+
+        长期统计（1/5/20/60/120 日）要跨日读，所以不能只按单日查。
+        只读不写：归档由 minute 采集线程负责，这里不制造任何数据。
+        """
+        self.validate_id(code)
+        if len(code) != 6 or not code.isdigit():
+            raise InvalidData("invalid minute query")
+        if not isinstance(days, int) or days <= 0 or days > 400:
+            raise InvalidData("invalid minute window")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+        with self.connect() as db:
+            rows = db.execute("SELECT body FROM minute_archive WHERE code=? AND stamp >= ? ORDER BY stamp",
+                              (code, cutoff)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def get_research(self, run_id):
         self.validate_id(run_id)
         with self.connect() as db:
@@ -672,6 +693,40 @@ class NextDatabase:
         if not isinstance(body, dict): raise InvalidData("invalid research body")
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO research_runs VALUES (?, ?)", (run_id, json.dumps(body, ensure_ascii=False)))
+
+    def get_research_stats(self, code):
+        """长期分时统计缓存。键里带最新分钟戳：归档有新数据就自动失效，不会读到旧结论。"""
+        self.validate_id(code)
+        with self.connect() as db:
+            row = db.execute("SELECT stamp, body FROM research_stats WHERE code=?", (code,)).fetchone()
+        if not row:
+            return {"stamp": None, "stats": None}
+        return {"stamp": row[0], "stats": json.loads(row[1])}
+
+    def put_research_stats(self, code, stamp, stats):
+        self.validate_id(code)
+        if not isinstance(stats, dict) or not isinstance(stamp, str) or not stamp:
+            raise InvalidData("invalid research stats")
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO research_stats VALUES (?, ?, ?, ?)",
+                       (code, stamp, json.dumps(stats, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
+
+    def get_news(self, code):
+        """新闻缓存：正文不落库，只落标题与链接，最多 15 分钟。"""
+        self.validate_id(code)
+        with self.connect() as db:
+            row = db.execute("SELECT body, updated_at FROM news_cache WHERE code=?", (code,)).fetchone()
+        if not row:
+            return {"body": None, "updatedAt": None}
+        return {"body": json.loads(row[0]), "updatedAt": row[1]}
+
+    def put_news(self, code, body):
+        self.validate_id(code)
+        if not isinstance(body, dict):
+            raise InvalidData("invalid news body")
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO news_cache VALUES (?, ?, ?)",
+                       (code, json.dumps(body, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
 
     def track_instrument(self, code, added_at):
         self.validate_id(code)

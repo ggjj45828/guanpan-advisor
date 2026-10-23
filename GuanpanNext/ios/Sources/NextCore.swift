@@ -1061,6 +1061,47 @@ enum NextMarketClock {
 
 /// Cached NAS research is portable with the encrypted local backup, but it is
 /// never a source of truth for the real ledger and never carries an API key.
+/// NAS 长期分时统计（1/5/20/60/120 日窗口）。手机端只拿结论，不重算、
+/// 也不允许大模型凭空描述——所有数字都能追回 NAS 上归档的分钟行。
+struct NextNASMinuteStats: Codable, Equatable {
+    struct Window: Codable, Equatable {
+        let window: Int
+        let daysUsed: Int
+        let dayCoverage: Double
+        let minuteCoverage: Double
+        let vwap: String
+        let closeVsVwapPercent: Double?
+        let amplitudeMedianPercent: Double?
+        let roundTripsMedian: Double?
+        let support: String?
+        let resistance: String?
+        let supportP10: String?
+        let resistanceP90: String?
+        let volatilityPercent: Double?
+    }
+    struct Quality: Codable, Equatable {
+        let days: Int
+        let minuteCoverage: Double
+        let hasVolume: Bool
+        let enoughForLongTerm: Bool
+    }
+    struct Freshness: Codable, Equatable {
+        let lastDay: String?
+        let ageMinutes: Double?
+        let isToday: Bool?
+        let stale: Bool
+        let reason: String?
+    }
+    let days: Int
+    let minutes: Int
+    let lastDay: String?
+    let quality: Quality
+    let freshness: Freshness
+    let windows: [String: Window]
+
+    func window(_ count: Int) -> Window? { windows[String(count)] }
+}
+
 struct NextNASResearch: Codable, Equatable {
     struct Factor: Codable, Equatable { let code: String; let asOf: String; let source: String; let close: String; let ma20: String; let ma250: String; let state: String }
     struct AI: Codable, Equatable { let code: String; let asOf: String; let source: String; let provider: String; let model: String; let content: String; let realOrder: Bool }
@@ -1069,6 +1110,8 @@ struct NextNASResearch: Codable, Equatable {
     let ai: AI?
     let providerConfigured: Bool
     var providerStatus: ProviderStatus? = nil
+    /// 长期分时统计。没有就是没有（NAS 上还没攒够分钟归档），界面要如实说。
+    var minuteStats: NextNASMinuteStats? = nil
 }
 
 struct NextAppArchive: Codable, Equatable {
@@ -1091,10 +1134,12 @@ struct NextAppArchive: Codable, Equatable {
     /// 动态投资者画像与建议轨迹：备份/恢复必须一起带走，否则换机后画像从零开始。
     var profile = NextInvestorProfile()
     var suggestions: [NextSuggestionRecord] = []
+    /// AI 决策记忆：当时依据 + 改判轨迹 + 复盘。备份要带走，否则换机后 AI 就没记忆了。
+    var decisionMemory: [NextDecisionRecord] = []
     /// 五套视觉主题（nil = 跟随场景）。备份要带走，换机后外观一致。
     var appTheme: AppTheme?
     var theme: NextTheme = .light
-    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, profile, suggestions, appTheme, theme }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, decisionMemory, profile, suggestions, appTheme, theme }
     init() {}
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1114,6 +1159,7 @@ struct NextAppArchive: Codable, Equatable {
         dividendEvents = try values.decodeIfPresent([String: [NextETFDividendEvent]].self, forKey: .dividendEvents) ?? [:]
         patientLimitPlans = try values.decodeIfPresent([NextPatientLimitPlan].self, forKey: .patientLimitPlans) ?? []
         candidatePlans = try values.decodeIfPresent([NextCandidatePlan].self, forKey: .candidatePlans) ?? []
+        decisionMemory = try values.decodeIfPresent([NextDecisionRecord].self, forKey: .decisionMemory) ?? []
         profile = try values.decodeIfPresent(NextInvestorProfile.self, forKey: .profile) ?? NextInvestorProfile()
         suggestions = try values.decodeIfPresent([NextSuggestionRecord].self, forKey: .suggestions) ?? []
         appTheme = try values.decodeIfPresent(AppTheme.self, forKey: .appTheme)

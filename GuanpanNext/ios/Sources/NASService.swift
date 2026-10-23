@@ -449,6 +449,32 @@ enum NextNASService {
         return report
     }
 
+    /// 新闻标题（只拿标题/来源/链接，不拿正文）。
+    /// 新闻必须能落到具体持仓才进结论，所以按证券代码单独取，由调用方决定影响。
+    private struct NewsWire: Decodable {
+        let code: String
+        let name: String?
+        let state: String
+        let provider: String?
+        let items: [Item]
+        let cached: Bool?
+        struct Item: Decodable { let title: String; let url: String?; let publishedAt: String?; let source: String? }
+    }
+
+    static func fetchNews(code: String, baseURL: String, session: URLSession = .shared) async throws -> (items: [NextNewsInput], state: String) {
+        guard code.count == 6, code.allSatisfy(\.isNumber) else { throw NextError.invalid("证券代码无效") }
+        let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("news").appendingPathComponent(code)
+        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 12))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NextError.invalid("NAS 新闻接口暂不可用")
+        }
+        let wire = try JSONDecoder().decode(NewsWire.self, from: data)
+        guard wire.code == code else { throw NextError.invalid("NAS 新闻与证券不符") }
+        let items = wire.items.filter { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { NextNewsInput(title: $0.title, source: $0.source, publishedAt: $0.publishedAt, url: $0.url) }
+        return (items, wire.state)
+    }
+
     static func fetchDaily(code: String, baseURL: String, session: URLSession = .shared) async throws -> NextChartDataset {
         guard code.count == 6, code.allSatisfy(\.isNumber) else { throw NextError.invalid("证券代码无效") }
         let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("market").appendingPathComponent("daily").appendingPathComponent(code)

@@ -9,6 +9,7 @@ struct AIGuidanceSection: View {
     @Environment(\.gp) private var p
     @State private var selected: NextGuidanceItem?
     @State private var generating = false
+    @State private var showMemory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -47,6 +48,9 @@ struct AIGuidanceSection: View {
         .sheet(item: $selected) { item in
             AIGuidanceDetailSheet(item: item)
         }
+        .sheet(isPresented: $showMemory) {
+            DecisionMemoryView().environmentObject(model)
+        }
     }
 
     private func summaryCard(_ guidance: NextDailyGuidance) -> some View {
@@ -73,6 +77,18 @@ struct AIGuidanceSection: View {
                     Text(generating ? "分析中…" : "重新分析").font(.caption.weight(.semibold)).foregroundStyle(p.forest)
                 }.disabled(generating)
             }
+            HStack(spacing: 8) {
+                Button { showMemory = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.arrow.circlepath").font(.system(size: 10, weight: .semibold))
+                        Text("决策记忆 \(model.decisionMemory.count)").font(.system(size: 10, weight: .semibold))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(p.chartBlue.opacity(0.12), in: Capsule())
+                    .foregroundStyle(p.chartBlue)
+                }.buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
             Text("生成于 \(guidance.generatedAt.formatted(date: .omitted, time: .shortened)) · 计划只是建议，真实成交后才会更新账本").font(.caption2).foregroundStyle(p.muted)
         }
     }
@@ -95,6 +111,16 @@ struct AIGuidanceSection: View {
                             .foregroundStyle(item.isActionable ? p.forest : p.muted).lineLimit(2)
                         if let first = item.whyToday.first {
                             Text(first).font(.system(size: 10)).foregroundStyle(p.muted).lineLimit(2)
+                        }
+                        if let impact = item.newsImpact, impact.action != .none {
+                            HStack(spacing: 4) {
+                                Image(systemName: impact.action.blocksPlan ? "exclamationmark.triangle.fill" : "newspaper")
+                                    .font(.system(size: 8))
+                                Text("新闻·\(impact.action.rawValue)").font(.system(size: 9, weight: .semibold))
+                            }
+                            .padding(.horizontal, 5).padding(.vertical, 1.5)
+                            .background((impact.action.blocksPlan ? p.risk : p.chartGold).opacity(0.12), in: Capsule())
+                            .foregroundStyle(impact.action.blocksPlan ? p.risk : p.chartGold)
                         }
                     }
                     Spacer(minLength: 4)
@@ -232,6 +258,7 @@ struct AIGuidanceDetailSheet: View {
                     if let recovery = item.recovery { recoveryBlock(recovery) }
                     if !item.riskNotes.isEmpty { risksBlock }
                     dataBlock
+                    newsBlock
                     actions
                 }.padding(16)
             }
@@ -386,6 +413,41 @@ struct AIGuidanceDetailSheet: View {
                 ForEach(result.evidence, id: \.self) { line in
                     Text("· \(line)").font(.system(size: 10)).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+
+    private var newsBlock: some View {
+        GPCard(accent: item.newsImpact?.action.blocksPlan == true ? p.risk : p.chartGold) {
+            HStack(spacing: 6) {
+                Text("相关新闻与计划影响").font(.caption.weight(.semibold)).foregroundStyle(p.ink)
+                Spacer(minLength: 4)
+                if let impact = item.newsImpact {
+                    Text(impact.action.rawValue)
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background((impact.action.blocksPlan ? p.risk : p.chartGold).opacity(0.12), in: Capsule())
+                        .foregroundStyle(impact.action.blocksPlan ? p.risk : p.chartGold)
+                }
+            }
+            if let impact = item.newsImpact, !impact.hits.isEmpty {
+                ForEach(impact.hits.prefix(4)) { hit in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("· \(hit.title)").font(.system(size: 10)).foregroundStyle(p.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("\(hit.severity.rawValue) · 命中 \(hit.keywords.joined(separator: "/"))\(hit.source.map { " · \($0)" } ?? "")")
+                            .font(.system(size: 9)).foregroundStyle(p.muted)
+                    }
+                }
+                if item.newsImpact?.action.blocksPlan == true {
+                    Text("重大事件未经你确认前，原计划已收回：不会给出新价格，也不会自动下单。")
+                        .font(.system(size: 9)).foregroundStyle(p.risk)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text(model.newsStatus[item.code] ?? "没有相关新闻标题：本次结论不含新闻因素。")
+                    .font(.system(size: 10)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

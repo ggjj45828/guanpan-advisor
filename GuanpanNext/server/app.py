@@ -21,6 +21,7 @@ from market import (fetch_indices, fetch_tencent_quotes, fetch_tencent_daily, fe
 from workers import start_workers
 import grid
 import advisor
+import research
 from backtest import run_backtest
 
 WEB_ROOT = Path(__file__).with_name("web")
@@ -193,11 +194,56 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
             if path.startswith("/v1/research/"):
                 try:
                     code = path.rsplit("/", 1)[-1]; symbol_for(code)
+                    # 长期分时统计：1/5/20/60/120 日窗口的 VWAP 偏离、振幅、往返次数、
+                    # 支撑压力、波动率、成交量与数据完整度/新鲜度。纯计算，不缓存也不伪造。
+                    # 结果按「最新分钟戳」缓存：归档有新数据就重算，没有就直接复用，
+                    # 既不让手机端每次重算，也不会读到与归档不一致的旧结论。
+                    try:
+                        minute_rows = database.get_minute_range(code, 130)
+                    except (InvalidData, ValueError):
+                        minute_rows = []
+                    latest = minute_rows[-1].get("timestamp", "") if minute_rows else ""
+                    cached = database.get_research_stats(code)
+                    if cached["stats"] is not None and latest and cached["stamp"] == latest:
+                        stats = cached["stats"]
+                    else:
+                        stats = research.minute_stats(minute_rows)
+                        if latest:
+                            database.put_research_stats(code, latest, stats)
                     return self.reply(200, {"factors": database.get_research("factors-" + code),
                                             "ai": database.get_research("deepseek-" + code),
+                                            "minuteStats": stats,
                                             "providerConfigured": provider_status()["configured"],
                                             "providerStatus": provider_status()})
                 except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
+            if path.startswith("/v1/news/"):
+                # 新闻 → 行业/证券 → 真实持仓 → 当前计划。手机端要能反复取标题来核对
+                # 「重大事件有没有让原计划失效」，所以这里必须有独立、可缓存的入口。
+                try:
+                    code = path.rsplit("/", 1)[-1]
+                    meta = symbol_for(code)
+                    name = meta.get("name") if isinstance(meta, dict) else None
+                    cached = database.get_news(code)
+                    fresh = False
+                    if cached["body"] and cached["updatedAt"]:
+                        try:
+                            age = (datetime.now(timezone.utc)
+                                   - datetime.fromisoformat(cached["updatedAt"])).total_seconds()
+                            fresh = age < 15 * 60
+                        except ValueError:
+                            fresh = False
+                    if fresh:
+                        body = cached["body"]
+                    else:
+                        body = advisor.fetch_headlines(code, name or code)
+                        database.put_news(code, body)
+                    return self.reply(200, {"code": code, "name": name, **body,
+                                            "fetchedAt": cached["updatedAt"] if fresh else None,
+                                            "cached": fresh})
+                except (InvalidData, ValueError) as error:
+                    return self.reply(400, {"error": str(error)})
+                except Exception:
+                    return self.reply(502, {"error": "news source unavailable"})
             if path.startswith("/v1/backtests/runs/"):
                 try:
                     run_id = path.rsplit("/", 1)[-1]

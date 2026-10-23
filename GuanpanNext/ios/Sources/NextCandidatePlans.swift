@@ -146,6 +146,8 @@ struct NextGuidanceItem: Equatable, Identifiable {
     let isActionable: Bool
     /// 画像对排序的影响说明：只在「因为你的习惯被降级/加优先」时出现。
     var profileNote: String? = nil
+    /// 新闻对这只持仓当前计划的作用：没有相关新闻就是 nil，不塞空对象。
+    var newsImpact: NextNewsImpact? = nil
 }
 
 struct NextDailyGuidance: Equatable {
@@ -164,6 +166,8 @@ enum NextOpportunityScanner {
     static func scan(book: NextBook, quotes: [String: NextQuote], daily: [String: [NextChartSample]],
                      intraday: [String: [NextChartSample]], rules: [String: NextInstrumentRules],
                      goal: NextGoal, nasAvailable: Bool, profile: NextInvestorProfile? = nil,
+                     research: [String: NextNASResearch] = [:],
+                     news: [String: [NextNewsInput]] = [:],
                      now: Date) -> NextDailyGuidance {
         let total = book.total(using: quotes)
         var items: [NextGuidanceItem] = []
@@ -179,8 +183,31 @@ enum NextOpportunityScanner {
             let oscillating = stats.vwapCrossings >= 2 && (stats.amplitudePercent ?? 0) >= 0.8
             let strategy = NextStrategySelector.select(state: reading, grid: gridCheck, hasPosition: true,
                                                        oscillating: oscillating, now: now)
-            let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count,
+            // NAS 长期统计：在场才有，没有就是没有。它参与「网格区间收敛」和「置信度降档」，
+            // 但绝不改写行情事实，也绝不替本地算价格。
+            let nasStats = research[position.code]?.minuteStats
+            let nasRange = NextNasRange(stats: nasStats)
+            var nasNotes: [String] = []
+            if let stats = nasStats {
+                if let w20 = stats.window(20), let deviation = w20.closeVsVwapPercent {
+                    nasNotes.append("NAS 20 日 VWAP ¥\(w20.vwap)，现价偏离 \(String(format: "%+.2f", deviation))%（\(w20.daysUsed) 天 · \(Int((w20.minuteCoverage * 100).rounded()))% 分钟覆盖）")
+                }
+                if let w60 = stats.window(60), let amplitude = w60.amplitudeMedianPercent,
+                   let trips = w60.roundTripsMedian {
+                    nasNotes.append("NAS 60 日日内振幅中位数 \(String(format: "%.2f", amplitude))%、日均往返 \(String(format: "%.1f", trips)) 次")
+                }
+                if let w120 = stats.window(120), let volatility = w120.volatilityPercent {
+                    nasNotes.append("NAS 120 日波动率 \(String(format: "%.2f", volatility))%")
+                }
+                if !stats.quality.enoughForLongTerm {
+                    nasNotes.append("NAS 分时归档仅 \(stats.days) 天 / 覆盖 \(Int((stats.quality.minuteCoverage * 100).rounded()))%，还不足以支撑长期结论")
+                }
+            }
+            var confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count,
                                                        minuteSampleCount: minutes.filter { $0.close > 0 }.count)
+            if let stats = nasStats, stats.freshness.stale {
+                confidence = confidence.downgraded("NAS 长期分时已过期：\(stats.freshness.reason ?? "最后一天 \(stats.lastDay ?? "未知")")")
+            }
 
             // 组合级判断：单只超配时，价格再好也只能观察。
             var portfolioNote: String?
@@ -195,15 +222,21 @@ enum NextOpportunityScanner {
             var gridPlan: NextGridPlannerResult?
             var riskNotes: [String] = []
             var headline = strategy.kind.rawValue
+            // 画像上限与 NAS 长期统计一起进计划：这是硬约束，不是提示。
+            let caps = NextPlanCaps.make(profile: profile, nasStats: nasStats, book: book,
+                                         code: position.code,
+                                         lotSize: rules[position.code]?.lotSize ?? 100, now: now)
 
             switch strategy.kind {
             case .tTrade:
                 var result = NextTradeTPlanner.plan(kind: .reverse, book: book, quote: quote, daily: bars,
-                                                    intraday: minutes, rules: rules[position.code], now: now)
+                                                    intraday: minutes, rules: rules[position.code],
+                                                    caps: caps, now: now)
                 if case let .insufficientData(_, reasons) = result {
                     // 反T做不了（如可卖份额不足）时，尝试正T。
                     let forward = NextTradeTPlanner.plan(kind: .forward, book: book, quote: quote, daily: bars,
-                                                         intraday: minutes, rules: rules[position.code], now: now)
+                                                         intraday: minutes, rules: rules[position.code],
+                                                         caps: caps, now: now)
                     if case .ready = forward {
                         result = forward
                         headline = NextTKind.forward.rawValue
@@ -221,7 +254,8 @@ enum NextOpportunityScanner {
                 }
             case .grid:
                 let result = NextGridPlanner.plan(book: book, quote: quote, daily: bars, gridCheck: gridCheck,
-                                                  rules: rules[position.code], now: now)
+                                                  rules: rules[position.code], nasRange: nasRange,
+                                                  caps: caps, now: now)
                 gridPlan = result
                 if case let .ready(plan) = result {
                     headline = "网格 · \(plan.tiers.count) 档 / 间距 \(String(format: "%.2f", plan.spacingPercent))%"
@@ -255,7 +289,7 @@ enum NextOpportunityScanner {
             }
             if !actionable { score -= 1 }
 
-            var whyToday = reading.reasons
+            var whyToday = reading.reasons + nasNotes
             if let rsi = reading.signal?.rsi { whyToday.append("RSI14 \(String(format: "%.1f", rsi))") }
             if oscillating { whyToday.append("今日价格穿越 VWAP \(stats.vwapCrossings) 次，日内反复震荡") }
             if let amplitude = stats.amplitudePercent, amplitude > 0 {
@@ -270,13 +304,25 @@ enum NextOpportunityScanner {
                 score *= adjustment.multiplier
                 if adjustment.verdict != .neutral { profileNote = adjustment.explanation }
             }
-            items.append(NextGuidanceItem(code: position.code, name: position.name, state: reading.state,
-                                          strategy: strategy.kind, headline: headline, whyToday: whyToday,
-                                          tPlan: tPlan, gridPlan: gridPlan, recovery: recovery,
-                                          confidence: confidence, portfolioNote: portfolioNote,
-                                          riskNotes: riskNotes + reading.warnings + strategy.warnings,
-                                          score: score, rank: 0, isActionable: actionable,
-                                          profileNote: profileNote))
+            // 新闻 → 这只真实持仓 → 当前计划：重大事件可以收回计划，但不能凭空造出新计划。
+            let impact = NextNewsImpactEngine.evaluate(code: position.code, name: position.name,
+                                                       titles: news[position.code] ?? [],
+                                                       hasTPlan: tPlan?.isReady == true,
+                                                       hasGridPlan: gridPlan?.isReady == true, now: now)
+            if impact.action.blocksPlan {
+                // 重大事件会在 apply() 里收回计划；这里只降排序，避免它排在最前面。
+                score -= 2.5
+            }
+
+            let baseItem = NextGuidanceItem(code: position.code, name: position.name, state: reading.state,
+                                            strategy: strategy.kind, headline: headline, whyToday: whyToday,
+                                            tPlan: tPlan, gridPlan: gridPlan, recovery: recovery,
+                                            confidence: confidence, portfolioNote: portfolioNote,
+                                            riskNotes: riskNotes + reading.warnings + strategy.warnings,
+                                            score: score, rank: 0, isActionable: actionable,
+                                            profileNote: profileNote,
+                                            newsImpact: impact.isEmpty ? nil : impact)
+            items.append(NextNewsImpactEngine.apply(impact, to: baseItem))
         }
 
         let sorted = items.sorted { $0.score == $1.score ? $0.code < $1.code : $0.score > $1.score }
@@ -285,7 +331,8 @@ enum NextOpportunityScanner {
                              headline: item.headline, whyToday: item.whyToday, tPlan: item.tPlan,
                              gridPlan: item.gridPlan, recovery: item.recovery, confidence: item.confidence,
                              portfolioNote: item.portfolioNote, riskNotes: item.riskNotes, score: item.score,
-                             rank: index + 1, isActionable: item.isActionable, profileNote: item.profileNote)
+                             rank: index + 1, isActionable: item.isActionable, profileNote: item.profileNote,
+                             newsImpact: item.newsImpact)
         }
 
         let actionable = ranked.filter(\.isActionable)

@@ -63,6 +63,50 @@ struct NextDataConfidence: Equatable {
                                   dailyBarCount: dailyBarCount, minuteSampleCount: minuteSampleCount,
                                   minuteCompletenessPercent: completeness, missing: missing, summary: summary)
     }
+
+    /// NAS 长期数据过期 / 不够时降一档，并把原因写进摘要。
+    /// 绝不因为「看起来还能算」就假装数据是新的。
+    func downgraded(_ reason: String) -> NextDataConfidence {
+        guard !reason.isEmpty else { return self }
+        let newLevel: Level
+        switch level {
+        case .high: newLevel = .medium
+        case .medium: newLevel = .low
+        case .low, .blocked: newLevel = level
+        }
+        return NextDataConfidence(level: newLevel, quoteAgeSeconds: quoteAgeSeconds, quoteSource: quoteSource,
+                                  dailyBarCount: dailyBarCount, minuteSampleCount: minuteSampleCount,
+                                  minuteCompletenessPercent: minuteCompletenessPercent,
+                                  missing: missing, summary: summary + "；" + reason)
+    }
+}
+
+/// NAS 长期区间：用 20/60 日分时归档算出「历史上真正走过的价格带」。
+/// 网格上下界必须落在它里面——超出历史区间的档位没有依据，不挂。
+struct NextNasRange: Equatable {
+    let low: Decimal
+    let high: Decimal
+    let days: Int
+    let source: String
+    var isValid: Bool { low > 0 && high > low }
+
+    init?(stats: NextNASMinuteStats?, prefer: [Int] = [60, 20, 5]) {
+        guard let stats, stats.quality.days >= 3 else { return nil }
+        for count in prefer {
+            guard let window = stats.window(count) else { continue }
+            let lowText = window.supportP10 ?? window.support
+            let highText = window.resistanceP90 ?? window.resistance
+            guard let lowText, let highText,
+                  let low = Decimal(string: lowText), let high = Decimal(string: highText),
+                  low > 0, high > low else { continue }
+            self.low = low
+            self.high = high
+            self.days = window.daysUsed
+            self.source = "NAS \(window.daysUsed) 日分时 p10–p90"
+            return
+        }
+        return nil
+    }
 }
 
 // MARK: - 计划时钟：候选计划的有效期口径
@@ -355,6 +399,57 @@ enum NextPriceRounding {
     }
 }
 
+// MARK: - 计划硬约束（画像上限 + NAS 长期统计）
+//
+// 画像是「你的习惯」，必须能真正压住份额与档数，否则等于没接入。
+// NAS 长期统计只提供「历史上这种波动有多常见」，不提供方向。
+
+struct NextPlanCaps: Equatable {
+    /// 单次做 T 份额上限（已按可用份额比例换算成整手）
+    var maxTUnits: Int? = nil
+    var tUnitsNote: String? = nil
+    /// 网格档数上限 / 最大资金占用上限
+    var maxGridTiers: Int? = nil
+    var maxGridCash: Decimal? = nil
+    var gridNotes: [String] = []
+    /// NAS 长期分时（60 日窗口）——只用于说明历史常见程度
+    var nasAmplitude60: Double? = nil
+    var nasRoundTrips60: Double? = nil
+    var nasDays: Int? = nil
+
+    static let none = NextPlanCaps()
+
+    static func make(profile: NextInvestorProfile?, nasStats: NextNASMinuteStats?,
+                     book: NextBook, code: String, lotSize: Int, now: Date) -> NextPlanCaps {
+        var caps = NextPlanCaps()
+        if let profile {
+            if profile.trait(.tAppetite)?.value != "none" || profile.trait(.tAppetite)?.isKnown != true {
+                let available = book.availableUnits(for: code, at: now)
+                if available > 0 {
+                    let ratio = max(0.1, min(1.0, profile.thresholds.maxTUnitsRatio))
+                    let capUnits = max(lotSize, (Int(Double(available) * ratio) / lotSize) * lotSize)
+                    caps.maxTUnits = capUnits
+                    caps.tUnitsNote = "单次做T份额按你的画像上限压到 \(capUnits) 份（不超过可用 \(available) 份的 \(Int((ratio * 100).rounded()))%）"
+                }
+            }
+            caps.maxGridTiers = max(2, profile.thresholds.gridMaxTiers)
+            let ratio = max(0.05, min(1.0, profile.thresholds.gridMaxCashRatio))
+            caps.maxGridCash = book.cash * Decimal(string: "\(ratio)")!
+            if ratio < 1 {
+                caps.gridNotes.append("网格资金占用按你的画像上限封顶在可用现金的 \(Int((ratio * 100).rounded()))%（¥\(NextMoney.text(caps.maxGridCash ?? 0))）")
+            }
+        }
+        if let stats = nasStats {
+            caps.nasDays = stats.days
+            if let w60 = stats.window(60) {
+                caps.nasAmplitude60 = w60.amplitudeMedianPercent
+                caps.nasRoundTrips60 = w60.roundTripsMedian
+            }
+        }
+        return caps
+    }
+}
+
 // MARK: - 做 T 计算器（候选限价计划，不是订单）
 
 enum NextTKind: String, Equatable {
@@ -393,7 +488,8 @@ enum NextTPlannerResult: Equatable {
 ///（VWAP、日内高低、振幅）与日 K 结构，禁止由大模型直接生成。
 enum NextTradeTPlanner {
     static func plan(kind: NextTKind, book: NextBook, quote: NextQuote?, daily: [NextChartSample], intraday: [NextChartSample],
-                     rules: NextInstrumentRules?, now: Date, historyMissRate: Double? = nil) -> NextTPlannerResult {
+                     rules: NextInstrumentRules?, caps: NextPlanCaps? = nil,
+                     now: Date, historyMissRate: Double? = nil) -> NextTPlannerResult {
         let bars = daily.filter { $0.close > 0 }
         let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count, minuteSampleCount: intraday.filter { $0.close > 0 }.count)
         guard confidence.canPriceTPlan, let quote else {
@@ -414,7 +510,7 @@ enum NextTradeTPlanner {
         }
 
         // 份额：反T 受 T+1 与可卖数量约束；正T 受现金与组合仓位约束。
-        let units: Int
+        var units: Int
         switch kind {
         case .reverse:
             let available = book.availableUnits(for: quote.code, at: now)
@@ -430,6 +526,15 @@ enum NextTradeTPlanner {
                 return .insufficientData(confidence, ["可用现金 ¥\(NextMoney.text(book.cash)) 不足一手（约 ¥\(NextMoney.text(quote.price * Decimal(lotSize)))）"])
             }
             units = cashLots * lotSize
+        }
+        // 画像上限：这是硬约束，不是提示。低于一手时不压缩（否则等于禁止交易，应走「不做」结论）。
+        var capNotes: [String] = []
+        if let cap = caps?.maxTUnits, cap >= lotSize, units > cap {
+            let capped = (cap / lotSize) * lotSize
+            if capped >= lotSize {
+                capNotes.append("份额从 \(units) 份压到 \(capped) 份：" + (caps?.tUnitsNote ?? "按你的画像上限"))
+                units = capped
+            }
         }
 
         // 目标价：以 VWAP 为锚，偏离幅度取「0.5×今日已实现振幅」与 0.4% 的较大值。
@@ -466,6 +571,14 @@ enum NextTradeTPlanner {
         var trample = "若卖出后价格继续上涨超过 \(String(format: "%.2f", amplitude))%（约 ¥\(NextMoney.text(sellPrice + referenceRise, digits: 3))）且当日不回落至买回价，本次做T踏空，约少赚 ¥\(NextMoney.text(max(0, missCost)))"
         if let historyMissRate {
             trample += "；长期分时统计中卖出后未回落比例约 \(Int((historyMissRate * 100).rounded()))%"
+        } else if let medianAmplitude = caps?.nasAmplitude60 {
+            // 用 NAS 60 日振幅中位数与本次所需价差做比值：只是「历史上这种波动够不够」，
+            // 不是预测，也不能反过来证明今天一定会回落。
+            let needed = NextNum.double(grossSpread / buyPrice * 100)
+            let reach = needed > 0 ? min(1.0, medianAmplitude / needed) : 0
+            let trips = caps?.nasRoundTrips60
+            trample += "；NAS 60 日日内振幅中位数 \(String(format: "%.2f", medianAmplitude))%，本次所需价差 \(String(format: "%.2f", needed))%，历史覆盖度约 \(Int((reach * 100).rounded()))%"
+            if let trips { trample += "（同期日均往返 \(String(format: "%.1f", trips)) 次）" }
         } else {
             trample += "；长期分时统计未接入，暂不给历史未回落比例"
         }
@@ -488,6 +601,10 @@ enum NextTradeTPlanner {
             evidence.append("RSI14 \(String(format: "%.1f", rsi))")
         }
         evidence.append("现价 ¥\(NextMoney.text(quote.price, digits: 3))（\(quote.source)，\(confidence.quoteAgeSeconds ?? 0) 秒前）")
+        evidence.append(contentsOf: capNotes)
+        if let medianAmplitude = caps?.nasAmplitude60, let days = caps?.nasDays {
+            evidence.append("NAS \(days) 天分时：60 日振幅中位数 \(String(format: "%.2f", medianAmplitude))%，日均往返 \(String(format: "%.1f", caps?.nasRoundTrips60 ?? 0)) 次")
+        }
 
         let plan = NextTPlan(kind: kind, code: quote.code, name: quote.name, sellPrice: sellPrice, buyPrice: buyPrice,
                              units: units, grossSpread: grossSpread, feeTotal: feeTotal, netGain: netGain,
@@ -540,7 +657,8 @@ enum NextGridPlannerResult: Equatable {
 /// 不适合就明说「不建议网格」，不强行生成买档。
 enum NextGridPlanner {
     static func plan(book: NextBook, quote: NextQuote?, daily: [NextChartSample], gridCheck: NextGridCheck?,
-                     rules: NextInstrumentRules?, now: Date) -> NextGridPlannerResult {
+                     rules: NextInstrumentRules?, nasRange: NextNasRange? = nil,
+                     caps: NextPlanCaps? = nil, now: Date) -> NextGridPlannerResult {
         let bars = daily.filter { $0.close > 0 }.sorted { $0.timestamp < $1.timestamp }
         let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count, minuteSampleCount: 0)
         guard let gridCheck else {
@@ -559,22 +677,47 @@ enum NextGridPlanner {
         guard bars.count >= 60 else {
             return .insufficientData(confidence, ["日 K 仅 \(bars.count) 根，网格至少需要 60 根"])
         }
-        // 区间：近 60 日高低点。
+        // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
         let recent = bars.suffix(60)
-        guard let upper = recent.map { $0.high ?? $0.close }.max(), let lower = recent.map { $0.low ?? $0.close }.min(),
-              upper > lower, let current = bars.last?.close, current > 0 else {
+        guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+              let rawLower = recent.map { $0.low ?? $0.close }.min(),
+              rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+        }
+        var upper = rawUpper
+        var lower = rawLower
+        var boundNotes: [String] = []
+        if let nasRange, nasRange.isValid {
+            let clampedHigh = min(upper, nasRange.high)
+            let clampedLow = max(lower, nasRange.low)
+            if clampedHigh > clampedLow {
+                if clampedHigh != upper || clampedLow != lower {
+                    boundNotes.append("区间按 NAS 长期价格带收敛为 ¥\(NextMoney.text(clampedLow, digits: 3))–¥\(NextMoney.text(clampedHigh, digits: 3))（\(nasRange.source)，\(nasRange.days) 天）")
+                }
+                upper = clampedHigh
+                lower = clampedLow
+            } else {
+                boundNotes.append("NAS 长期价格带 ¥\(NextMoney.text(nasRange.low, digits: 3))–¥\(NextMoney.text(nasRange.high, digits: 3)) 与本地 60 日区间重叠不足，网格仍按本地区间，但需要人工复核")
+            }
         }
         let amplitude = gridCheck.avgAmplitudePercent ?? 1.0
         // 间距：不低于 0.4%，取「半倍日均振幅」；保证每档往返扣费后仍为正。
         let spacingPercent = max(0.4, amplitude / 2)
         let rangePercent = NextNum.double((upper - lower) / lower * 100)
         var tierCount = Int(max(2, min(6, (rangePercent / spacingPercent).rounded())))
-        // 档数再受资金约束：每一买档至少一手。
-        let cashPerTier = book.cash / Decimal(tierCount)
+        var capNotes: [String] = []
+        // 画像档数上限是硬约束：档数越多，单档越薄、手续费占比越高。
+        if let maxTiers = caps?.maxGridTiers, tierCount > maxTiers {
+            capNotes.append("档数从 \(tierCount) 档压到 \(maxTiers) 档：按你的画像最多 \(maxTiers) 档")
+            tierCount = max(2, maxTiers)
+        }
+        // 档数再受资金约束：每一买档至少一手。资金上限优先用画像封顶后的可部署现金。
+        let deployableCash = min(book.cash, caps?.maxGridCash ?? book.cash)
+        if deployableCash < book.cash { capNotes.append(contentsOf: caps?.gridNotes ?? []) }
+        let cashPerTier = deployableCash / Decimal(tierCount)
         let affordableLots = Int(NextNum.double(cashPerTier / (current * Decimal(lotSize))))
         if affordableLots < 1 {
-            return .insufficientData(confidence, ["可用现金 ¥\(NextMoney.text(book.cash)) 不足以支撑 \(tierCount) 档各一手的买入档"])
+            return .insufficientData(confidence, ["可部署现金 ¥\(NextMoney.text(deployableCash)) 不足以支撑 \(tierCount) 档各一手的买入档"])
         }
         tierCount = max(2, min(tierCount, affordableLots + 1))
 
@@ -626,7 +769,8 @@ enum NextGridPlanner {
                                     "行情超过 2 分钟未更新",
                                     "日均成交额跌到 0.3 亿以下（流动性不足）"
                                 ],
-                                reasons: gridCheck.reasons, warnings: gridCheck.warnings, confidence: confidence)
+                                reasons: gridCheck.reasons + boundNotes + capNotes,
+                                warnings: gridCheck.warnings, confidence: confidence)
         return .ready(plan)
     }
 }
