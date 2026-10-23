@@ -232,7 +232,7 @@ final class NextDecisionMemoryTests: XCTestCase {
         guard case let .ready(plan) = result else {
             return XCTFail("网格应能出价：\(result)")
         }
-        XCTAssertLessThanOrEqual(plan.maxCashUsage, Decimal(string: "15000"), "买入档资金占用不得超过画像上限")
+        XCTAssertLessThanOrEqual(plan.maxCashUsage, Decimal(string: "15000")!, "买入档资金占用不得超过画像上限")
         XCTAssertTrue(plan.reasons.contains { $0.contains("档数从") })
         XCTAssertTrue(plan.reasons.contains { $0.contains("资金封顶 15%") })
     }

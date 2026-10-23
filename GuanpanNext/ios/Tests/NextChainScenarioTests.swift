@@ -128,7 +128,7 @@ final class NextChainScenarioTests: XCTestCase {
         XCTAssertEqual(plan.units % 100, 0, "份额必须是整手")
         XCTAssertGreaterThan(plan.netGain, 0, "净收益必须扣完两笔手续费后为正")
         XCTAssertGreaterThan(plan.costReductionPerUnit, 0, "等效降本必须为正")
-        XCTAssertEqual(plan.feeTotal, Decimal(string: "0.20"), "两笔手续费都要进计算")
+        XCTAssertEqual(plan.feeTotal, Decimal(string: "0.20")!, "两笔手续费都要进计算")
         XCTAssertTrue(plan.evidence.contains { $0.contains("VWAP") })
         XCTAssertFalse(plan.cancelConditions.isEmpty)
         XCTAssertEqual(plan.validUntil, NextPlanClock.sessionEnd(after: now))
