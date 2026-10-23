@@ -161,6 +161,23 @@ struct CandidatePlanRow: View {
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(p.forest)
                     Button("取消计划") { cancel() }
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(p.muted)
+                    Spacer(minLength: 4)
+                    // 一键反馈：不是问卷，只让 AI 知道「这类机会适不适合我」。
+                    Menu {
+                        ForEach(NextPlanFeedbackKind.allCases) { kind in
+                            Button {
+                                model.recordPlanFeedback(plan.id, kind: kind)
+                            } label: {
+                                Label(kind.rawValue, systemImage: kind.symbol)
+                            }
+                        }
+                    } label: {
+                        Text(plan.feedback?.kind.rawValue ?? "反馈给 AI")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(plan.feedback == nil ? p.muted : p.chartViolet)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background((plan.feedback == nil ? p.line : p.chartViolet.opacity(0.14)), in: Capsule())
+                    }
                 }
             }
         }
@@ -170,6 +187,7 @@ struct CandidatePlanRow: View {
             AIFillSheet(plan: plan, code: plan.code, name: plan.name, side: plan.kind.side,
                         suggestedPrice: plan.limitPrice, suggestedUnits: plan.units)
         }
+        .onAppear { model.markPlanViewed(plan.id) }
     }
 
     private var stateTone: Color {

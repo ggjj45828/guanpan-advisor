@@ -717,7 +717,7 @@ enum NextProfileEngine {
                                              .cashPreference, .gridAppetite, .drawdown, .execution]
         for id in priority {
             guard let trait = profile.trait(id), trait.isKnown, !trait.isMuted else { continue }
-            lines.append("\(trait.title)：\(trait.label)（置信度 \(Int((trait.confidence * 100).rounded()))%）")
+            lines.append("\(trait.id.title)：\(trait.label)（置信度 \(Int((trait.confidence * 100).rounded()))%）")
             if lines.count >= limit { break }
         }
         lines.append("你的执行门槛：做 T 预期价差 ≥ \(String(format: "%.2f", profile.thresholds.minTSpreadPercent))%、净收益 ≥ ¥\(String(format: "%.0f", profile.thresholds.minTNetGain))、单次份额 ≤ 可用份额 \(Int((profile.thresholds.maxTUnitsRatio * 100).rounded()))%")

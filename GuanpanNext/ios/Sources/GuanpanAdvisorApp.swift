@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
     var body: some Scene { WindowGroup { RootView().environmentObject(model) } }
 }
 
-enum GPRoute: Hashable { case instrument(String), chart(String), decision(String?), dividends(String?), settings, alerts, fills, history, backups, worthOverview, indexDetail(String) }
+enum GPRoute: Hashable { case instrument(String), chart(String), decision(String?), dividends(String?), settings, alerts, fills, history, backups, worthOverview, indexDetail(String), profile }
 private extension GPRoute {
     var persisted: NextRoute {
         switch self {
@@ -22,6 +22,7 @@ private extension GPRoute {
         case .backups: .backups
         case .worthOverview: .intent("worth", "")
         case .indexDetail(let symbol): .intent("index", symbol)
+        case .profile: .intent("profile", "")
         }
     }
     static func restore(_ route: NextRoute) -> GPRoute? {
@@ -33,6 +34,7 @@ private extension GPRoute {
             else if action == "dividends" { .dividends(code.isEmpty ? nil : code) }
             else if action == "worth" { .worthOverview }
             else if action == "index" { code.isEmpty ? nil : .indexDetail(code) }
+            else if action == "profile" { .profile }
             else { nil }
         case .settings: .settings
         case .alerts: .alerts
@@ -263,6 +265,7 @@ private struct RouteDestination: View {
         case .backups: BackupRestoreScreen()
         case .worthOverview: WorthBuyOverviewScreen()
         case .indexDetail(let symbol): IndexDetailScreen(symbol: symbol)
+        case .profile: InvestorProfileScreen()
         }
     }
 }
@@ -2085,6 +2088,11 @@ private struct SettingsScreen: View {
                 set: { hex in if let value = hex.gpHex { updateAppearance { $0.canvasHex = value } } })
     }
     @State private var testingMobileAI = false
+    private var profileDigest: String {
+        let tags = model.profile.styleTags
+        guard !tags.isEmpty else { return "还没有足够行为样本：记录几笔真实成交后 AI 会开始形成结论" }
+        return tags.prefix(3).joined(separator: " · ") + "（点开可修改或否掉）"
+    }
     /// NAS 顾问访问口令（r31 安全加固）：与 NAS .env 的 GUANPAN_ADVISOR_TOKEN 相同，≥32 位。
     @State private var advisorToken = ""
     @State private var advisorTokenAvailable = AdvisorAccessToken.load() != nil
@@ -2112,6 +2120,15 @@ private struct SettingsScreen: View {
                                 .font(.caption.weight(.semibold)).tint(p.forest)
                         }
                         Text("字号改的是系统动态字体档位，导航栏、列表、表单会一起放大；颜色是在当前主题之上做覆盖。").font(.caption).foregroundStyle(p.muted)
+                    }
+                }
+                EditorialSection(title: "AI 对我的了解", trailing: "真实行为学习", accent: p.terracotta) {
+                    GPCard(accent: p.terracotta) {
+                        NavigationLink(value: GPRoute.profile) {
+                            IntentRow(icon: "person.text.rectangle", title: "AI 对我的了解", detail: profileDigest)
+                        }
+                        Text("画像只影响推荐什么、怎么表达；不改变行情判断，也不降低风险与数据门槛。")
+                            .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 EditorialSection(title: "通知与提醒") {
