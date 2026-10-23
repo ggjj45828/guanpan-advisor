@@ -53,9 +53,9 @@
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
-| iOS App target 编译（含 ThemeHome 新视觉） | ✅ | run `39935846686`：`Theme screenshots` 作业的 `xcodebuild build`（Debug/模拟器）编译通过并产出 8 张截图——App target（含 `AdvisorAvatar`/`EditorialFigure`/`PersonSilhouette`）真实编译成功 |
-| `swift test`（core 包） | 🟠 | CI 已运行：4 项**既有**失败（`NextChainScenarioTests.testScenarioC:152` 网格档位、`NextDecisionMemoryTests:233` 网格出价、`:173`/`:130` 新闻判读）；在 `1760764cc9`、`2c1bb9075b` 同样失败，与本轮 UI 改动无关。其余全部通过 |
-| 五套主题模拟器截图 | ✅ | run `39935846686` artifact `guanpan-theme-screenshots`（1–8 全部下载核验） |
+| iOS App target 编译（含 ThemeHome 新视觉） | ✅ | run `39957249993`（及 `39935846686`）：`Theme screenshots` 作业 `xcodebuild build`（Debug/模拟器）通过并产出 8 张截图 |
+| `swift test`（core 包，76 项） | ✅ | run `39957249993`：`Core logic tests` 步骤 exit 0，日志 76/76 全跑、**0 failure markers**。曾有的 4 项失败实为 3 个生产 bug（见 F-2），已修 |
+| 五套主题模拟器截图 | ✅ | run `39957249993` artifact `guanpan-theme-screenshots`（1–8 全部下载核验） |
 | editorial 主题：AI 顾问头像 | ✅ | `1_editorial.png`：问候区右上角金色渐变圆头像 + 「AI 今日指导」卡头像角标，均真实渲染 |
 | editorial 主题：装饰插画人物 | ✅ | `1_editorial.png`：「真实持仓」上方背景可见低透明度人形轮廓（头部+裙身），融入暖色背景 |
 | XCUITest 实机 | ❌/⏳ | 当前环境无 xcodebuild/模拟器，依赖远端 CI 与真机 |
@@ -73,7 +73,7 @@
 | 编号 | 项目 | 状态 | 缺口 / 修复路径 |
 |---|---|---|---|
 | F-1 | 新闻行业词映射 | 🟠 | `NextNewsImpactEngine.belongs(_:code:name:industryWords:)` 支持行业词，但 `NextCandidatePlans.scan` 未注入（持仓无行业字段、无分类数据源）。当前按 name/code 精确匹配已可用。**修复**：接入行业分类（NAS 持仓 payload 增加 `industry` 字段 + 端到端解码），再在 `evaluate` 透传 `industryWords`。非 Mock，不硬编造假表。 |
-| F-2 | iOS core 测试 4 项既有失败 | 🟠 | `swift test`：网格规划器 2 项（fixture 分钟 0 点 → `insufficientData` 门槛挡住出价/档位断言）+ 新闻判读 2 项（`XCTAssertTrue/False` 失败）。**既有失败**（`1760764cc9`/`2c1bb9075b` 同样红），非本轮 UI 改动引入。修复路径：修 fixture 注入真实分钟样本 + 核对新闻判读用例预期。 |
+| F-2 | ~~iOS core 测试 4 项失败~~ | ✅ 已修（run `39957249993`） | 4 项失败实为 3 个**生产 bug**（非测试问题）：①`NextGridPlanner.plan` 把 `minuteSampleCount` 硬编码 0，网格永远出不了 ready 计划（⑤智能网格在生产同样失效）→ 给 `NextDataConfidence.assess` 加 `intradayRequired` 参数（默认 true），网格按「日K≥60+行情新鲜」评估；②`belongs` 漏全名命中（"纳指ETF"去 ETF 后仅 2 字被 ≥3 门槛挡掉）→ 加全名 contains 匹配；③停牌 `.pauseGrid` 只收网格不收已 ready 做T → 停牌=全场暂停，同时撤回做T与网格。未弱化任何测试断言。 |
 | F-3 | 五套主题信息密度 | 🟡→部分✅ | run `39935846686` 8 张截图已下载；editorial（含新头像/插画）已核验，其余主题待逐页与 `_ref/*.png` 对比补差距。 |
 | F-4 | 真机/真 NAS 联调 | ❌（环境缺） | DeepSeek key、APNs、真机签名需用户环境演练。 |
 | F-5 | 新闻生产可达性 | ⚠️ | Google News RSS 在 CN 网络受限；生产 NAS 需确认出口可达，否则降级为 unavailable（已正确实现）。 |
@@ -81,6 +81,6 @@
 ## 结论
 
 - **本环境可验证项已全部实测通过**：NAS 100 测试、真实行情/分钟/报价/研究链路、网页 JS、市场状态与决策记忆的接线逻辑。
-- **iOS App target 编译通过**（run `39935846686`），五套主题截图 8 张已下载核验；editorial 主题新增 AI 顾问头像 + 装饰插画人物（用户「1和3」需求），截图确认真实渲染。
-- **当前卡点**：core `swift test` 4 项既有失败（F-2，网格 fixture 数据不足 + 新闻判读断言，早于本轮 UI 改动即红）；其余主题信息密度逐页对比未做（F-3）；新闻行业词（F-1）与真机联调（F-4）为真实缺口。
+- **iOS 全绿**（run `39957249993`）：App target 编译 + `swift test` 76 项全过（0 failure）+ 五套主题截图 8 张已下载核验；editorial 主题新增 AI 顾问头像 + 装饰插画人物（用户「1和3」）截图确认真实渲染。
+- **当前卡点**：F-1 新闻行业词真实注入、F-4 真机/真 NAS 联调（DeepSeek key/APNs/签名需用户环境）、F-3 其余主题逐页密度对比、F-5 新闻生产可达性（CN 网络）。F-2 已关闭。
 - 不把"源码存在 / 文件存在 / 算法文件存在"当作完成。以上状态均附可复核证据。
