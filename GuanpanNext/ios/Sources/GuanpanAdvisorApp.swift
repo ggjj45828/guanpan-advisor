@@ -766,6 +766,9 @@ private struct DecisionScreen: View {
     /// NAS 授权分析结果：一卡一只持仓 + 新闻 + AI 结论，全部只读。
     @ViewBuilder private func advisorAnalysisCard(_ analysis: NextAdvisorAnalysis) -> some View {
         DataPanel(title: "AI 综合分析与交易方案", accent: p.terracotta, caption: "只读 · 不会下单") {
+            if let issues = analysis.ruleConfigurationIssues, !issues.isEmpty {
+                Text("规则配置待处理：" + issues.joined(separator: "；")).font(.caption2).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+            }
             Text(analysis.notice).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
             ForEach(analysis.positions) { position in
                 VStack(alignment: .leading, spacing: 4) {
@@ -777,6 +780,8 @@ private struct DecisionScreen: View {
                         Text("成本 ¥\(basis.bookCost ?? "—") · 均价 ¥\(basis.averageCostPerUnit ?? "—") · 回本参考 ¥\(basis.breakEvenAfterOneEstimatedExitFee ?? basis.breakEvenBeforeExitFee ?? "—") · 浮盈亏 ¥\(basis.unrealizedPnlBeforeExitFee ?? "—") · 占比 \(position.portfolioWeightPercent ?? "—")%").font(.caption).foregroundStyle(p.muted)
                     }
                     if let availableBasis = position.availableUnitsBasis { Text(availableBasis).font(.caption2).foregroundStyle(p.muted) }
+                    if let stats = position.dailyStats { Text("历史波动与档案：" + stats.keys.sorted().map { "\($0)=\(stats[$0]!.displayText)" }.joined(separator: " · ")).font(.caption2).foregroundStyle(p.muted).textSelection(.enabled) }
+                    if let liquidity = position.intradayEvidence { Text("VWAP、成交覆盖与流动性检查：" + liquidity.keys.sorted().map { "\($0)=\(liquidity[$0]!.displayText)" }.joined(separator: " · ")).font(.caption2).foregroundStyle(p.muted).textSelection(.enabled) }
                     if let plan = position.plan {
                         Text(plan.keys.sorted().map { "\($0)：\(plan[$0]!.displayText)" }.joined(separator: " · ")).font(.caption).foregroundStyle(p.ink).textSelection(.enabled)
                     }
@@ -2072,6 +2077,9 @@ private struct SettingsScreen: View {
                 set: { hex in if let value = hex.gpHex { updateAppearance { $0.canvasHex = value } } })
     }
     @State private var testingMobileAI = false
+    /// NAS 顾问访问口令（r31 安全加固）：与 NAS .env 的 GUANPAN_ADVISOR_TOKEN 相同，≥32 位。
+    @State private var advisorToken = ""
+    @State private var advisorTokenAvailable = AdvisorAccessToken.load() != nil
     var body: some View {
         GPPageBackground {
             VStack(alignment: .leading, spacing: 0) {
@@ -2245,6 +2253,19 @@ private struct SettingsScreen: View {
                     GPCard {
                     TextField("NAS 地址，例如 http://192.168.1.10:8789", text: $nasURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).accessibilityIdentifier("settings.nas.address")
                     HStack { Button("保存并测试") { do { try model.configureNAS(baseURL: nasURL); Task { await model.probeNAS() } } catch { model.errorMessage = error.localizedDescription } }.font(.caption.weight(.semibold)).accessibilityIdentifier("settings.nas.save-test"); Spacer(); Button("重新检查") { Task { await model.probeNAS() } }.font(.caption).accessibilityIdentifier("settings.nas.recheck") }.tint(p.forest)
+                    // 顾问口令：新版 NAS 服务端要求 Bearer 令牌才能读真实持仓；旧版不校验，保存了也不会破坏旧部署。
+                    SecureField("NAS 顾问访问口令（至少 32 位）", text: $advisorToken).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder).accessibilityIdentifier("settings.nas.advisor-token")
+                    HStack {
+                        Text(advisorTokenAvailable ? "顾问口令已保存在本机钥匙串" : "尚未保存顾问口令").font(.caption2).foregroundStyle(p.muted)
+                        Spacer()
+                        Button("保存口令") {
+                            do { try AdvisorAccessToken.save(advisorToken); advisorToken = ""; advisorTokenAvailable = true; model.notice = "NAS 顾问访问口令已保存在 iPhone 钥匙串" }
+                            catch { model.errorMessage = error.localizedDescription }
+                        }.font(.caption.weight(.semibold)).disabled(advisorToken.count < 32)
+                        Button("删除") { do { try AdvisorAccessToken.delete(); advisorToken = ""; advisorTokenAvailable = false } catch { model.errorMessage = error.localizedDescription } }.font(.caption)
+                    }.tint(p.forest)
+                    Text("顾问持仓与分析接口需要服务器 GUANPAN_ADVISOR_TOKEN 和此处相同口令；口令仅保存在 iPhone 钥匙串。此并行服务默认地址为 http://NAS内网地址:8789；公网连接必须使用 HTTPS。")
+                        .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     GPActionButton(title: "从 NAS 下载账本", secondary: true, systemImage: "arrow.down.doc") { confirmDownload = true }
                     GPActionButton(title: "上传本机账本到 NAS", secondary: true, systemImage: "arrow.up.doc") { confirmSync = true }
                     Divider().padding(.vertical, 4)
@@ -2263,7 +2284,7 @@ private struct SettingsScreen: View {
                 let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
                 Text("观盘 Next · v\(appVer) (build \(appBuild))").font(.caption2).foregroundStyle(p.muted).padding(.vertical, 18)
             }
-        }.onAppear { mobileAIKeyAvailable = DeepSeekMobile.loadKey() != nil; nasURL = model.preferences.nasBaseURL }
+        }.onAppear { mobileAIKeyAvailable = DeepSeekMobile.loadKey() != nil; nasURL = model.preferences.nasBaseURL; advisorTokenAvailable = AdvisorAccessToken.load() != nil }
             .confirmationDialog("确认从 NAS 下载真实账本并替换本机账本？", isPresented: $confirmDownload, titleVisibility: .visible) {
                 Button("确认下载", role: .destructive) { Task { await model.downloadBookManually() } }
                 Button("取消", role: .cancel) { }

@@ -76,6 +76,9 @@ struct NextAdvisorAnalysis: Decodable {
         let units: Int
         let decision: String
         let qualifiedDays: Int
+        // 以下三个为可选字段：旧版 NAS 不返回时解码为 nil，界面不显示，不影响老部署。
+        let dailyStats: [String: NextJSONValue]?
+        let intradayEvidence: [String: NextJSONValue]?
         let plan: [String: NextJSONValue]?
         let costBasis: CostBasis?
         let portfolioWeightPercent: String?
@@ -87,6 +90,8 @@ struct NextAdvisorAnalysis: Decodable {
     struct News: Decodable, Identifiable { var id: String { code }; let code: String; let name: String; let state: String; let provider: String; let items: [NewsItem] }
     let bookRevision: Int
     let notice: String
+    /// 服务端发现交易规则配置问题（缺费率/缺交割方式等）时列出；旧版 NAS 不返回为 nil。
+    let ruleConfigurationIssues: [String]?
     let positions: [Position]
     let news: [News]
     let ai: AI
@@ -108,7 +113,10 @@ enum NextJSONValue: Decodable {
         case .number(let value): return String(value)
         case .bool(let value): return String(value)
         case .null: return "—"
-        case .object, .array: return "数据"
+        case .object(let value):
+            return value.keys.sorted().map { "\($0)=\(value[$0]!.displayText)" }.joined(separator: "; ")
+        case .array(let values):
+            return values.map(\.displayText).joined(separator: " | ")
         }
     }
 }
@@ -162,6 +170,7 @@ enum NextNASService {
         let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("advisor").appendingPathComponent("analyze")
         var request = URLRequest(url: url, timeoutInterval: 120); request.httpMethod = "POST"; request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        NextNASService.attachAdvisorToken(&request)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw NextError.invalid("顾问分析失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
@@ -170,11 +179,21 @@ enum NextNASService {
     }
     static func advisorInventory(baseURL: String, session: URLSession = .shared) async throws -> NextAdvisorInventory {
         let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("advisor").appendingPathComponent("inventory")
-        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 15))
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        NextNASService.attachAdvisorToken(&request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw NextError.invalid("顾问检查失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
         }
         return try JSONDecoder().decode(NextAdvisorInventory.self, from: data)
+    }
+    /// 顾问接口口令（r31 安全加固）：用户在「我的」保存了 ≥32 位口令就带上 Bearer 头。
+    /// 新旧 NAS 都兼容——旧服务端不校验该头，新服务端（GUANPAN_ADVISOR_TOKEN）必须校验。
+    /// 没保存口令时不发头；此时连新服务端会返回 401/503，设置页会提示保存口令。
+    static func attachAdvisorToken(_ request: inout URLRequest) {
+        if let token = AdvisorAccessToken.load(), token.count >= 32 {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
     }
     static func validateURL(_ raw: String) throws -> URL {
         guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
