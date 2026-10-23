@@ -177,7 +177,7 @@ private struct EditorialBackdrop: View {
                 // ③ 编辑室风格装饰插画人物（矢量原创，低透明度融入背景，不依赖图片）。
                 ZStack(alignment: .bottomLeading) {
                     EditorialFigure(ink: ink, tint: tint)
-                        .frame(width: min(geo.size.width * 0.52, 200), height: geo.size.height * 0.5)
+                        .frame(width: min(geo.size.width * 0.52, CGFloat(200)), height: geo.size.height * 0.5)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .offset(x: -geo.size.width * 0.03, y: geo.size.height * 0.02)
@@ -872,7 +872,7 @@ private struct PersonSilhouette: Shape {
         let headR = rect.width * 0.20
         let headCy = rect.height * 0.30
         path.addArc(center: CGPoint(x: cx, y: headCy), radius: headR,
-                    startAngle: .degrees(0), endAngle: .degrees(360))
+                    startAngle: .degrees(0), endAngle: .degrees(360), clockwise: false)
         // 肩 / 身体（梯形圆角轮廓）
         let shoulderY = rect.height * 0.54
         let shoulderHalf = rect.width * 0.32
