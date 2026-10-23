@@ -47,6 +47,14 @@ struct HomeSnapshot {
         return guidance.summary
     }
 
+    /// AI 卡正文：优先用「每只持仓一句话的结论」，而不是把顶部摘要原样再抄一遍。
+    /// 参考稿里 AI 卡写的就是逐只标的的判断（"半导体…可关注一次反T机会。A500暂不建议操作。"）。
+    var aiLines: [String] {
+        let items = Array((guidance?.items ?? []).prefix(2))
+        let lines = items.compactMap { $0.whyToday.first }.filter { !$0.isEmpty }
+        return lines.isEmpty ? [headline] : lines
+    }
+
     var marketStateText: String {
         guard let lead else { return "数据不足" }
         return lead.state.rawValue
@@ -371,7 +379,10 @@ private struct HomeIndexBoard: View {
 
     struct IndexRow: Identifiable {
         let id: String
+        /// 短名（编辑室四联卡用，参考稿就是「上证 / 深证 / 创业板」）。
         let name: String
+        /// 全名（现代/杂志/仪表盘的指数卡用，参考稿是「上证指数 / 深证成指 / 创业板指」）。
+        let fullName: String
         let price: Double
         let percent: Double?
         let spark: [Double]
@@ -423,7 +434,7 @@ private struct HomeIndexBoard: View {
             .overlay(RoundedRectangle(cornerRadius: p.chipRadius, style: .continuous).stroke(tone.opacity(0.18), lineWidth: 0.8))
         case .cards:
             VStack(alignment: .leading, spacing: 5) {
-                Text(row.name).font(.system(size: 10, weight: .medium)).foregroundStyle(p.muted).lineLimit(1)
+                Text(row.fullName).font(.system(size: 10, weight: .medium)).foregroundStyle(p.muted).lineLimit(1)
                 Text(NextNum.text(row.price, digits: 2))
                     .font(.system(size: 16, weight: .bold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(tone).lineLimit(1).minimumScaleFactor(0.65)
@@ -436,7 +447,7 @@ private struct HomeIndexBoard: View {
             .overlay(RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous).stroke(p.line, lineWidth: 0.8))
         case .tiles:
             VStack(alignment: .leading, spacing: 5) {
-                Text(row.name).font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).lineLimit(1)
+                Text(row.fullName).font(.system(size: 10, weight: .semibold)).foregroundStyle(p.muted).lineLimit(1)
                 Text(NextNum.text(row.price, digits: 2))
                     .font(.system(size: 15, weight: .bold, design: .monospaced)).monospacedDigit()
                     .foregroundStyle(tone).lineLimit(1).minimumScaleFactor(0.6)
@@ -473,7 +484,7 @@ private struct HomeIndexBoard: View {
         do {
             let all = try await GlobalIndexFeed.fetch()
             if let sh = all.first(where: { $0.symbol == "s_sh000001" }) {
-                result.append(IndexRow(id: "000001", name: "上证", price: sh.price,
+                result.append(IndexRow(id: "000001", name: "上证", fullName: "上证指数", price: sh.price,
                                        percent: sh.price > 0 ? sh.changePercent : nil, spark: []))
             }
         } catch { problems.append("上证指数取不到") }
@@ -488,7 +499,8 @@ private struct HomeIndexBoard: View {
                     spark = daily.value.samples.suffix(30).compactMap { $0.close > 0 ? NextNum.double($0.close) : nil }
                 }
                 let label = code == "399001" ? "深证" : "创业板"
-                result.append(IndexRow(id: code, name: label, price: NextNum.double(quote.price),
+                let fullLabel = code == "399001" ? "深证成指" : "创业板指"
+                result.append(IndexRow(id: code, name: label, fullName: fullLabel, price: NextNum.double(quote.price),
                                        percent: quote.changePercent.map { NextNum.double($0) }, spark: spark))
             }
         } catch {
@@ -744,15 +756,17 @@ private struct HoldingsSummaryCard: View {
         .overlay(RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous).stroke(p.line, lineWidth: 0.8))
     }
 
+    /// 仓位环：参考稿给的是「仓位 78%」而不是「现金 23%」——说清楚"钱有多少在场上"更直观。
     private var cashRing: some View {
-        ZStack {
+        let position = max(0, min(100, 100 - snapshot.cashPercent))
+        return ZStack {
             Circle().stroke(p.line, lineWidth: 5)
-            Circle().trim(from: 0, to: max(0.02, min(1, snapshot.cashPercent / 100)))
+            Circle().trim(from: 0, to: max(0.02, min(1, position / 100)))
                 .stroke(p.forest, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 0) {
-                Text("现金").font(.system(size: 8)).foregroundStyle(p.muted)
-                Text("\(Int(snapshot.cashPercent.rounded()))%")
+                Text("仓位").font(.system(size: 8)).foregroundStyle(p.muted)
+                Text("\(Int(position.rounded()))%")
                     .font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(p.ink)
             }
         }
@@ -822,8 +836,9 @@ private struct EditorialHome: View {
                  : snapshot.headline)
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(p.heroInk)
                 .fixedSize(horizontal: false, vertical: true)
-            if let lead = snapshot.lead, let why = lead.whyToday.first {
-                Text(why).font(.system(size: 10.5)).foregroundStyle(p.heroMutedInk)
+            // 逐只标的的判断：和顶部摘要分工，避免同一句话在首屏出现两次。
+            ForEach(Array(snapshot.aiLines.prefix(2).enumerated()), id: \.offset) { _, line in
+                Text(line).font(.system(size: 10.5)).foregroundStyle(p.heroMutedInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 6) {
@@ -1403,6 +1418,19 @@ private struct PuzzleHome: View {
                         if let days = snapshot.guidance?.items.first(where: { $0.code == position.code })?.confidence.level.rawValue {
                             Text("置信度 \(days)").font(.system(size: 8.5)).foregroundStyle(tone.ink.opacity(0.75)).lineLimit(1)
                         }
+                        // 底部两行把"持有了多少、赚了多少"补齐，避免块里下半截留白。
+                        HStack(spacing: 4) {
+                            Text("\(position.units) 份").font(.system(size: 9)).foregroundStyle(tone.ink.opacity(0.7))
+                            Spacer(minLength: 0)
+                            if let quote, position.units > 0 {
+                                let pnl = (quote.price - position.costPerUnit) * Decimal(position.units)
+                                Text("\(pnl >= 0 ? "+" : "-")¥\(NextMoney.text(abs(pnl), digits: 0))")
+                                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(tone.ink.opacity(0.85))
+                                    .lineLimit(1).minimumScaleFactor(0.8)
+                            }
+                        }
+                        Text("成本 \(NextMoney.text(position.costPerUnit, digits: 3))")
+                            .font(.system(size: 8.5)).foregroundStyle(tone.ink.opacity(0.6)).lineLimit(1)
                     }
                     .padding(11)
                     .frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)

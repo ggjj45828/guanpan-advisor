@@ -278,11 +278,13 @@ struct LocalPreferences: Codable {
         guard book.positions.isEmpty else { return }
         // 样例取的是真实在场 ETF，行情走真实数据源，所以截图里的价格、涨跌、K 线都是真数据；
         // 只有「你持有了多少、成本多少」是样例，用来检查长名称/大金额/极端盈亏下的排版。
+        // 成本特意设成两红两绿（有浮盈也有浮亏），这样五套主题的涨跌配色、正负号、
+        // 极端比例在截图里都能被同时验证到。
         let samples: [(String, String, Int, String)] = [
-            ("512480", "半导体设备ETF", 42000, "0.806"),
-            ("513630", "港股红利ETF", 68000, "0.712"),
-            ("513520", "日经ETF", 26000, "1.271"),
-            ("560510", "A500ETF", 90000, "0.981")
+            ("512480", "半导体设备ETF", 42000, "0.792"),
+            ("513630", "港股红利ETF", 68000, "1.562"),
+            ("513520", "日经ETF", 26000, "2.148"),
+            ("560510", "A500ETF", 90000, "1.072")
         ]
         for (code, name, units, costText) in samples {
             guard let unitCost = Decimal(string: costText) else { continue }

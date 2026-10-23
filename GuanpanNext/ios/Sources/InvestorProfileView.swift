@@ -27,7 +27,7 @@ struct InvestorProfileScreen: View {
             roleCard
             learningCard
         }
-        .navigationTitle("AI 对我的了解")
+        // 页面自带大标题：不再设 navigationTitle，否则导航条和正文标题会重复一行。
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $detailTrait) { id in
             ProfileTraitDetailSheet(traitID: id,

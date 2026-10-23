@@ -215,7 +215,15 @@ struct RootView: View {
         .preferredColorScheme(model.theme.colorScheme)
         .sheet(isPresented: $model.showSearch) { SearchSheet() }
         .fullScreenCover(isPresented: .constant(Self.screenArgument == "profile")) {
-            NavigationStack { InvestorProfileScreen() }
+            NavigationStack {
+                InvestorProfileScreen()
+                    .toolbar(.hidden, for: .navigationBar)
+            }
+            // 全屏覆盖层不总是继承父级自定义环境值，这里显式再注入一次，
+            // 保证截图里的画像页和当前主题完全一致（五套主题读同一份画像数据）。
+            .environment(\.gp, palette)
+            .environment(\.gpAppearance, model.preferences.appearance)
+            .preferredColorScheme(effectiveScheme)
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
