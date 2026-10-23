@@ -722,11 +722,108 @@ private struct DecisionScreen: View {
             ? "有 \(over) 只持仓占比超过 40%，注意组合集中度（账户级风险优先于单只机会）。本机扫描仅供参考，不构成交易指令。"
             : "持仓集中度在正常范围。本机扫描按「先看账户、再看资产、最后看执行」的思路给出，仅供参考，不构成交易指令。"
     }
-    @ViewBuilder private func inspectStat(title: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(p.muted)
-            Text(value).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    /// 选中标的时的大字价格卡（参考设计稿英雄卡）：现价、涨跌、口径一屏可见。
+    /// 没有缓存报价就明说，不猜价格——AI 结论也只能基于真实缓存。
+    @ViewBuilder private func decisionHeroCard(code: String) -> some View {
+        if let cached = model.quotes[code] {
+            let quote = cached.quote
+            let change = quote.changePercent.map { NextNum.double($0) }
+            let events = NextDividendAnalytics.merged(model.book.dividendEvents + (model.dividendEvents[code] ?? []))
+            let per = NextDividendAnalytics.recentVerifiedPerShare(code: code, events: events, today: dividendTodayString())
+            let yld = (per > 0 && quote.price > 0) ? NextNum.double(per / quote.price * 100) : nil
+            DataPanel(title: knownName(code), caption: code, accent: p.forest) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("¥\(NextMoney.text(quote.price, digits: 3))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(p.ink).lineLimit(1).minimumScaleFactor(0.72)
+                    if let change {
+                        Text("\(change >= 0 ? "+" : "")\(NextNum.signed(change))%")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(p.changeTone(change).opacity(0.14), in: Capsule())
+                            .foregroundStyle(p.changeTone(change))
+                    }
+                    Spacer(minLength: 0)
+                    if let iopv = quote.iopv, iopv > 0 {
+                        let premium = NextNum.double((quote.price / iopv - 1) * 100)
+                        GPPillBadge(text: "IOPV \(premium >= 0 ? "+" : "")\(String(format: "%.2f", premium))%", color: p.chartBlue)
+                    }
+                }
+                HStack(spacing: 10) {
+                    GPValue(label: "昨收", value: "¥\(NextMoney.text(quote.previousClose, digits: 3))")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    GPValue(label: "近12月已核实股息率", value: yld.map { "\(NextMoney.text(Decimal($0), digits: 3))%" } ?? "—", footnote: yld == nil ? "缺已核实派息" : nil)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    GPValue(label: "行情", value: quote.source, footnote: cached.stamp.label(now: Date()))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !quote.isFresh(at: Date()) {
+                    Text("行情\(cached.stamp.label(now: Date()))，价格与分数按该缓存价计算").font(.caption2).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else {
+            GPStatus(title: "暂无缓存报价", detail: "先去行情页刷新一次；AI 分析会把缺口标明，不推测价格。", symbol: "chart.xyaxis.line")
+        }
+    }
+    /// NAS 授权分析结果：一卡一只持仓 + 新闻 + AI 结论，全部只读。
+    @ViewBuilder private func advisorAnalysisCard(_ analysis: NextAdvisorAnalysis) -> some View {
+        DataPanel(title: "AI 综合分析与交易方案", caption: "只读 · 不会下单", accent: p.terracotta) {
+            Text(analysis.notice).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+            ForEach(analysis.positions) { position in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("\(position.name) · \(position.decision)").font(.subheadline.weight(.medium)).foregroundStyle(p.ink)
+                        GPPillBadge(text: "分时 \(position.qualifiedDays) 天", color: p.jade)
+                    }
+                    if let basis = position.costBasis {
+                        Text("成本 ¥\(basis.bookCost ?? "—") · 均价 ¥\(basis.averageCostPerUnit ?? "—") · 回本参考 ¥\(basis.breakEvenAfterOneEstimatedExitFee ?? basis.breakEvenBeforeExitFee ?? "—") · 浮盈亏 ¥\(basis.unrealizedPnlBeforeExitFee ?? "—") · 占比 \(position.portfolioWeightPercent ?? "—")%").font(.caption).foregroundStyle(p.muted)
+                    }
+                    if let availableBasis = position.availableUnitsBasis { Text(availableBasis).font(.caption2).foregroundStyle(p.muted) }
+                    if let plan = position.plan {
+                        Text(plan.keys.sorted().map { "\($0)：\(plan[$0]!.displayText)" }.joined(separator: " · ")).font(.caption).foregroundStyle(p.ink).textSelection(.enabled)
+                    }
+                    if !position.risks.isEmpty { Text(position.risks.joined(separator: "；")).font(.caption2).foregroundStyle(p.terracotta) }
+                }
+                .padding(.vertical, 5)
+                .overlay(alignment: .bottom) { Rectangle().fill(p.line.opacity(0.6)).frame(height: 0.5) }
+            }
+            ForEach(analysis.news) { news in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("\(news.name) 新闻").font(.caption.weight(.semibold)).foregroundStyle(p.ink)
+                        GPPillBadge(text: news.state == "ok" ? "Google News RSS" : "暂不可用", color: news.state == "ok" ? p.chartBlue : p.muted)
+                    }
+                    ForEach(news.items.prefix(4)) { item in
+                        if let url = URL(string: item.url) { Link(item.title, destination: url).font(.caption).lineLimit(2) }
+                    }
+                    if news.items.isEmpty { Text("暂无可用新闻标题；AI 分析会把新闻数据缺口标明").font(.caption2).foregroundStyle(p.muted) }
+                }.padding(.vertical, 5)
+            }
+            if let content = analysis.ai.content {
+                AIAnswerView(text: content)
+            } else {
+                GPInlineEmpty(symbol: "sparkles", text: analysis.ai.message ?? "在线 AI 暂不可用；以上为本地规则与数据统计。")
+            }
+        }
+    }
+    /// NAS 真实持仓检查结果：修订号 + 逐持仓分时数据质量。
+    @ViewBuilder private func advisorInventoryCard(_ inventory: NextAdvisorInventory) -> some View {
+        DataPanel(title: "NAS 真实持仓", caption: "修订 \(inventory.bookRevision)", accent: p.forest) {
+            Text(inventory.notice).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+            if inventory.positions.isEmpty {
+                GPInlineEmpty(symbol: "tray", text: "NAS 真实账本没有持仓。")
+            }
+            ForEach(inventory.positions) { position in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("\(position.name) · \(position.code)").font(.subheadline.weight(.medium)).foregroundStyle(p.ink)
+                        GPPillBadge(text: position.decision, color: p.chartBlue)
+                    }
+                    Text("\(position.units) 份 · 分时 \(position.days) 天，其中 \(position.completeDays) 天满足最低点数；\(position.firstDay ?? "—") 至 \(position.lastDay ?? "—")").font(.caption).foregroundStyle(p.muted)
+                    if !position.reasons.isEmpty { Text(position.reasons.joined(separator: "；")).font(.caption2).foregroundStyle(p.muted) }
+                }
+                .padding(.vertical, 5)
+                .overlay(alignment: .bottom) { Rectangle().fill(p.line.opacity(0.6)).frame(height: 0.5) }
+            }
+        }
     }
     @ViewBuilder private func inspectRow(_ r: InspectHolding) -> some View {
         let yldText = r.yieldPercent.map { "股息率 \(NextMoney.text(Decimal($0), digits: 3))%" } ?? "股息率 —"
@@ -737,9 +834,7 @@ private struct DecisionScreen: View {
                     .font(.caption2).foregroundStyle(p.muted)
             }
             Spacer(minLength: 4)
-            Text(r.suggestion).font(.system(size: 10, weight: .semibold)).foregroundStyle(suggestionColor(r.suggestion))
-                .padding(.horizontal, 7).padding(.vertical, 3)
-                .background(suggestionColor(r.suggestion).opacity(0.12), in: Capsule())
+            GPPillBadge(text: r.suggestion, color: suggestionColor(r.suggestion))
         }.padding(.vertical, 6).overlay(alignment: .bottom) { Rectangle().fill(p.line.opacity(0.6)).frame(height: 0.5) }
     }
     private func suggestionColor(_ s: String) -> Color {
@@ -759,149 +854,131 @@ private struct DecisionScreen: View {
                         .font(.caption2).foregroundStyle(p.muted).lineLimit(2).multilineTextAlignment(.trailing)
                 }.padding(.top, 7)
                 Text(code.map { "围绕 \(knownName($0))，把已知信息整理成下一步" } ?? "先说你想完成什么").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 10)
+                // 选中标的时先给一张大字价格卡（参考设计稿英雄卡）：价格、涨跌、口径一屏可见，后面的 AI 结论才有锚点。
+                if let code { decisionHeroCard(code: code).padding(.top, 12) }
                 EditorialSection(title: "真实持仓 · 分时数据检查", trailing: "只读", accent: p.forest) {
-                    GPActionButton(title: checkingAdvisorInventory ? "正在检查…" : "检查 NAS 真实持仓", secondary: true, systemImage: "chart.xyaxis.line") {
-                        Task {
-                            checkingAdvisorInventory = true
-                            defer { checkingAdvisorInventory = false }
-                            do {
-                                advisorInventory = try await NextNASService.advisorInventory(baseURL: model.preferences.nasBaseURL)
-                                advisorInventoryError = nil
-                            } catch { advisorInventory = nil; advisorInventoryError = error.localizedDescription }
-                        }
-                    }.disabled(checkingAdvisorInventory || model.preferences.nasBaseURL.isEmpty)
-                    GPActionButton(title: runningAdvisorAnalysis ? "正在分析…" : "授权 AI 综合分析与交易方案", secondary: true, systemImage: "sparkles") {
-                        showAdvisorAIConsent = true
-                    }.disabled(runningAdvisorAnalysis || model.preferences.nasBaseURL.isEmpty || model.book.positions.allSatisfy { $0.units == 0 })
-                    .confirmationDialog("发送真实持仓给 NAS AI？", isPresented: $showAdvisorAIConsent, titleVisibility: .visible) {
-                        Button("确认并开始分析") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        GPActionButton(title: checkingAdvisorInventory ? "正在检查…" : "检查 NAS 真实持仓", secondary: true, systemImage: "chart.xyaxis.line") {
                             Task {
-                                runningAdvisorAnalysis = true
-                                defer { runningAdvisorAnalysis = false }
+                                checkingAdvisorInventory = true
+                                defer { checkingAdvisorInventory = false }
                                 do {
-                                    advisorAnalysis = try await NextNASService.analyzeRealHoldings(baseURL: model.preferences.nasBaseURL,
-                                        book: model.book, rules: model.rules)
-                                    advisorAnalysisError = nil
-                                    if let saved = advisorAnalysis {
-                                        let stamp = Date()
-                                        let holdingsText = saved.positions.map { position in
-                                            let planText = position.plan?.keys.sorted().map { "\($0)=\(position.plan![$0]!.displayText)" }.joined(separator: ", ") ?? "无具体方案"
-                                            return "\(position.name) \(position.code)：\(position.decision)，持仓 \(position.units) 份，成本均价 ¥\(position.costBasis?.averageCostPerUnit ?? "未知")，回本参考 ¥\(position.costBasis?.breakEvenAfterOneEstimatedExitFee ?? "未知")，未实现盈亏 ¥\(position.costBasis?.unrealizedPnlBeforeExitFee ?? "未知")，可卖份额口径：\(position.availableUnitsBasis ?? "未知")，方案：\(planText)，风险：\(position.risks.joined(separator: "；"))"
-                                        }.joined(separator: "\n")
-                                        let newsText = saved.news.flatMap { news in news.items.map { "\(news.name)｜\($0.title)｜\($0.source ?? "来源未知")｜\($0.publishedAt ?? "日期未知")｜\($0.url)" } }.joined(separator: "\n")
-                                        let evidence = [
-                                            NextEvidence(id: "advisor-holdings-\(UUID().uuidString)", title: "真实持仓与本地交易筛选", detail: holdingsText.isEmpty ? "无持仓报告" : holdingsText, level: "NAS 本地数据分析", observedAt: stamp),
-                                            NextEvidence(id: "advisor-news-\(UUID().uuidString)", title: "新闻标题与来源链接", detail: newsText.isEmpty ? "本次无可用新闻标题" : newsText, level: "Google News RSS 聚合；标题未核实", observedAt: stamp),
-                                            NextEvidence(id: "advisor-ai-\(UUID().uuidString)", title: "在线 AI 综合分析", detail: saved.ai.content ?? saved.ai.message ?? "在线 AI 不可用", level: saved.ai.provider ?? "未连接", observedAt: stamp)
-                                        ]
-                                        let manualReviewOption = NextOption(
-                                            id: "manual-review",
-                                            title: "逐项核对后自行决定",
-                                            rationale: "\(saved.notice)\n\(holdingsText)",
-                                            tradeoff: "限价与收益均为条件估算；只有券商内自行核对后手工下单才会执行。",
-                                            evidenceIDs: evidence.map { $0.id })
-                                        let next = NextDecision(createdAt: stamp, title: "私人投资顾问 · \(saved.positions.count) 只真实持仓",
-                                            evidence: evidence,
-                                            options: [manualReviewOption],
-                                            status: "分析已保存 · 不会自动下单", origin: "NAS DeepSeek + 本地交易数据筛选")
-                                        model.recordDecision(next)
-                                    }
-                                } catch { advisorAnalysis = nil; advisorAnalysisError = error.localizedDescription }
+                                    advisorInventory = try await NextNASService.advisorInventory(baseURL: model.preferences.nasBaseURL)
+                                    advisorInventoryError = nil
+                                } catch { advisorInventory = nil; advisorInventoryError = error.localizedDescription }
                             }
-                        }
-                        Button("取消", role: .cancel) { }
-                    } message: {
-                        Text("持仓、现金、行情与分时将发送给 NAS DeepSeek；证券名称和代码会用于 Google News RSS 搜索并传送给 Google。请确认本次数据传输；仅生成研究与手工限价参考，不会下单。")
-                    }
-                    Text("确认后会把真实持仓、NAS 行情与归档分时，以及新闻标题发送给 NAS 在线 AI。AI 不会创建订单；价格方案须满足数据与交易规则门槛。").font(.caption2).foregroundStyle(p.muted)
-                    if let error = advisorAnalysisError { Text(error).font(.caption).foregroundStyle(p.risk) }
-                    if let analysis = advisorAnalysis {
-                        Text(analysis.notice).font(.caption).foregroundStyle(p.muted)
-                        ForEach(analysis.positions) { position in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("\(position.name) · \(position.decision) · 有效分时 \(position.qualifiedDays) 天").font(.subheadline.weight(.medium))
-                                if let basis = position.costBasis {
-                                    Text("成本 ¥\(basis.bookCost ?? "—") · 均价 ¥\(basis.averageCostPerUnit ?? "—") · 回本参考 ¥\(basis.breakEvenAfterOneEstimatedExitFee ?? basis.breakEvenBeforeExitFee ?? "—") · 浮盈亏 ¥\(basis.unrealizedPnlBeforeExitFee ?? "—") · 占比 \(position.portfolioWeightPercent ?? "—")%").font(.caption)
+                        }.disabled(checkingAdvisorInventory || model.preferences.nasBaseURL.isEmpty)
+                        GPActionButton(title: runningAdvisorAnalysis ? "正在分析…" : "授权 AI 综合分析与交易方案", secondary: true, systemImage: "sparkles") {
+                            showAdvisorAIConsent = true
+                        }.disabled(runningAdvisorAnalysis || model.preferences.nasBaseURL.isEmpty || model.book.positions.allSatisfy { $0.units == 0 })
+                        .confirmationDialog("发送真实持仓给 NAS AI？", isPresented: $showAdvisorAIConsent, titleVisibility: .visible) {
+                            Button("确认并开始分析") {
+                                Task {
+                                    runningAdvisorAnalysis = true
+                                    defer { runningAdvisorAnalysis = false }
+                                    do {
+                                        advisorAnalysis = try await NextNASService.analyzeRealHoldings(baseURL: model.preferences.nasBaseURL,
+                                            book: model.book, rules: model.rules)
+                                        advisorAnalysisError = nil
+                                        if let saved = advisorAnalysis {
+                                            let stamp = Date()
+                                            let holdingsText = saved.positions.map { position in
+                                                let planText = position.plan?.keys.sorted().map { "\($0)=\(position.plan![$0]!.displayText)" }.joined(separator: ", ") ?? "无具体方案"
+                                                return "\(position.name) \(position.code)：\(position.decision)，持仓 \(position.units) 份，成本均价 ¥\(position.costBasis?.averageCostPerUnit ?? "未知")，回本参考 ¥\(position.costBasis?.breakEvenAfterOneEstimatedExitFee ?? "未知")，未实现盈亏 ¥\(position.costBasis?.unrealizedPnlBeforeExitFee ?? "未知")，可卖份额口径：\(position.availableUnitsBasis ?? "未知")，方案：\(planText)，风险：\(position.risks.joined(separator: "；"))"
+                                            }.joined(separator: "\n")
+                                            let newsText = saved.news.flatMap { news in news.items.map { "\(news.name)｜\($0.title)｜\($0.source ?? "来源未知")｜\($0.publishedAt ?? "日期未知")｜\($0.url)" } }.joined(separator: "\n")
+                                            let evidence = [
+                                                NextEvidence(id: "advisor-holdings-\(UUID().uuidString)", title: "真实持仓与本地交易筛选", detail: holdingsText.isEmpty ? "无持仓报告" : holdingsText, level: "NAS 本地数据分析", observedAt: stamp),
+                                                NextEvidence(id: "advisor-news-\(UUID().uuidString)", title: "新闻标题与来源链接", detail: newsText.isEmpty ? "本次无可用新闻标题" : newsText, level: "Google News RSS 聚合；标题未核实", observedAt: stamp),
+                                                NextEvidence(id: "advisor-ai-\(UUID().uuidString)", title: "在线 AI 综合分析", detail: saved.ai.content ?? saved.ai.message ?? "在线 AI 不可用", level: saved.ai.provider ?? "未连接", observedAt: stamp)
+                                            ]
+                                            let manualReviewOption = NextOption(
+                                                id: "manual-review",
+                                                title: "逐项核对后自行决定",
+                                                rationale: "\(saved.notice)\n\(holdingsText)",
+                                                tradeoff: "限价与收益均为条件估算；只有券商内自行核对后手工下单才会执行。",
+                                                evidenceIDs: evidence.map { $0.id })
+                                            let next = NextDecision(createdAt: stamp, title: "私人投资顾问 · \(saved.positions.count) 只真实持仓",
+                                                evidence: evidence,
+                                                options: [manualReviewOption],
+                                                status: "分析已保存 · 不会自动下单", origin: "NAS DeepSeek + 本地交易数据筛选")
+                                            model.recordDecision(next)
+                                        }
+                                    } catch { advisorAnalysis = nil; advisorAnalysisError = error.localizedDescription }
                                 }
-                                if let availableBasis = position.availableUnitsBasis { Text(availableBasis).font(.caption2) }
-                                if let plan = position.plan {
-                                    Text(plan.keys.sorted().map { "\($0)：\(plan[$0]!.displayText)" }.joined(separator: " · ")).font(.caption).textSelection(.enabled)
-                                }
-                                Text(position.risks.joined(separator: "；")).font(.caption2)
-                            }.foregroundStyle(p.muted)
+                            }
+                            Button("取消", role: .cancel) { }
+                        } message: {
+                            Text("持仓、现金、行情与分时将发送给 NAS DeepSeek；证券名称和代码会用于 Google News RSS 搜索并传送给 Google。请确认本次数据传输；仅生成研究与手工限价参考，不会下单。")
                         }
-                        ForEach(analysis.news) { news in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(news.name) 新闻 · \(news.state == "ok" ? "Google News RSS" : "暂不可用")").font(.caption.weight(.semibold))
-                                ForEach(news.items.prefix(4)) { item in
-                                    if let url = URL(string: item.url) { Link(item.title, destination: url).font(.caption).lineLimit(2) }
-                                }
-                                if news.items.isEmpty { Text("暂无可用新闻标题；AI 分析会把新闻数据缺口标明").font(.caption2) }
-                            }.foregroundStyle(p.muted)
-                        }
-                        if let content = analysis.ai.content { Text(content).font(.subheadline).textSelection(.enabled).foregroundStyle(p.ink) }
-                        else { Text(analysis.ai.message ?? "在线 AI 暂不可用；以上为本地规则与数据统计").font(.caption).foregroundStyle(p.muted) }
-                    }
-                    if let error = advisorInventoryError { Text(error).font(.caption).foregroundStyle(p.risk) }
-                    if let inventory = advisorInventory {
-                        Text(inventory.notice).font(.caption).foregroundStyle(p.muted)
-                        Text("NAS 账本修订 \(inventory.bookRevision)").font(.caption2).foregroundStyle(p.muted)
-                        if inventory.positions.isEmpty { Text("NAS 真实账本没有持仓").font(.caption) }
-                        ForEach(inventory.positions) { position in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("\(position.name) · \(position.code) · \(position.decision)").font(.subheadline.weight(.medium))
-                                Text("\(position.units) 份 · 分时 \(position.days) 天，其中 \(position.completeDays) 天满足最低点数；\(position.firstDay ?? "—") 至 \(position.lastDay ?? "—")").font(.caption)
-                                Text(position.reasons.joined(separator: "；")).font(.caption2)
-                            }.foregroundStyle(p.muted)
-                        }
+                        Text("确认后会把真实持仓、NAS 行情与归档分时，以及新闻标题发送给 NAS 在线 AI。AI 不会创建订单；价格方案须满足数据与交易规则门槛。").font(.caption2).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                        if let error = advisorAnalysisError { Text(error).font(.caption).foregroundStyle(p.risk).fixedSize(horizontal: false, vertical: true) }
+                        if let analysis = advisorAnalysis { advisorAnalysisCard(analysis) }
+                        if let error = advisorInventoryError { Text(error).font(.caption).foregroundStyle(p.risk).fixedSize(horizontal: false, vertical: true) }
+                        if let inventory = advisorInventory { advisorInventoryCard(inventory) }
                     }
                 }
                 // 账户体检：按报告方法论，先看账户（集中度、现金覆盖），再看单只资产，最后看执行。
                 EditorialSection(title: "账户体检 · 一键扫描", trailing: inspecting ? "扫描中" : "本机规则", accent: p.forest) {
-                    GPActionButton(title: inspecting ? "扫描中…" : "一键体检全部持仓", secondary: true, systemImage: "stethoscope") { runInspection() }
-                    if let inspectSummary { Text(inspectSummary).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true) }
-                    if !inspectResults.isEmpty {
-                        let totalMV = inspectResults.reduce(Decimal.zero) { acc, r in
-                            guard let price = model.quotes[r.code]?.quote.price else { return acc }
-                            let units = model.book.positions.first(where: { $0.code == r.code })?.units ?? 0
-                            return acc + price * Decimal(units)
+                    VStack(alignment: .leading, spacing: 10) {
+                        GPActionButton(title: inspecting ? "扫描中…" : "一键体检全部持仓", secondary: true, systemImage: "stethoscope") { runInspection() }
+                        if let inspectSummary { Text(inspectSummary).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true) }
+                        if !inspectResults.isEmpty {
+                            let totalMV = inspectResults.reduce(Decimal.zero) { acc, r in
+                                guard let price = model.quotes[r.code]?.quote.price else { return acc }
+                                let units = model.book.positions.first(where: { $0.code == r.code })?.units ?? 0
+                                return acc + price * Decimal(units)
+                            }
+                            let annual = model.book.positions.reduce(Decimal.zero) { acc, pos in
+                                let events = NextDividendAnalytics.merged(model.book.dividendEvents + (model.dividendEvents[pos.code] ?? []))
+                                let per = NextDividendAnalytics.recentVerifiedPerShare(code: pos.code, events: events, today: dividendTodayString())
+                                return acc + per * Decimal(pos.units)
+                            }
+                            let maxW = inspectResults.map(\.weight).max() ?? 0
+                            // 四联指标两行两列：手机上每张卡有足够宽度显示完整金额，不会挤成省略号。
+                            HStack(spacing: 10) {
+                                GPStatTile(label: "持仓市值", value: "¥\(NextMoney.text(totalMV))", emphasis: p.chartBlue)
+                                GPStatTile(label: "现金", value: "¥\(NextMoney.text(model.book.cash))", emphasis: p.jade)
+                            }
+                            HStack(spacing: 10) {
+                                GPStatTile(label: "最高占比", value: "\(NextMoney.text(Decimal(maxW * 100), digits: 0))%", emphasis: maxW > 0.4 ? p.risk : p.terracotta)
+                                GPStatTile(label: "预计年股息", value: "¥\(NextMoney.text(annual))", emphasis: p.chartGold)
+                            }
+                            GPCard {
+                                Text("逐持仓结论（按仓位占比排序）").font(.caption.weight(.medium)).foregroundStyle(p.ink)
+                                ForEach(inspectResults) { r in inspectRow(r) }
+                            }
+                        } else if inspectSummary != nil {
+                            GPInlineEmpty(symbol: "tray", text: "暂无可体检持仓：先在「持仓」页录入份额，再回来一键扫描。")
                         }
-                        let annual = model.book.positions.reduce(Decimal.zero) { acc, pos in
-                            let events = NextDividendAnalytics.merged(model.book.dividendEvents + (model.dividendEvents[pos.code] ?? []))
-                            let per = NextDividendAnalytics.recentVerifiedPerShare(code: pos.code, events: events, today: dividendTodayString())
-                            return acc + per * Decimal(pos.units)
-                        }
-                        let maxW = inspectResults.map(\.weight).max() ?? 0
-                        HStack(spacing: 10) {
-                            inspectStat(title: "持仓市值", value: "¥\(NextMoney.text(totalMV))", color: p.chartBlue)
-                            inspectStat(title: "现金", value: "¥\(NextMoney.text(model.book.cash))", color: p.jade)
-                            inspectStat(title: "最高占比", value: "\(NextMoney.text(Decimal(maxW * 100), digits: 0))%", color: maxW > 0.4 ? p.risk : p.terracotta)
-                            inspectStat(title: "预计年股息", value: "¥\(NextMoney.text(annual))", color: p.chartGold)
-                        }
-                        Text("逐持仓结论（按仓位占比排序）").font(.caption.weight(.medium)).foregroundStyle(p.ink).padding(.top, 6)
-                        ForEach(inspectResults) { r in inspectRow(r) }
                     }
                 }
                 Text("分析会结合本机账本、有效行情、预算和风险限制。没有来源的数据会明确标为缺口。").font(.subheadline).foregroundStyle(p.muted).padding(.top, 5)
                 EditorialSection(title: "你的目标与资金") {
-                    HStack(spacing: 10) { compactField("期限（年）", text: $years); compactField("每月新增预算", text: $budget); compactField("集中度线 %", text: $limit) }
-                    Text("目标仓位（可留空；填写后合计须为 100%）").font(.caption2).foregroundStyle(p.muted)
-                    ForEach(model.preferences.watch, id: \.self) { targetCode in
-                        HStack(spacing: 8) {
-                            Text("\(knownName(targetCode)) · \(targetCode)").font(.caption).lineLimit(1)
-                            Spacer(minLength: 4)
-                            TextField("目标 %", text: Binding(get: { targetWeightsText[targetCode] ?? "" }, set: { targetWeightsText[targetCode] = $0 }))
-                                .keyboardType(.decimalPad).textFieldStyle(.roundedBorder).frame(width: 86).accessibilityLabel("\(targetCode) 目标仓位百分比")
+                    GPCard {
+                        HStack(spacing: 10) { compactField("期限（年）", text: $years); compactField("每月新增预算", text: $budget); compactField("集中度线 %", text: $limit) }
+                        Text("目标仓位（可留空；填写后合计须为 100%）").font(.caption2).foregroundStyle(p.muted)
+                        ForEach(model.preferences.watch, id: \.self) { targetCode in
+                            HStack(spacing: 8) {
+                                Text("\(knownName(targetCode)) · \(targetCode)").font(.caption).lineLimit(1)
+                                Spacer(minLength: 4)
+                                TextField("目标 %", text: Binding(get: { targetWeightsText[targetCode] ?? "" }, set: { targetWeightsText[targetCode] = $0 }))
+                                    .keyboardType(.decimalPad).textFieldStyle(.roundedBorder).frame(width: 86).accessibilityLabel("\(targetCode) 目标仓位百分比")
+                            }
                         }
+                        HStack {
+                            Button("保存目标") {
+                                do {
+                                    var weights: [String: Decimal] = [:]
+                                    for (targetCode, text) in targetWeightsText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { weights[targetCode] = try NextMoney.parse(text) }
+                                    try model.saveGoal(years: Int(years) ?? 0, monthlyBudget: try NextMoney.parse(budget), concentration: try NextMoney.parse(limit), targetWeights: weights)
+                                } catch { model.errorMessage = error.localizedDescription }
+                            }.font(.caption.weight(.semibold)).tint(p.forest)
+                            Spacer(minLength: 8)
+                            Text("只保存在本机").font(.caption2).foregroundStyle(p.muted)
+                        }
+                        GPDataRow(title: "资金边界", value: "不动用真实现金", note: "计划和真实账本分开")
                     }
-                    Button("保存目标") {
-                        do {
-                            var weights: [String: Decimal] = [:]
-                            for (targetCode, text) in targetWeightsText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { weights[targetCode] = try NextMoney.parse(text) }
-                            try model.saveGoal(years: Int(years) ?? 0, monthlyBudget: try NextMoney.parse(budget), concentration: try NextMoney.parse(limit), targetWeights: weights)
-                        } catch { model.errorMessage = error.localizedDescription }
-                    }.font(.caption.weight(.semibold)).tint(p.forest)
-                    GPDataRow(title: "资金边界", value: "不动用真实现金", note: "计划和真实账本分开")
                 }
                 GPActionButton(title: "分析买入机会", systemImage: "sparkles") {
                     result = model.research(for: code)
@@ -911,30 +988,34 @@ private struct DecisionScreen: View {
                 }.padding(.vertical, 10)
                 if let code {
                     AIInputsCard(code: code)
-                    EditorialSection(title: "NAS DeepSeek 私人顾问") {
-                        Text("使用 NAS 已配置的模型密钥；点击后，本次分析会把该 ETF 的报价、IOPV（若来源提供）、最多 250 根日 K、相关持仓、现金、近 30 笔该证券流水、分红档案和投资目标发送到你的 NAS，再由 NAS 请求模型。不会传输 API key，也不会发出交易。")
-                            .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
-                        GPActionButton(title: requestingMobileAI ? "正在通过 NAS 分析…" : "授权并通过 NAS 分析", secondary: true, systemImage: "externaldrive.badge.sparkles") {
-                            showNASAIConsent = true
-                        }.disabled(requestingMobileAI || model.preferences.nasBaseURL.isEmpty)
-                        if model.preferences.nasBaseURL.isEmpty {
-                            Text("先在设置中连接 NAS。NAS AI 使用 NAS 自己配置的密钥，不需要每次重新输入。")
-                                .font(.caption).foregroundStyle(p.terracotta)
+                    EditorialSection(title: "NAS DeepSeek 私人顾问", accent: p.chartViolet) {
+                        GPCard(accent: p.chartViolet) {
+                            Text("使用 NAS 已配置的模型密钥；点击后，本次分析会把该 ETF 的报价、IOPV（若来源提供）、最多 250 根日 K、相关持仓、现金、近 30 笔该证券流水、分红档案和投资目标发送到你的 NAS，再由 NAS 请求模型。不会传输 API key，也不会发出交易。")
+                                .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                            GPActionButton(title: requestingMobileAI ? "正在通过 NAS 分析…" : "授权并通过 NAS 分析", secondary: true, systemImage: "externaldrive.badge.sparkles") {
+                                showNASAIConsent = true
+                            }.disabled(requestingMobileAI || model.preferences.nasBaseURL.isEmpty)
+                            if model.preferences.nasBaseURL.isEmpty {
+                                Text("先在设置中连接 NAS。NAS AI 使用 NAS 自己配置的密钥，不需要每次重新输入。")
+                                    .font(.caption).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
-                    EditorialSection(title: "手机端 DeepSeek 分析") {
-                        Text("仅在你点击后，将这只 ETF 的缓存行情、相关持仓成本与份额、投资期限和月预算发送给 DeepSeek；不发送完整账本。只生成分析，不会下单。")
-                            .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
-                        GPActionButton(title: requestingMobileAI ? "正在生成分析…" : "使用手机密钥分析 \(knownName(code))", secondary: true, systemImage: "sparkles") {
-                            Task { await runMobileAI(for: code) }
-                        }.disabled(requestingMobileAI || !mobileAIKeyAvailable)
-                        if !mobileAIKeyAvailable {
-                            Text("请先在设置 → AI 投资研究输入并测试 DeepSeek API key。")
-                                .font(.caption).foregroundStyle(p.terracotta)
+                    EditorialSection(title: "手机端 DeepSeek 分析", accent: p.terracotta) {
+                        GPCard(accent: p.terracotta) {
+                            Text("仅在你点击后，将这只 ETF 的缓存行情、相关持仓成本与份额、投资期限和月预算发送给 DeepSeek；不发送完整账本。只生成分析，不会下单。")
+                                .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                            GPActionButton(title: requestingMobileAI ? "正在生成分析…" : "使用手机密钥分析 \(knownName(code))", secondary: true, systemImage: "sparkles") {
+                                Task { await runMobileAI(for: code) }
+                            }.disabled(requestingMobileAI || !mobileAIKeyAvailable)
+                            if !mobileAIKeyAvailable {
+                                Text("请先在设置 → AI 投资研究输入并测试 DeepSeek API key。")
+                                    .font(.caption).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let mobileAIError { GPStatus(title: "手机端 AI 暂不可用", detail: mobileAIError, symbol: "exclamationmark.triangle") }
                         }
-                        if let mobileAIError { GPStatus(title: "手机端 AI 暂不可用", detail: mobileAIError, symbol: "exclamationmark.triangle") }
                         if let mobileAIResult {
-                            DataPanel(title: "DeepSeek 分析", caption: "已记录到历史决策") {
+                            DataPanel(title: "DeepSeek 分析", caption: "已记录到历史决策", accent: p.terracotta) {
                                 AIAnswerView(text: mobileAIResult)
                             }
                         }
@@ -942,76 +1023,92 @@ private struct DecisionScreen: View {
                 }
                 if analyzed {
                     if let code, let report = model.nasResearch[code] {
-                        EditorialSection(title: "NAS 独立研究") {
-                            if let ai = report.ai {
-                                AIAnswerView(text: ai.content)
-                                GPDataRow(title: "来源", value: "\(ai.provider) · \(ai.model)", note: "数据截至 \(ai.asOf) · 不连接券商")
-                                if let staleMessage = researchDateStatus(report, code: code) {
-                                    Label(staleMessage, systemImage: "clock.badge.exclamationmark").font(.caption).foregroundStyle(p.terracotta)
-                                }
-                            } else if let factors = report.factors {
-                                GPDataRow(title: "本地因子", value: factors.state, note: "\(factors.source) · \(factors.asOf)")
-                                Text(report.providerStatus?.message ?? (report.providerConfigured ? "已配置模型服务；尚无该日成功生成的 DeepSeek 结论。" : "NAS 尚未配置 DeepSeek API key；当前只有可追溯的本地因子。"))
-                                    .font(.caption).foregroundStyle(p.muted)
-                            } else { GPStatus(title: "NAS 尚无研究记录", detail: "等待日 K 归档与后台研究任务完成。", symbol: "clock") }
-                        }
-                    }
-                    EditorialSection(title: "结论") {
-                        Text(result?.title ?? "先补齐行情和证据").font(.system(.title3, design: .serif).weight(.semibold)).foregroundStyle(p.ink)
-                        Text(hasRecordedMobileAI ? "已包含 DeepSeek 手机端分析；建议基于所列行情快照，仅供研究，不构成交易指令。" : (result?.origin == "本地规则检查" ? "当前结果由本地规则整理，不是 AI 生成建议。" : "待接入 AI 服务，并为每项结论保存可追溯来源。"))
-                            .font(.caption).foregroundStyle(p.muted)
-                    }
-                    EditorialSection(title: "依据与风险") {
-                        if let result { ForEach(result.evidence) { item in VStack(alignment: .leading, spacing: 4) { GPDataRow(title: item.title, value: item.level); Text(item.detail).font(.caption).foregroundStyle(p.muted) }.padding(.vertical, 4) } }
-                        else { GPStatus(title: "证据暂不完整", detail: "补充有效行情或持仓后，才会展开可核实的依据。", symbol: "doc.text.magnifyingglass") }
-                    }
-                    EditorialSection(title: "耐心限价计划") {
-                        Text("设置你愿意观察的价格与份额。达到条件时通知你；这不是券商订单，不占用现金，也不会自动买入。")
-                            .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("观察限价（¥）").font(.caption2).foregroundStyle(p.muted)
-                                TextField("自行输入目标价", text: $patientLimitPrice).keyboardType(.decimalPad).textFieldStyle(.roundedBorder).accessibilityLabel("观察限价")
-                            }
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("计划份额").font(.caption2).foregroundStyle(p.muted)
-                                TextField("100", text: $patientLimitUnits).keyboardType(.numberPad).textFieldStyle(.roundedBorder).accessibilityLabel("计划份额")
+                        EditorialSection(title: "NAS 独立研究", trailing: "已归档", accent: p.chartViolet) {
+                            DataPanel(title: "NAS DeepSeek 研究", caption: report.ai?.provider ?? "本地因子", accent: p.chartViolet) {
+                                if let ai = report.ai {
+                                    AIAnswerView(text: ai.content)
+                                    GPDataRow(title: "来源", value: "\(ai.provider) · \(ai.model)", note: "数据截至 \(ai.asOf) · 不连接券商")
+                                    if let staleMessage = researchDateStatus(report, code: code) {
+                                        Label(staleMessage, systemImage: "clock.badge.exclamationmark").font(.caption).foregroundStyle(p.terracotta)
+                                    }
+                                } else if let factors = report.factors {
+                                    GPDataRow(title: "本地因子", value: factors.state, note: "\(factors.source) · \(factors.asOf)")
+                                    Text(report.providerStatus?.message ?? (report.providerConfigured ? "已配置模型服务；尚无该日成功生成的 DeepSeek 结论。" : "NAS 尚未配置 DeepSeek API key；当前只有可追溯的本地因子。"))
+                                        .font(.caption).foregroundStyle(p.muted)
+                                } else { GPInlineEmpty(symbol: "clock", text: "NAS 尚无研究记录：等待日 K 归档与后台研究任务完成。") }
                             }
                         }
-                        DatePicker("提醒有效至", selection: $patientLimitExpiry, in: Date()..., displayedComponents: .date)
-                            .font(.caption).tint(p.forest)
-                        GPActionButton(title: "保存观察计划", secondary: true, systemImage: "bell.badge") {
-                            guard let code else { return }
-                            do {
-                                try model.createPatientLimitPlan(code: code, price: NextMoney.parse(patientLimitPrice), units: Int(patientLimitUnits) ?? 0, expiresAt: patientLimitExpiry)
-                                patientLimitPrice = ""
-                            } catch { model.errorMessage = error.localizedDescription }
+                    }
+                    EditorialSection(title: "结论", accent: p.forest) {
+                        DataPanel(title: "当前结论", caption: result == nil ? "待生成" : (hasRecordedMobileAI ? "含手机端分析" : nil), accent: p.forest) {
+                            Text(result?.title ?? "先补齐行情和证据").font(.system(.title3, design: .serif).weight(.semibold)).foregroundStyle(p.ink)
+                            Text(hasRecordedMobileAI ? "已包含 DeepSeek 手机端分析；建议基于所列行情快照，仅供研究，不构成交易指令。" : (result?.origin == "本地规则检查" ? "当前结果由本地规则整理，不是 AI 生成建议。" : "待接入 AI 服务，并为每项结论保存可追溯来源。"))
+                                .font(.caption).foregroundStyle(p.muted)
                         }
-                        let plans = model.patientLimitPlans.filter { $0.code == code }
-                        if plans.isEmpty {
-                            Text("尚无此证券的观察计划。目标价由你决定，不会用未经验证的 AI 价格替你填入。")
-                                .font(.caption2).foregroundStyle(p.muted)
+                    }
+                    EditorialSection(title: "依据与风险", accent: p.chartGold) {
+                        DataPanel(title: "证据与风险", caption: "可逐条核对", accent: p.chartGold) {
+                            if let result, !result.evidence.isEmpty {
+                                ForEach(result.evidence) { item in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        GPDataRow(title: item.title, value: item.level)
+                                        Text(item.detail).font(.caption).foregroundStyle(p.muted).textSelection(.enabled)
+                                    }.padding(.vertical, 4)
+                                }
+                            } else {
+                                GPInlineEmpty(symbol: "doc.text.magnifyingglass", text: "证据暂不完整：补充有效行情或持仓后，才会展开可核实的依据。")
+                            }
                         }
-                        ForEach(plans) { plan in
-                            VStack(alignment: .leading, spacing: 7) {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text("\(plan.name) · ¥\(NextMoney.text(plan.limitPrice, digits: 3)) · \(plan.units) 份").font(.subheadline.weight(.semibold)).foregroundStyle(p.ink)
-                                    Spacer()
-                                    Text(plan.state).font(.caption2.weight(.medium)).foregroundStyle(plan.state == "价格已触发" ? p.forest : p.muted)
+                    }
+                    EditorialSection(title: "耐心限价计划", accent: p.jade) {
+                        GPCard(accent: p.jade) {
+                            Text("设置你愿意观察的价格与份额。达到条件时通知你；这不是券商订单，不占用现金，也不会自动买入。")
+                                .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("观察限价（¥）").font(.caption2).foregroundStyle(p.muted)
+                                    TextField("自行输入目标价", text: $patientLimitPrice).keyboardType(.decimalPad).textFieldStyle(.roundedBorder).accessibilityLabel("观察限价")
                                 }
-                                GPDataRow(title: "有效期", value: plan.expiresAt.formatted(date: .abbreviated, time: .omitted), note: plan.triggeredAt.map { "触发于 \($0.formatted(date: .omitted, time: .shortened))" } ?? "本机保存 · 到价提醒 · 不会下单")
-                                if plan.state == "等待价格提醒" {
-                                    HStack {
-                                        Button("暂停提醒") { model.pausePatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
-                                        Button("撤销计划", role: .destructive) { model.cancelPatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
-                                    }
-                                } else if plan.state == "已暂停" {
-                                    HStack {
-                                        Button("恢复提醒") { model.resumePatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
-                                        Button("撤销计划", role: .destructive) { model.cancelPatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
-                                    }
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("计划份额").font(.caption2).foregroundStyle(p.muted)
+                                    TextField("100", text: $patientLimitUnits).keyboardType(.numberPad).textFieldStyle(.roundedBorder).accessibilityLabel("计划份额")
                                 }
-                            }.padding(.vertical, 5)
+                            }
+                            DatePicker("提醒有效至", selection: $patientLimitExpiry, in: Date()..., displayedComponents: .date)
+                                .font(.caption).tint(p.forest)
+                            GPActionButton(title: "保存观察计划", secondary: true, systemImage: "bell.badge") {
+                                guard let code else { return }
+                                do {
+                                    try model.createPatientLimitPlan(code: code, price: NextMoney.parse(patientLimitPrice), units: Int(patientLimitUnits) ?? 0, expiresAt: patientLimitExpiry)
+                                    patientLimitPrice = ""
+                                } catch { model.errorMessage = error.localizedDescription }
+                            }
+                            let plans = model.patientLimitPlans.filter { $0.code == code }
+                            if plans.isEmpty {
+                                Text("尚无此证券的观察计划。目标价由你决定，不会用未经验证的 AI 价格替你填入。")
+                                    .font(.caption2).foregroundStyle(p.muted)
+                            }
+                            ForEach(plans) { plan in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text("\(plan.name) · ¥\(NextMoney.text(plan.limitPrice, digits: 3)) · \(plan.units) 份").font(.subheadline.weight(.semibold)).foregroundStyle(p.ink)
+                                        Spacer()
+                                        Text(plan.state).font(.caption2.weight(.medium)).foregroundStyle(plan.state == "价格已触发" ? p.forest : p.muted)
+                                    }
+                                    GPDataRow(title: "有效期", value: plan.expiresAt.formatted(date: .abbreviated, time: .omitted), note: plan.triggeredAt.map { "触发于 \($0.formatted(date: .omitted, time: .shortened))" } ?? "本机保存 · 到价提醒 · 不会下单")
+                                    if plan.state == "等待价格提醒" {
+                                        HStack {
+                                            Button("暂停提醒") { model.pausePatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
+                                            Button("撤销计划", role: .destructive) { model.cancelPatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
+                                        }
+                                    } else if plan.state == "已暂停" {
+                                        HStack {
+                                            Button("恢复提醒") { model.resumePatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
+                                            Button("撤销计划", role: .destructive) { model.cancelPatientLimitPlan(plan.id) }.font(.caption.weight(.medium))
+                                        }
+                                    }
+                                }.padding(.vertical, 5)
+                            }
                         }
                     }
                     EditorialSection(title: "后续跟踪") { NavigationLink(value: GPRoute.alerts) { IntentRow(icon: "bell", title: "设置价格与风险提醒", detail: "触发时检查数据时间和来源") } }
@@ -1310,21 +1407,23 @@ private struct AIInputsCard: View {
     }
     var body: some View {
         EditorialSection(title: "本次分析的输入", trailing: "可核对", accent: p.forest) {
-            if let cached = model.quotes[code] {
-                GPDataRow(title: "行情快照", value: "¥\(NextMoney.text(cached.quote.price, digits: 3))",
-                          note: "\(cached.quote.source) · \(cached.quote.time.formatted(date: .numeric, time: .shortened)) · \(cached.stamp.label(now: Date()))")
-            } else {
-                GPDataRow(title: "行情快照", value: "无缓存报价", note: "分析会标为缺口，不推测价格")
+            GPCard {
+                if let cached = model.quotes[code] {
+                    GPDataRow(title: "行情快照", value: "¥\(NextMoney.text(cached.quote.price, digits: 3))",
+                              note: "\(cached.quote.source) · \(cached.quote.time.formatted(date: .numeric, time: .shortened)) · \(cached.stamp.label(now: Date()))")
+                } else {
+                    GPDataRow(title: "行情快照", value: "无缓存报价", note: "分析会标为缺口，不推测价格")
+                }
+                if let position = model.book.positions.first(where: { $0.code == code }) {
+                    GPDataRow(title: "本机持仓", value: "\(position.units) 份 · 成本 ¥\(NextMoney.text(position.bookCost))",
+                              note: "每份 ¥\(NextMoney.text(position.costPerUnit, digits: 3))")
+                } else {
+                    GPDataRow(title: "本机持仓", value: "未记录", note: "仅给出一般性观察")
+                }
+                GPDataRow(title: "账本体检", value: "\(healthCount) 项待处理", note: "名称/成本/报价/集中度缺口会写进提示")
+                GPDataRow(title: "投资目标", value: "\(model.goal.years) 年 · 月预算 ¥\(NextMoney.text(model.goal.monthlyBudget))",
+                          note: "集中度线 \(NextMoney.text(model.goal.concentrationLimit))%")
             }
-            if let position = model.book.positions.first(where: { $0.code == code }) {
-                GPDataRow(title: "本机持仓", value: "\(position.units) 份 · 成本 ¥\(NextMoney.text(position.bookCost))",
-                          note: "每份 ¥\(NextMoney.text(position.costPerUnit, digits: 3))")
-            } else {
-                GPDataRow(title: "本机持仓", value: "未记录", note: "仅给出一般性观察")
-            }
-            GPDataRow(title: "账本体检", value: "\(healthCount) 项待处理", note: "名称/成本/报价/集中度缺口会写进提示")
-            GPDataRow(title: "投资目标", value: "\(model.goal.years) 年 · 月预算 ¥\(NextMoney.text(model.goal.monthlyBudget))",
-                      note: "集中度线 \(NextMoney.text(model.goal.concentrationLimit))%")
         }
     }
 }

@@ -208,6 +208,38 @@ struct DataPanel<Content: View>: View {
     }
 }
 
+/// 白色圆角卡：参考设计稿「浅色柔和卡片」的统一容器。
+/// 与 DataPanel 的分工——DataPanel 带色条和渐变，用于「一条结论/一块结果」；
+/// GPCard 就是一张干净的白卡，用于承载表单、说明、列表这类成组内容。
+struct GPCard<Content: View>: View {
+    @Environment(\.gp) private var p
+    var accent: Color? = nil
+    var padding: CGFloat = 13
+    @ViewBuilder var content: Content
+    private var tone: Color { accent ?? p.forest }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) { content }
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(p.paper, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(tone.opacity(0.25), lineWidth: 0.8))
+            .shadow(color: tone.opacity(0.06), radius: 6, x: 0, y: 2)
+    }
+}
+
+/// 卡内轻量空态：有图标有说法，但不带 GPStatus 的大内边距（卡中嵌卡会显空）。
+struct GPInlineEmpty: View {
+    @Environment(\.gp) private var p
+    let symbol: String
+    let text: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 14, weight: .medium)).foregroundStyle(p.forest)
+            Text(text).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+    }
+}
+
 struct GPValue: View {
     @Environment(\.gp) private var p
     let label: String
