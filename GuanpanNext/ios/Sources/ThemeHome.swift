@@ -166,7 +166,7 @@ private struct EditorialBackdrop: View {
     let ink: Color
     var body: some View {
         GeometryReader { geo in
-            ZStack(alignment: .topTrailing) {
+            ZStack {
                 Circle().fill(tint.opacity(0.16))
                     .frame(width: geo.size.width * 0.9)
                     .offset(x: geo.size.width * 0.35, y: -geo.size.height * 0.06)
@@ -174,10 +174,68 @@ private struct EditorialBackdrop: View {
                 CitySilhouette().fill(ink.opacity(0.05))
                     .frame(width: geo.size.width * 0.7, height: 90)
                     .offset(x: 0, y: 78)
+                // ③ 编辑室风格装饰插画人物（矢量原创，低透明度融入背景，不依赖图片）。
+                ZStack(alignment: .bottomLeading) {
+                    EditorialFigure(ink: ink, tint: tint)
+                        .frame(width: min(geo.size.width * 0.52, 200), height: geo.size.height * 0.5)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .offset(x: -geo.size.width * 0.03, y: geo.size.height * 0.02)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// ③ 编辑室风格装饰插画人物：矢量原创，原创路径（非截图）。
+/// 低透明度，作为一个在暖色圆斑与城市剪影之间的"人物"装饰层，
+/// 让东方编辑室首页更有"编辑室里有人在盯盘"的氛围，而非纯金融排版。
+private struct EditorialFigure: View {
+    let ink: Color
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottomLeading) {
+                // 裙身 / 大衣：上窄下宽的弧线轮廓
+                Path { path in
+                    path.move(to: CGPoint(x: geo.size.width * 0.34, y: geo.size.height * 0.46))
+                    path.addCurve(to: CGPoint(x: geo.size.width * 0.16, y: geo.size.height),
+                                  control1: CGPoint(x: geo.size.width * 0.20, y: geo.size.height * 0.70),
+                                  control2: CGPoint(x: geo.size.width * 0.10, y: geo.size.height * 0.92))
+                    path.addLine(to: CGPoint(x: geo.size.width * 0.84, y: geo.size.height))
+                    path.addCurve(to: CGPoint(x: geo.size.width * 0.66, y: geo.size.height * 0.46),
+                                  control1: CGPoint(x: geo.size.width * 0.90, y: geo.size.height * 0.92),
+                                  control2: CGPoint(x: geo.size.width * 0.80, y: geo.size.height * 0.70))
+                    path.addQuadCurve(to: CGPoint(x: geo.size.width * 0.34, y: geo.size.height * 0.46),
+                                      control: CGPoint(x: geo.size.width * 0.50, y: geo.size.height * 0.38))
+                }
+                .fill(ink.opacity(0.055))
+                // 一侧手臂 + 手持文档（折角纸张）
+                Path { path in
+                    path.move(to: CGPoint(x: geo.size.width * 0.60, y: geo.size.height * 0.50))
+                    path.addQuadCurve(to: CGPoint(x: geo.size.width * 0.86, y: geo.size.height * 0.66),
+                                      control: CGPoint(x: geo.size.width * 0.78, y: geo.size.height * 0.54))
+                }
+                .stroke(ink.opacity(0.06), style: StrokeStyle(lineWidth: geo.size.width * 0.07, lineCap: .round))
+                RoundedRectangle(cornerRadius: geo.size.width * 0.02, style: .continuous)
+                    .fill(tint.opacity(0.10))
+                    .frame(width: geo.size.width * 0.20, height: geo.size.height * 0.24)
+                    .rotationEffect(.degrees(-14))
+                    .offset(x: geo.size.width * 0.74, y: geo.size.height * 0.40)
+                // 头发（脑后大弧，飘逸感）
+                Path { path in
+                    path.addEllipse(in: CGRect(x: geo.size.width * 0.34, y: geo.size.height * 0.04,
+                                               width: geo.size.width * 0.30, height: geo.size.height * 0.26))
+                }
+                .fill(ink.opacity(0.07))
+                // 脸
+                Circle().fill(tint.opacity(0.12))
+                    .frame(width: geo.size.width * 0.17, height: geo.size.height * 0.16)
+                    .offset(x: geo.size.width * 0.05, y: geo.size.height * 0.12)
+            }
+        }
     }
 }
 
@@ -784,6 +842,56 @@ private struct HoldingsSummaryCard: View {
 
 // MARK: - 1. 东方编辑室
 
+/// ① AI 顾问圆形头像（矢量占位，原创路径，不依赖图片资源）。
+/// 同时用于首页问候区与「AI 今日指导」卡片角标。
+private struct AdvisorAvatar: View {
+    @Environment(\.gp) private var p
+    let size: CGFloat
+    init(size: CGFloat = 44) { self.size = size }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(LinearGradient(colors: [p.chartGold, p.chartGold.opacity(0.55)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+            PersonSilhouette()
+                .fill(Color.white.opacity(0.95))
+                .frame(width: size * 0.62, height: size * 0.62)
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().stroke(Color.white.opacity(0.7), lineWidth: size > 30 ? 1.5 : 1))
+        .shadow(color: p.chartGold.opacity(0.25), radius: 4, x: 0, y: 2)
+    }
+}
+
+/// 头像内的人物剪影：头 + 肩，原创矢量，针对正方形区域绘制。
+private struct PersonSilhouette: Shape {
+    func path(in rect: CGRect) -> Path {
+        let cx = rect.width / 2
+        var path = Path()
+        // 头
+        let headR = rect.width * 0.20
+        let headCy = rect.height * 0.30
+        path.addArc(center: CGPoint(x: cx, y: headCy), radius: headR,
+                    startAngle: .degrees(0), endAngle: .degrees(360))
+        // 肩 / 身体（梯形圆角轮廓）
+        let shoulderY = rect.height * 0.54
+        let shoulderHalf = rect.width * 0.32
+        let bottomY = rect.height * 1.04
+        let bottomHalf = rect.width * 0.46
+        var body = Path()
+        body.move(to: CGPoint(x: cx - shoulderHalf, y: shoulderY))
+        body.addQuadCurve(to: CGPoint(x: cx - bottomHalf, y: bottomY),
+                          control: CGPoint(x: cx - shoulderHalf * 1.12, y: rect.height * 0.82))
+        body.addLine(to: CGPoint(x: cx + bottomHalf, y: bottomY))
+        body.addQuadCurve(to: CGPoint(x: cx + shoulderHalf, y: shoulderY),
+                          control: CGPoint(x: cx + shoulderHalf * 1.12, y: rect.height * 0.82))
+        body.addQuadCurve(to: CGPoint(x: cx - shoulderHalf, y: shoulderY),
+                          control: CGPoint(x: cx, y: rect.height * 0.44))
+        path.addPath(body)
+        return path
+    }
+}
+
 private struct EditorialHome: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.gp) private var p
@@ -793,11 +901,16 @@ private struct EditorialHome: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HomeTopBar()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(snapshot.greeting)！")
-                        .font(.system(size: 30, weight: .bold, design: .serif)).foregroundStyle(p.ink)
-                    Text(snapshot.dateText)
-                        .font(.system(size: 12)).foregroundStyle(p.muted)
+                HStack(alignment: .center, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(snapshot.greeting)！")
+                            .font(.system(size: 30, weight: .bold, design: .serif)).foregroundStyle(p.ink)
+                        Text(snapshot.dateText)
+                            .font(.system(size: 12)).foregroundStyle(p.muted)
+                    }
+                    Spacer(minLength: 4)
+                    // ① AI 顾问头像（问候区）
+                    AdvisorAvatar(size: 46)
                 }
                 Text(snapshot.headline)
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(p.ink)
@@ -823,11 +936,9 @@ private struct EditorialHome: View {
 
     private var aiCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle().fill(Color.white.opacity(0.55)).frame(width: 30, height: 30)
-                    Image(systemName: "lightbulb.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(p.chartGold)
-                }
+            HStack(spacing: 10) {
+                // ① AI 顾问头像（AI 卡角标）
+                AdvisorAvatar(size: 40)
                 Text("AI 今日指导").font(.system(size: 17, weight: .bold, design: .serif)).foregroundStyle(p.heroInk)
                 Spacer(minLength: 4)
                 Button { model.requestTab(.decision, route: .decision(nil)) } label: {
