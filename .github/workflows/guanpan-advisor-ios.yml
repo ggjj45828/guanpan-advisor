@@ -177,15 +177,16 @@ jobs:
             sleep 1
             xcrun simctl launch "$DEVICE_ID" com.guanpan.advisor.ios \
               -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN "$@" || true
-            sleep 9
+            sleep 25
             xcrun simctl io "$DEVICE_ID" screenshot "../shots/$name.png" || true
           }
-          shoot 1_editorial -theme editorial
-          shoot 2_modern -theme modern
-          shoot 3_dashboard -theme dashboard
-          shoot 4_magazine -theme magazine
-          shoot 5_puzzle -theme puzzle
-          shoot 6_profile -screen profile
+          shoot 1_editorial -demo -theme editorial
+          shoot 2_modern -demo -theme modern
+          shoot 3_dashboard -demo -theme dashboard
+          shoot 4_magazine -demo -theme magazine
+          shoot 5_puzzle -demo -theme puzzle
+          shoot 6_profile -demo -screen profile
+          shoot 7_profile_editorial -demo -theme editorial -screen profile
           ls -la ../shots
 
       - name: Upload screenshots

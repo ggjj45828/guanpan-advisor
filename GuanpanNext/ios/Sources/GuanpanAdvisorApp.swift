@@ -3,7 +3,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main struct GuanpanAdvisorApp: App {
-    @StateObject private var model = NextAppModel()
+    @StateObject private var model = NextAppModel(
+        repository: NextAppModel.isScreenshotDemo
+            ? NextLocalRepository(sandboxDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("GuanpanScreenshotSandbox", isDirectory: true))
+            : nil
+    )
     var body: some Scene { WindowGroup { RootView().environmentObject(model) } }
 }
 

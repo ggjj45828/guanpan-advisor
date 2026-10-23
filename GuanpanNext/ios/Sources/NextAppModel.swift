@@ -65,6 +65,19 @@ struct LocalPreferences: Codable {
             integrityWarning = "本机安全存储无法初始化：\(error.localizedDescription)；真实账本写入已停止。"
         }
     }
+    /// 截图/回归专用：存档根目录指到临时目录。
+    /// 这样自动截图可以自由写入样例持仓，而**真实账本文件一个字节都不会被碰**；
+    /// 只在启动参数带 `-demo` 时才会走到这里，正常启动永远用上面的正式目录。
+    init(sandboxDirectory: URL, fileManager: FileManager = .default) {
+        directory = sandboxDirectory.appendingPathComponent("GuanpanProNative", isDirectory: true)
+        recoveryDirectory = sandboxDirectory.appendingPathComponent("GuanpanProNative-Recovery", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        } catch {
+            integrityWarning = "截图沙盒目录无法初始化：\(error.localizedDescription)"
+        }
+    }
     func load<T: Decodable>(_ type: T.Type, filename: String, fallback: T) -> T {
         let url = directory.appendingPathComponent(filename)
         guard FileManager.default.fileExists(atPath: url.path) else { return fallback }
@@ -253,6 +266,30 @@ struct LocalPreferences: Codable {
         self.errorMessage = repository.integrityWarning
         // 启动时把「只有代码、没有名字」的标的补一次：账本里的旧数据、旧自选都能认出来。
         Task { await backfillNamesIfNeeded() }
+        if Self.isScreenshotDemo { seedScreenshotDemo() }
+    }
+
+    /// 截图/回归专用启动参数 `-demo`。
+    /// 只影响本次运行：存档指向临时目录、账本用样例持仓填充，真实账本与偏好文件完全不动。
+    /// 正式使用时永远不带这个参数，因此不会出现任何"模拟账户"。
+    static var isScreenshotDemo: Bool { ProcessInfo.processInfo.arguments.contains("-demo") }
+
+    private func seedScreenshotDemo() {
+        guard book.positions.isEmpty else { return }
+        // 样例取的是真实在场 ETF，行情走真实数据源，所以截图里的价格、涨跌、K 线都是真数据；
+        // 只有「你持有了多少、成本多少」是样例，用来检查长名称/大金额/极端盈亏下的排版。
+        let samples: [(String, String, Int, String)] = [
+            ("512480", "半导体设备ETF", 42000, "0.806"),
+            ("513630", "港股红利ETF", 68000, "0.712"),
+            ("513520", "日经ETF", 26000, "1.271"),
+            ("560510", "A500ETF", 90000, "0.981")
+        ]
+        for (code, name, units, costText) in samples {
+            guard let unitCost = Decimal(string: costText) else { continue }
+            try? addPosition(code: code, name: name, units: units, cost: unitCost * Decimal(units))
+        }
+        try? addCash(Decimal(86000), reason: "样例现金")
+        learnProfile()
     }
     func commitRealLedger(_ updated: NextBook, action: String, reason: String) throws {
         try updated.validate()
