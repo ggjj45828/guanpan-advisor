@@ -137,8 +137,11 @@ struct RootView: View {
         }
     }
     /// 手动选择优先于场景推断；没选过就跟随场景。
+    private var themeSelection: ThemeSelection {
+        model.preferences.themeStyle.map { ThemeSelection.fixed($0) } ?? .auto
+    }
     private var resolvedTheme: AppTheme {
-        ThemeManager.resolve(selection: ThemeManager.selection(from: model.preferences), scene: activeScene)
+        ThemeManager.resolve(selection: themeSelection, scene: activeScene)
     }
     private var palette: GPPalette {
         GPPalette(scheme: effectiveScheme, comfort: model.theme == .comfort,

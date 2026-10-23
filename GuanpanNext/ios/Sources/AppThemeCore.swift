@@ -113,20 +113,9 @@ enum ThemeSelection: Codable, Equatable {
 }
 
 /// 统一主题解析入口。这里只做「选择 → 主题」的纯函数计算，
-/// 不持有状态（状态在 `LocalPreferences.themeSelection`），避免出现第二个真相源。
+/// 不持有状态（状态存在 `LocalPreferences.themeStyle`），避免出现第二个真相源。
 enum ThemeManager {
     static func resolve(selection: ThemeSelection, scene: ThemeScene) -> AppTheme {
         selection.fixedTheme ?? scene.recommendedTheme
-    }
-
-    static func selection(from preferences: LocalPreferences) -> ThemeSelection {
-        if let fixed = preferences.themeStyle { return .fixed(fixed) }
-        return .auto
-    }
-
-    /// 跟随场景时更新场景；固定主题时也把场景记下来，用户切回「跟随场景」立刻生效。
-    static func selection(fixed theme: AppTheme?) -> ThemeSelection {
-        guard let theme else { return .auto }
-        return .fixed(theme)
     }
 }
