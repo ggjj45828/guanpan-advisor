@@ -63,7 +63,7 @@ private struct GPTabBar: View {
         GPTabItem(tab: .assets, title: "持仓", icon: "square.stack.3d.up.fill"),
         GPTabItem(tab: .laboratory, title: "网格", icon: "square.grid.2x2.fill"),
         GPTabItem(tab: .income, title: "收息", icon: "yensign.circle.fill"),
-        GPTabItem(tab: .decision, title: "AI 指导", icon: "sparkles"),
+        GPTabItem(tab: .decision, title: "首页", icon: "house.fill"),
         GPTabItem(tab: .mine, title: "我的", icon: "person.crop.circle.fill")
     ]
     var body: some View {
@@ -79,7 +79,20 @@ private struct GPTabBar: View {
                     }
                     .foregroundStyle(selected ? p.forest : p.muted)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 5)
+                    .background {
+                        // 编辑室 / 拼图把选中项做成一块色块，仪表盘用顶线，现代卡片保持纯色文字。
+                        if selected {
+                            switch p.theme {
+                            case .editorial, .puzzle, .magazine:
+                                Capsule().fill(p.tint).padding(.horizontal, 12).padding(.vertical, 2)
+                            case .dashboard:
+                                VStack { Capsule().fill(p.primary).frame(width: 16, height: 2); Spacer() }
+                            case .modern:
+                                EmptyView()
+                            }
+                        }
+                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -113,6 +126,24 @@ struct RootView: View {
         return stored == .overview ? .decision : stored
     }
     private var tabSelection: Binding<NextTab> { Binding(get: { activeTab }, set: { model.preferences.navigation.selectedTab = $0; model.preferences = model.preferences }) }
+    /// 当前页签对应的场景：首页编辑室、盘中仪表盘、持仓拼图、AI 日报杂志、详情现代卡片。
+    private var activeScene: ThemeScene {
+        switch activeTab {
+        case .decision: return .home
+        case .market: return .market
+        case .assets: return .holdings
+        case .income: return .aiReport
+        case .laboratory, .mine, .overview: return .detail
+        }
+    }
+    /// 手动选择优先于场景推断；没选过就跟随场景。
+    private var resolvedTheme: AppTheme {
+        ThemeManager.resolve(selection: ThemeManager.selection(from: model.preferences), scene: activeScene)
+    }
+    private var palette: GPPalette {
+        GPPalette(scheme: effectiveScheme, comfort: model.theme == .comfort,
+                  appearance: model.preferences.appearance, theme: resolvedTheme)
+    }
     var body: some View {
         // iOS 的 TabView 最多平铺 5 个位置：6 个 tab 会自动把多余的折叠进「More」，
         // 这就是底栏一直显示 4 个 + More 的根因。六个页签要全部平铺，
@@ -134,7 +165,7 @@ struct RootView: View {
                 .opacity(tabSelection.wrappedValue == .income ? 1 : 0)
                 .allowsHitTesting(tabSelection.wrappedValue == .income)
                 .accessibilityHidden(tabSelection.wrappedValue != .income)
-            PrimaryNavigation(title: "AI 引擎", tab: .decision) { DecisionScreen(code: nil) }
+            PrimaryNavigation(title: "首页", tab: .decision, showsHeader: false) { ThemeHomeScreen() }
                 .opacity(tabSelection.wrappedValue == .decision ? 1 : 0)
                 .allowsHitTesting(tabSelection.wrappedValue == .decision)
                 .accessibilityHidden(tabSelection.wrappedValue != .decision)
@@ -144,8 +175,8 @@ struct RootView: View {
                 .accessibilityHidden(tabSelection.wrappedValue != .mine)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { GPTabBar(selection: tabSelection) }
-        .tint(GPPalette(scheme: effectiveScheme, comfort: model.theme == .comfort, appearance: model.preferences.appearance).forest)
-        .environment(\.gp, GPPalette(scheme: effectiveScheme, comfort: model.theme == .comfort, appearance: model.preferences.appearance))
+        .tint(palette.forest)
+        .environment(\.gp, palette)
         .environment(\.gpAppearance, model.preferences.appearance)
         .dynamicTypeSize(model.preferences.appearance.dynamicTypeSize)
         .preferredColorScheme(model.theme.colorScheme)
@@ -181,7 +212,11 @@ struct RootView: View {
     }
     // Comfort mode is an intentionally warm light palette. Do not let a dark
     // system appearance pair its ivory canvas with the dark palette's light ink.
-    private var effectiveScheme: ColorScheme { model.theme == .system ? systemScheme : model.theme == .dark ? .dark : .light }
+    private var effectiveScheme: ColorScheme {
+        // 交易仪表盘是深色盘面：不管系统浅色还是深色，都用深色，否则数字对比度不够。
+        if resolvedTheme.forcesDark { return .dark }
+        return model.theme == .system ? systemScheme : model.theme == .dark ? .dark : .light
+    }
 }
 
 private struct PrimaryNavigation<Content: View>: View {
@@ -189,6 +224,8 @@ private struct PrimaryNavigation<Content: View>: View {
     @Environment(\.gp) private var p
     let title: String
     let tab: NextTab
+    /// 首页自绘头部（问候语 + 主题化标题），这里就不再叠一层系统标题条。
+    var showsHeader = true
     @State private var path: [GPRoute] = []
     @ViewBuilder var content: Content
     var body: some View {
@@ -219,7 +256,7 @@ private struct PrimaryNavigation<Content: View>: View {
                 }
                 .navigationDestination(for: GPRoute.self) { route in RouteDestination(route: route) }
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    if path.isEmpty {
+                    if path.isEmpty && showsHeader {
                         HStack(spacing: 8) {
                             Text(title).font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink)
                             Spacer()
@@ -2088,6 +2125,26 @@ private struct SettingsScreen: View {
                 set: { hex in if let value = hex.gpHex { updateAppearance { $0.canvasHex = value } } })
     }
     @State private var testingMobileAI = false
+    private func themeChip(title: String, hexes: [UInt32], selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 3) {
+                    ForEach(Array(hexes.enumerated()), id: \.offset) { _, hex in
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(Color(hex: hex)).frame(width: 12, height: 12)
+                    }
+                }
+                Text(title).font(.system(size: 10, weight: selected ? .bold : .medium))
+                    .foregroundStyle(selected ? p.ink : p.muted).lineLimit(1)
+            }
+            .padding(.horizontal, 9).padding(.vertical, 7)
+            .background(selected ? p.tint : p.paper, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(selected ? p.forest : p.line, lineWidth: selected ? 1.4 : 0.8))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var profileDigest: String {
         let tags = model.profile.styleTags
         guard !tags.isEmpty else { return "还没有足够行为样本：记录几笔真实成交后 AI 会开始形成结论" }
@@ -2102,7 +2159,26 @@ private struct SettingsScreen: View {
                 Text("用舒适的方式查看市场").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 8)
                 EditorialSection(title: "外观", accent: p.chartViolet) {
                     GPCard(accent: p.chartViolet) {
-                        Picker("主题", selection: Binding(get: { model.theme }, set: model.saveTheme)) { ForEach(GPTheme.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).accessibilityIdentifier("settings.theme")
+                        Text("视觉主题").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                themeChip(title: "跟随场景", hexes: [0xFBF4E4, 0x2F6BFF, 0x121B2B], selected: model.preferences.themeStyle == nil) {
+                                    model.saveAppTheme(nil)
+                                }
+                                ForEach(AppTheme.allCases) { theme in
+                                    themeChip(title: theme.title, hexes: theme.previewHexes,
+                                              selected: model.preferences.themeStyle == theme) {
+                                        model.saveAppTheme(theme)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Text(model.preferences.themeStyle == nil
+                             ? "跟随场景：首页用东方编辑室、盘中用交易仪表盘、AI 日报告用杂志卡片、持仓快览用创意拼图、详情与设置用现代卡片。"
+                             : "已固定为「\(model.preferences.themeStyle?.title ?? "")」：所有页面统一这一套外观，数据与 AI 结论不受影响。")
+                            .font(.caption2).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                        Picker("明暗", selection: Binding(get: { model.theme }, set: model.saveTheme)) { ForEach(GPTheme.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).accessibilityIdentifier("settings.theme")
                         Picker("字号", selection: Binding(get: { appearance.fontScale }, set: { (value: Double) in updateAppearance { $0.fontScale = value } })) {
                             ForEach(GPAppearance.scaleOptions, id: \.value) { option in Text(option.title).tag(option.value) }
                         }.pickerStyle(.segmented).accessibilityIdentifier("settings.fontScale")

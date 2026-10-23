@@ -18,11 +18,15 @@ struct LocalPreferences: Codable {
     var nasSyncedAt: Date?
     /// 自动上传本机账本（默认开）。关掉后只保留手动上传。
     var nasAutoUpload = true
+    /// 五套视觉主题：nil = 跟随场景（首页编辑室 / 盘中仪表盘 / AI 日报杂志 / 持仓拼图 / 详情现代卡片）。
+    /// 用户手动选一套后写成具体值，手动选择永远优先于场景推断。
+    var themeStyle: AppTheme?
     enum CodingKeys: String, CodingKey { case goal, watch, navigation, theme, appearance, notifications, nasBaseURL, legacyWebBaseURL, nasRevision, nasSyncedFingerprint, nasSyncedAt, nasAutoUpload }
-    init(goal: NextGoal = NextGoal(), watch: [String] = ["159941", "563020", "159545", "159352"], navigation: NextNavigationState = NextNavigationState(), theme: GPTheme = .light, appearance: GPAppearance = GPAppearance(), notifications: NextNotificationCenter = NextNotificationCenter(), nasBaseURL: String = "", legacyWebBaseURL: String = "", nasRevision: Int? = nil, nasSyncedFingerprint: String? = nil, nasSyncedAt: Date? = nil, nasAutoUpload: Bool = true) {
+    init(goal: NextGoal = NextGoal(), watch: [String] = ["159941", "563020", "159545", "159352"], navigation: NextNavigationState = NextNavigationState(), theme: GPTheme = .light, appearance: GPAppearance = GPAppearance(), notifications: NextNotificationCenter = NextNotificationCenter(), nasBaseURL: String = "", legacyWebBaseURL: String = "", nasRevision: Int? = nil, nasSyncedFingerprint: String? = nil, nasSyncedAt: Date? = nil, nasAutoUpload: Bool = true, themeStyle: AppTheme? = nil) {
         self.goal = goal; self.watch = watch; self.navigation = navigation; self.theme = theme; self.appearance = appearance; self.notifications = notifications
         self.nasBaseURL = nasBaseURL; self.legacyWebBaseURL = legacyWebBaseURL; self.nasRevision = nasRevision
         self.nasSyncedFingerprint = nasSyncedFingerprint; self.nasSyncedAt = nasSyncedAt; self.nasAutoUpload = nasAutoUpload
+        self.themeStyle = themeStyle
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -38,6 +42,7 @@ struct LocalPreferences: Codable {
         nasSyncedFingerprint = try values.decodeIfPresent(String.self, forKey: .nasSyncedFingerprint)
         nasSyncedAt = try values.decodeIfPresent(Date.self, forKey: .nasSyncedAt)
         nasAutoUpload = try values.decodeIfPresent(Bool.self, forKey: .nasAutoUpload) ?? true
+        themeStyle = try values.decodeIfPresent(AppTheme.self, forKey: .themeStyle)
     }
 }
 
@@ -100,7 +105,7 @@ struct LocalPreferences: Codable {
         let encoder = JSONEncoder()
         let files: [(String, Data)] = [
             ("real-ledger-v1.json", try encoder.encode(NextAuditedBook(current: archive.book, events: archive.audits))),
-            ("preferences-v1.json", try encoder.encode(LocalPreferences(goal: archive.goal, watch: archive.watch, navigation: archive.navigation, theme: GPTheme(rawValue: archive.theme.rawValue) ?? .light, notifications: archive.notifications))),
+            ("preferences-v1.json", try encoder.encode(LocalPreferences(goal: archive.goal, watch: archive.watch, navigation: archive.navigation, theme: GPTheme(rawValue: archive.theme.rawValue) ?? .light, notifications: archive.notifications, themeStyle: archive.appTheme))),
             ("cached-quotes-v1.json", try encoder.encode(archive.cachedQuotes)),
             ("chart-history-v1.json", try encoder.encode(archive.chartData)),
             ("instrument-rules-v1.json", try encoder.encode(archive.instrumentRules)),
@@ -438,6 +443,27 @@ struct LocalPreferences: Codable {
         routeRequestID = UUID()
     }
     func saveTheme(_ theme: GPTheme) { preferences.theme = theme }
+
+    /// 跨页签跳转（首页卡片点进去用）：切页签 + 推入一条路由。
+    func requestTab(_ tab: NextTab, route: GPRoute?) {
+        preferences.navigation.selectedTab = tab
+        preferences = preferences
+        requestedTab = tab
+        requestedRoute = route
+        routeRequestID = UUID()
+    }
+
+    /// 在当前页签内推入一条路由（首页顶部的搜索/设置入口用）。
+    func push(_ route: GPRoute, in tab: NextTab) {
+        requestedTab = tab
+        requestedRoute = route
+        routeRequestID = UUID()
+    }
+    /// 手动选择五套视觉主题；传 nil 恢复「跟随场景」。
+    func saveAppTheme(_ theme: AppTheme?) {
+        preferences.themeStyle = theme
+        notice = theme.map { "外观主题已切换为「\($0.title)」：只改展示，持仓与 AI 结论不变" } ?? "外观已改为跟随场景：首页编辑室、盘中仪表盘、AI 日报杂志卡片"
+    }
     func saveAppearance(_ appearance: GPAppearance) { preferences.appearance = appearance }
     func refreshNotificationStatus() async { notificationStatus = await NextLocalNotificationService.authorizationStatus() }
     func requestNotificationPermission() async { notificationStatus = await NextLocalNotificationService.requestAuthorization() }
@@ -1433,6 +1459,8 @@ struct LocalPreferences: Codable {
         candidatePlans = incoming.candidatePlans
         profile = incoming.profile
         suggestions = incoming.suggestions
+        preferences.themeStyle = incoming.appTheme
+        preferences = preferences
     }
     func research(for code: String?) -> NextDecision? {
         do {
@@ -1469,6 +1497,7 @@ struct LocalPreferences: Codable {
         archive.candidatePlans = candidatePlans
         archive.profile = profile
         archive.suggestions = suggestions
+        archive.appTheme = preferences.themeStyle
         archive.theme = NextTheme(rawValue: theme.rawValue) ?? .light
         return archive
     }

@@ -85,35 +85,67 @@ struct GPPalette {
     let scheme: ColorScheme
     let comfort: Bool
     var appearance = GPAppearance()
-    // 配色改版：对齐「观盘Next 五页界面预览」设计稿——鲜亮蓝/紫/青/金，告别墨绿闷色调。
-    var canvas: Color { appearance.canvasHex.map { Color(hex: $0) } ?? (comfort ? Color(hex: 0xF3F1E6) : scheme == .dark ? Color(hex: 0x121826) : Color(hex: 0xF5F7FB)) }
-    var paper: Color { appearance.paperHex.map { Color(hex: $0) } ?? (comfort ? Color(hex: 0xFBFAF2) : scheme == .dark ? Color(hex: 0x1A2233) : Color(hex: 0xFFFFFF)) }
-    var raised: Color { comfort ? Color(hex: 0xEAE8DA) : scheme == .dark ? Color(hex: 0x222B3D) : Color(hex: 0xE8EDF4) }
-    var ink: Color { appearance.inkHex.map { Color(hex: $0) } ?? (comfort ? Color(hex: 0x2A2F24) : scheme == .dark ? Color(hex: 0xF0F2FA) : Color(hex: 0x17263A)) }
-    var muted: Color { comfort ? Color(hex: 0x736B55) : scheme == .dark ? Color(hex: 0xAEB6C8) : Color(hex: 0x708095) }
-    var line: Color { comfort ? Color(hex: 0xDAD8CB) : scheme == .dark ? Color(hex: 0x33405A) : Color(hex: 0xE5EAF1) }
-    var forest: Color { comfort ? Color(hex: 0x2F5CC4) : scheme == .dark ? Color(hex: 0x7FA6F5) : Color(hex: 0x3268E8) }
-    var forestDeep: Color { comfort ? Color(hex: 0x24479C) : scheme == .dark ? Color(hex: 0x1E49A8) : Color(hex: 0x1F4FBE) }
-    var terracotta: Color { comfort ? Color(hex: 0x6A4FC8) : scheme == .dark ? Color(hex: 0xB3A0F2) : Color(hex: 0x795CE0) }
-    var jade: Color { comfort ? Color(hex: 0x0B8F85) : scheme == .dark ? Color(hex: 0x45C8BC) : Color(hex: 0x0DA69A) }
-    var risk: Color { comfort ? Color(hex: 0xC9524C) : scheme == .dark ? Color(hex: 0xF2857E) : Color(hex: 0xED665E) }
-    var tint: Color { comfort ? Color(hex: 0xE6E9F2) : scheme == .dark ? Color(hex: 0x26324A) : Color(hex: 0xE4EBFB) }
-    var heroSurface: Color { comfort ? Color(hex: 0xEDEBF8) : scheme == .dark ? Color(hex: 0x1E2C48) : Color(hex: 0xE9F0FC) }
-    var chartBlue: Color { comfort ? Color(hex: 0x2F5CC4) : scheme == .dark ? Color(hex: 0x7FA6F5) : Color(hex: 0x386DEF) }
-    var chartViolet: Color { comfort ? Color(hex: 0x6A4FC8) : scheme == .dark ? Color(hex: 0xB3A0F2) : Color(hex: 0x795CE0) }
-    var chartGold: Color { comfort ? Color(hex: 0xB8842A) : scheme == .dark ? Color(hex: 0xE8B45A) : Color(hex: 0xD99528) }
-    var chartCost: Color { comfort ? Color(hex: 0x9B5660) : scheme == .dark ? Color(hex: 0xE38FA3) : Color(hex: 0xB85C78) }
+    /// 当前生效的五套视觉主题（东方编辑室 / 现代卡片 / 交易仪表盘 / 杂志卡片 / 创意拼图）。
+    /// 主题只换外观：所有颜色都从 `DesignTokens` 派生，数据与判断逻辑完全共享。
+    var theme: AppTheme = .modern
+
+    /// 令牌在构造时算一次并缓存：颜色访问在列表里会被调用几百次，
+    /// 每次重算三十个 Color 会直接拖慢滚动。
+    private let cached: DesignTokens
+
+    init(scheme: ColorScheme, comfort: Bool, appearance: GPAppearance = GPAppearance(), theme: AppTheme = .modern) {
+        self.scheme = scheme
+        self.comfort = comfort
+        self.appearance = appearance
+        self.theme = theme
+        self.cached = DesignTokens.resolve(theme: theme, scheme: scheme, comfort: comfort, appearance: appearance)
+    }
+
+    var tokens: DesignTokens { cached }
+
+    var canvas: Color { tokens.canvas }
+    var canvasEdge: Color { tokens.canvasEdge }
+    var paper: Color { tokens.paper }
+    var paperAlt: Color { tokens.paperAlt }
+    var raised: Color { tokens.raised }
+    var ink: Color { tokens.ink }
+    var muted: Color { tokens.muted }
+    var line: Color { tokens.line }
+    var forest: Color { tokens.primary }
+    var forestDeep: Color { tokens.primaryDeep }
+    var terracotta: Color { tokens.secondary }
+    var jade: Color { tokens.jade }
+    var risk: Color { tokens.risk }
+    var tint: Color { tokens.tint }
+    var heroSurface: Color { tokens.heroSurface }
+    var chartBlue: Color { tokens.chartBlue }
+    var chartViolet: Color { tokens.chartViolet }
+    var chartGold: Color { tokens.chartGold }
+    var chartCost: Color { tokens.chartCost }
     /// 涨跌语义色（全局唯一来源）：国内口径「红涨绿跌」。
     /// 任何价格变动的着色都必须走 `changeTone(_:)` 或这两个属性；
     /// 不要再拿 risk / jade / terracotta 当涨跌色用（它们是「警示 / 建议 / 均线」语义）。
-    var gpUp: Color { comfort ? Color(hex: 0xA8432F) : scheme == .dark ? Color(hex: 0xFF6B5E) : Color(hex: 0xDB3B34) }
-    var gpDown: Color { comfort ? Color(hex: 0x3D765D) : scheme == .dark ? Color(hex: 0x4FC07E) : Color(hex: 0x1E9E5A) }
+    var gpUp: Color { tokens.up }
+    var gpDown: Color { tokens.down }
     /// 价格线本身用 `ink`（近黑），涨跌用 `gpUp`/`gpDown`，与「price=黑、涨红跌绿」一致。
     func changeTone(_ value: Double) -> Color { value >= 0 ? gpUp : gpDown }
+
+    /// AI 指导卡渐变与卡上文字色：五套主题各自一套，但数据完全一样。
+    var heroGradient: LinearGradient {
+        LinearGradient(colors: [tokens.heroStart, tokens.heroEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    var heroInk: Color { tokens.heroInk }
+    var heroMutedInk: Color { tokens.heroMutedInk }
+    var cardRadius: CGFloat { tokens.cardRadius }
+    var heroRadius: CGFloat { tokens.heroRadius }
+    var chipRadius: CGFloat { tokens.chipRadius }
+    var cardShadowOpacity: Double { tokens.shadowOpacity }
+    var cardShadowRadius: CGFloat { tokens.shadowRadius }
+    var cardShowsBorder: Bool { tokens.showsBorder }
 }
 
 private struct GPPaletteKey: EnvironmentKey {
-    static let defaultValue = GPPalette(scheme: .light, comfort: false)
+    static let defaultValue = GPPalette(scheme: .light, comfort: false, appearance: GPAppearance(), theme: .modern)
 }
 extension EnvironmentValues {
     var gp: GPPalette { get { self[GPPaletteKey.self] } set { self[GPPaletteKey.self] = newValue } }
