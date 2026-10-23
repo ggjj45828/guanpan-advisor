@@ -731,7 +731,7 @@ private struct DecisionScreen: View {
             let events = NextDividendAnalytics.merged(model.book.dividendEvents + (model.dividendEvents[code] ?? []))
             let per = NextDividendAnalytics.recentVerifiedPerShare(code: code, events: events, today: dividendTodayString())
             let yld = (per > 0 && quote.price > 0) ? NextNum.double(per / quote.price * 100) : nil
-            DataPanel(title: knownName(code), caption: code, accent: p.forest) {
+            DataPanel(title: knownName(code), accent: p.forest, caption: code) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("¥\(NextMoney.text(quote.price, digits: 3))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(p.ink).lineLimit(1).minimumScaleFactor(0.72)
                     if let change {
@@ -765,7 +765,7 @@ private struct DecisionScreen: View {
     }
     /// NAS 授权分析结果：一卡一只持仓 + 新闻 + AI 结论，全部只读。
     @ViewBuilder private func advisorAnalysisCard(_ analysis: NextAdvisorAnalysis) -> some View {
-        DataPanel(title: "AI 综合分析与交易方案", caption: "只读 · 不会下单", accent: p.terracotta) {
+        DataPanel(title: "AI 综合分析与交易方案", accent: p.terracotta, caption: "只读 · 不会下单") {
             Text(analysis.notice).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
             ForEach(analysis.positions) { position in
                 VStack(alignment: .leading, spacing: 4) {
@@ -806,7 +806,7 @@ private struct DecisionScreen: View {
     }
     /// NAS 真实持仓检查结果：修订号 + 逐持仓分时数据质量。
     @ViewBuilder private func advisorInventoryCard(_ inventory: NextAdvisorInventory) -> some View {
-        DataPanel(title: "NAS 真实持仓", caption: "修订 \(inventory.bookRevision)", accent: p.forest) {
+        DataPanel(title: "NAS 真实持仓", accent: p.forest, caption: "修订 \(inventory.bookRevision)") {
             Text(inventory.notice).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
             if inventory.positions.isEmpty {
                 GPInlineEmpty(symbol: "tray", text: "NAS 真实账本没有持仓。")
@@ -1015,7 +1015,7 @@ private struct DecisionScreen: View {
                             if let mobileAIError { GPStatus(title: "手机端 AI 暂不可用", detail: mobileAIError, symbol: "exclamationmark.triangle") }
                         }
                         if let mobileAIResult {
-                            DataPanel(title: "DeepSeek 分析", caption: "已记录到历史决策", accent: p.terracotta) {
+                            DataPanel(title: "DeepSeek 分析", accent: p.terracotta, caption: "已记录到历史决策") {
                                 AIAnswerView(text: mobileAIResult)
                             }
                         }
@@ -1024,7 +1024,7 @@ private struct DecisionScreen: View {
                 if analyzed {
                     if let code, let report = model.nasResearch[code] {
                         EditorialSection(title: "NAS 独立研究", trailing: "已归档", accent: p.chartViolet) {
-                            DataPanel(title: "NAS DeepSeek 研究", caption: report.ai?.provider ?? "本地因子", accent: p.chartViolet) {
+                            DataPanel(title: "NAS DeepSeek 研究", accent: p.chartViolet, caption: report.ai?.provider ?? "本地因子") {
                                 if let ai = report.ai {
                                     AIAnswerView(text: ai.content)
                                     GPDataRow(title: "来源", value: "\(ai.provider) · \(ai.model)", note: "数据截至 \(ai.asOf) · 不连接券商")
@@ -1040,14 +1040,14 @@ private struct DecisionScreen: View {
                         }
                     }
                     EditorialSection(title: "结论", accent: p.forest) {
-                        DataPanel(title: "当前结论", caption: result == nil ? "待生成" : (hasRecordedMobileAI ? "含手机端分析" : nil), accent: p.forest) {
+                        DataPanel(title: "当前结论", accent: p.forest, caption: result == nil ? "待生成" : (hasRecordedMobileAI ? "含手机端分析" : nil)) {
                             Text(result?.title ?? "先补齐行情和证据").font(.system(.title3, design: .serif).weight(.semibold)).foregroundStyle(p.ink)
                             Text(hasRecordedMobileAI ? "已包含 DeepSeek 手机端分析；建议基于所列行情快照，仅供研究，不构成交易指令。" : (result?.origin == "本地规则检查" ? "当前结果由本地规则整理，不是 AI 生成建议。" : "待接入 AI 服务，并为每项结论保存可追溯来源。"))
                                 .font(.caption).foregroundStyle(p.muted)
                         }
                     }
                     EditorialSection(title: "依据与风险", accent: p.chartGold) {
-                        DataPanel(title: "证据与风险", caption: "可逐条核对", accent: p.chartGold) {
+                        DataPanel(title: "证据与风险", accent: p.chartGold, caption: "可逐条核对") {
                             if let result, !result.evidence.isEmpty {
                                 ForEach(result.evidence) { item in
                                     VStack(alignment: .leading, spacing: 4) {
