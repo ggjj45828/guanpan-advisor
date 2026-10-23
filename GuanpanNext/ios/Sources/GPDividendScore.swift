@@ -132,6 +132,11 @@ struct DividendBuyScoreRow: View {
     private var componentsLine: String {
         "股息率 \(score.yieldPoints)/40 · 位置 \(score.positionPoints)/35 · 回撤 \(score.drawdownPoints)/15 · 稳定 \(score.stabilityPoints)/10"
     }
+    /// 行情不新鲜时明说：分数按缓存价算，不能冒充实时。
+    private var staleQuoteNote: String? {
+        guard let cached = model.quotes[score.code], !cached.quote.isFresh(at: Date()) else { return nil }
+        return "行情\(cached.stamp.label(now: Date()))，分数按该缓存价计算"
+    }
 
     var body: some View {
         NavigationLink(value: GPRoute.instrument(score.code)) {
@@ -147,6 +152,10 @@ struct DividendBuyScoreRow: View {
                 Text(componentsLine).font(.caption2).foregroundStyle(p.muted).lineLimit(1).minimumScaleFactor(0.8)
                 if !score.missing.isEmpty {
                     Text("缺 \(score.missing.joined(separator: "、"))，该项按 0 分计")
+                        .font(.caption2).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+                }
+                if let staleQuoteNote {
+                    Text(staleQuoteNote)
                         .font(.caption2).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
                 }
             }
