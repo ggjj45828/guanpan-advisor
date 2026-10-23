@@ -406,7 +406,7 @@ struct AIFillSheet: View {
     @State private var priceText = ""
     @State private var unitsText = ""
     @State private var feeText = "0.10"
-    @State private var error: String?
+    @State private var submitError: String?
 
     var body: some View {
         NavigationStack {
@@ -420,8 +420,8 @@ struct AIFillSheet: View {
                     Text("只有券商已真实成交才填写。保存后会立刻更新真实份额、成本、现金与已实现收益，AI 随即按新账户状态重新分析。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let error {
-                    Section { Text(error).font(.caption).foregroundStyle(.red) }
+                if let submitError {
+                    Section { Text(submitError).font(.caption).foregroundStyle(.red) }
                 }
             }
             .navigationTitle(side == "sell" ? "确认卖出成交" : "确认买入成交")
@@ -451,6 +451,6 @@ struct AIFillSheet: View {
                 Task { await model.refreshGuidance() }
             }
             dismiss()
-        } catch { error = error.localizedDescription }
+        } catch { submitError = error.localizedDescription }
     }
 }

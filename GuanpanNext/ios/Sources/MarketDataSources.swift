@@ -172,7 +172,7 @@ enum NextTencentDailyParser {
             byDay[day] = NextChartSample(timestamp: date, open: open, high: high, low: low, close: close, iopv: nil, volume: volume)
         }
         guard byDay.count >= 2 else { return nil }
-        return build(code: code, samples: byDay.values.sorted { $0.timestamp < $1.timestamp },
+        return buildMarketDataset(code: code, samples: byDay.values.sorted { $0.timestamp < $1.timestamp },
                      priceSource: adjusted ? "Tencent 日K · 前复权" : "Tencent 日K · 未复权", observedAt: receivedAt)
     }
 }
@@ -218,7 +218,7 @@ enum NextEastMoneyKlineParser {
             byKey[stampText] = sample
         }
         guard byKey.count >= 2 else { return nil }
-        return build(code: code, samples: byKey.values.sorted { $0.timestamp < $1.timestamp },
+        return buildMarketDataset(code: code, samples: byKey.values.sorted { $0.timestamp < $1.timestamp },
                      priceSource: priceSource, observedAt: receivedAt)
     }
 }
@@ -243,7 +243,7 @@ enum NextSinaDailyParser {
             byDay[String(day.prefix(10))] = NextChartSample(timestamp: date, open: open, high: high, low: low, close: close, iopv: nil, volume: volume)
         }
         guard byDay.count >= 2 else { return nil }
-        return build(code: code, samples: byDay.values.sorted { $0.timestamp < $1.timestamp },
+        return buildMarketDataset(code: code, samples: byDay.values.sorted { $0.timestamp < $1.timestamp },
                      priceSource: "Sina 日K · 未复权", observedAt: receivedAt)
     }
 }
