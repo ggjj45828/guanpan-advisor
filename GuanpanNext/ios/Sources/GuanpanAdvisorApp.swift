@@ -1443,45 +1443,13 @@ private struct GridLabScreen: View {
                     Spacer()
                     Button { Task { await model.refreshGridStatus() } } label: { Image(systemName: "arrow.clockwise").font(.system(size: 18)).foregroundStyle(p.forest).frame(width: 42, height: 42).background(p.tint, in: Circle()) }
                         .accessibilityLabel("刷新网格状态")
-                }.padding(.top, 6).padding(.bottom, 14)
+                }.padding(.top, 6).padding(.bottom, 10)
                 GridCheckPanel()
                 EditorialSection(title: "明日挂单表 · NAS 网格引擎", trailing: model.gridStatus.map { "\($0.ladder.count) 只" }, accent: p.chartViolet) {
-                    Text(model.gridStatusMessage).font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                    Text(model.gridStatusMessage).font(.caption2).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     if let status = model.gridStatus, status.initialized, let summary = status.summary {
-                        // 参考设计稿「量化实验室」：模拟账户英雄卡（紫渐变）+ 统计 trio。
-                        let equity = dec(summary.equity) ?? 0
-                        let pnl = dec(summary.pnl) ?? 0
-                        let pnlPct = NextNum.double(dec(summary.pnlPercent) ?? 0)
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("模拟账户 · 虚拟资金").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white.opacity(0.78))
-                                    Text("¥\(NextMoney.text(equity))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.72)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: "sparkles").font(.system(size: 24)).foregroundStyle(Color.white.opacity(0.85))
-                            }
-                            HStack(spacing: 8) {
-                                Text("累计盈亏 \(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.white)
-                                Text("\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%")
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Color.white.opacity(0.2), in: Capsule())
-                                    .foregroundStyle(.white)
-                            }
-                            Text("运行 \(summary.days) 天 · 买入/卖出 \(summary.buys)/\(summary.sells) 笔 · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0))").font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.68))
-                        }
-                        .padding(16)
-                        .background(
-                            LinearGradient(colors: [Color(hex: 0x5B3CC4), Color(hex: 0x795CE0), Color(hex: 0x9B7BF0)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .shadow(color: Color(hex: 0x795CE0).opacity(0.3), radius: 12, x: 0, y: 6)
-                        HStack(spacing: 10) {
-                            GPStatTile(label: "建网本金", value: "¥\(NextMoney.text(dec(summary.startEquity) ?? 0))")
-                            GPStatTile(label: "累计盈亏", value: "\(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))", footnote: "\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%", emphasis: p.changeTone(pnlPct))
-                            GPStatTile(label: "手续费", value: "¥\(NextMoney.text(dec(summary.fees) ?? 0))")
-                        }
+                        // 参考设计稿英雄卡：大数字 + 关键口径一行排开，不再另挂三张重复的统计小块。
+                        gridHeroCard(summary)
                     } else if let status = model.gridStatus, !status.initialized {
                         GPStatus(title: "NAS 网格尚未初始化", detail: "后台会按你的真实持仓自动建网格；首次连接后稍等片刻再刷新。", symbol: "grid")
                     }
@@ -1499,42 +1467,76 @@ private struct GridLabScreen: View {
         }.safeAreaInset(edge: .bottom) { Color.clear.frame(height: 4) }
         .task { await model.refreshGridStatus() }
     }
+    /// 模拟账户英雄卡：权益大数字 + 盈亏徽标 + 一行口径（天数/笔数/本金/手续费）。
+    @ViewBuilder private func gridHeroCard(_ summary: NextNASGridSummary) -> some View {
+        let equity = dec(summary.equity) ?? 0
+        let pnl = dec(summary.pnl) ?? 0
+        let pnlPct = NextNum.double(dec(summary.pnlPercent) ?? 0)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("模拟账户 · 虚拟资金").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white.opacity(0.78))
+                    Text("¥\(NextMoney.text(equity))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.72)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "sparkles").font(.system(size: 24)).foregroundStyle(Color.white.opacity(0.85))
+            }
+            HStack(spacing: 8) {
+                Text("累计盈亏 \(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                Text("\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Color.white.opacity(0.2), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            Text("运行 \(summary.days) 天 · 买/卖 \(summary.buys)/\(summary.sells) 笔 · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0)) · 手续费 ¥\(NextMoney.text(dec(summary.fees) ?? 0))")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.68))
+        }
+        .padding(16)
+        .background(
+            LinearGradient(colors: [Color(hex: 0x5B3CC4), Color(hex: 0x795CE0), Color(hex: 0x9B7BF0)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: Color(hex: 0x795CE0).opacity(0.3), radius: 12, x: 0, y: 6)
+    }
+    /// 单只标的网格卡：名称/现价一行，可买可卖一行，价格轴 + 档位表紧凑排布。
     @ViewBuilder private func ladderCard(_ row: NextNASGridLadderRow) -> some View {
         let name = model.book.positions.first(where: { $0.code == row.code })?.name
             ?? InstrumentCatalog.name(for: row.code) ?? row.code
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(p.ink)
-                    Text(row.code).font(.caption2.monospaced()).foregroundStyle(p.muted)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 13, weight: .semibold)).foregroundStyle(p.ink).lineLimit(1)
+                    Text(row.code).font(.system(size: 9, design: .monospaced)).foregroundStyle(p.muted)
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("现价 ¥\(NextMoney.text(dec(row.price) ?? 0))").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(p.ink)
-                    Text("步长 \(String(format: "%.3f", NextNum.double(dec(row.stepPercent) ?? 0)))% · 第 \(row.position) 档").font(.caption2).foregroundStyle(p.muted)
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("现价 ¥\(NextMoney.text(dec(row.price) ?? 0))").font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit()).foregroundStyle(p.ink)
+                    Text("步长 \(String(format: "%.3f", NextNum.double(dec(row.stepPercent) ?? 0)))% · 第 \(row.position) 档").font(.system(size: 9)).foregroundStyle(p.muted)
                 }
             }
-            HStack(spacing: 14) {
-                Label("可卖 \(row.sellsLeft) 档", systemImage: "arrow.up.circle.fill").font(.caption2).foregroundStyle(p.gpUp)
-                Label("可买 \(row.buysLeft) 档", systemImage: "arrow.down.circle.fill").font(.caption2).foregroundStyle(p.gpDown)
+            HStack(spacing: 10) {
+                Label("可卖 \(row.sellsLeft) 档", systemImage: "arrow.up.circle.fill").font(.system(size: 10)).foregroundStyle(p.gpUp)
+                Label("可买 \(row.buysLeft) 档", systemImage: "arrow.down.circle.fill").font(.system(size: 10)).foregroundStyle(p.gpDown)
+                Spacer(minLength: 0)
             }
-            gridAxisView(row).padding(.vertical, 4)
-            VStack(spacing: 3) {
+            gridAxisView(row).padding(.vertical, 2)
+            VStack(spacing: 2) {
                 ForEach(row.rungs) { rung in
                     HStack {
-                        Text(rung.isBuy ? "买" : "卖").font(.system(size: 10, weight: .bold)).foregroundStyle(rung.isBuy ? p.gpDown : p.gpUp).frame(width: 22)
+                        Text(rung.isBuy ? "买" : "卖").font(.system(size: 9, weight: .bold)).foregroundStyle(rung.isBuy ? p.gpDown : p.gpUp).frame(width: 20)
                         Text("¥\(NextMoney.text(dec(rung.price) ?? 0))").font(.system(size: 11).monospacedDigit()).foregroundStyle(p.ink)
                         Spacer()
-                        Text("\(rung.units) 份").font(.system(size: 11)).foregroundStyle(p.muted)
-                        Text(rung.reachable ? "可挂" : "暂不挂").font(.system(size: 10)).foregroundStyle(rung.reachable ? p.forest : p.muted)
+                        Text("\(rung.units) 份").font(.system(size: 10)).foregroundStyle(p.muted)
+                        Text(rung.reachable ? "可挂" : "暂不挂").font(.system(size: 9)).foregroundStyle(rung.reachable ? p.forest : p.muted).frame(width: 44, alignment: .trailing)
                     }
                 }
-            }.padding(8).background(p.tint, in: RoundedRectangle(cornerRadius: 10))
-            if !row.note.isEmpty { Text(row.note).font(.caption2).foregroundStyle(p.muted) }
+            }.padding(7).background(p.tint, in: RoundedRectangle(cornerRadius: 9))
+            if !row.note.isEmpty { Text(row.note).font(.system(size: 10)).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true) }
         }
-        .padding(12)
-        .background(p.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(p.line, lineWidth: 0.8))
+        .padding(11)
+        .background(p.paper, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(p.line, lineWidth: 0.8))
     }
     /// 价格档位条：把买档（绿，现价下方）和卖档（红，现价上方）画成一根价格轴上的圆点，
     /// 中间用「现价」竖线标出当前位置——一眼看出价格离各网格档位还有多远。
