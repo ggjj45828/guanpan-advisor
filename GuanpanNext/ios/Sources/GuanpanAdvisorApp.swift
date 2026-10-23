@@ -55,6 +55,9 @@ private struct GPTabItem {
     let tab: NextTab
     let title: String
     let icon: String
+    /// XCUITest 定位用：自绘底栏不是系统 TabBar，`app.tabBars` 查不到，
+    /// UI 测试一律按 `tab.<case>` identifier 找页签。
+    let id: String
 }
 
 /// 自绘底部导航：iOS 的 TabView 最多平铺 5 个位置，6 个页签会被折叠进「More」，
@@ -64,12 +67,12 @@ private struct GPTabBar: View {
     @Binding var selection: NextTab
     @Environment(\.gp) private var p
     private let items: [GPTabItem] = [
-        GPTabItem(tab: .market, title: "行情", icon: "chart.xyaxis.line"),
-        GPTabItem(tab: .assets, title: "持仓", icon: "square.stack.3d.up.fill"),
-        GPTabItem(tab: .laboratory, title: "网格", icon: "square.grid.2x2.fill"),
-        GPTabItem(tab: .income, title: "收息", icon: "yensign.circle.fill"),
-        GPTabItem(tab: .decision, title: "首页", icon: "house.fill"),
-        GPTabItem(tab: .mine, title: "我的", icon: "person.crop.circle.fill")
+        GPTabItem(tab: .market, title: "行情", icon: "chart.xyaxis.line", id: "tab.market"),
+        GPTabItem(tab: .assets, title: "持仓", icon: "square.stack.3d.up.fill", id: "tab.assets"),
+        GPTabItem(tab: .laboratory, title: "网格", icon: "square.grid.2x2.fill", id: "tab.laboratory"),
+        GPTabItem(tab: .income, title: "收息", icon: "yensign.circle.fill", id: "tab.income"),
+        GPTabItem(tab: .decision, title: "首页", icon: "house.fill", id: "tab.decision"),
+        GPTabItem(tab: .mine, title: "我的", icon: "person.crop.circle.fill", id: "tab.mine")
     ]
     var body: some View {
         HStack(spacing: 0) {
@@ -100,6 +103,7 @@ private struct GPTabBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(item.title)
+        .accessibilityIdentifier(item.id)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
