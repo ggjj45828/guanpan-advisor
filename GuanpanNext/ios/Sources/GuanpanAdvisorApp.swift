@@ -2077,45 +2077,57 @@ private struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("用舒适的方式查看市场").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 8)
                 EditorialSection(title: "外观", accent: p.chartViolet) {
-                    Picker("主题", selection: Binding(get: { model.theme }, set: model.saveTheme)) { ForEach(GPTheme.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).accessibilityIdentifier("settings.theme")
-                    Picker("字号", selection: Binding(get: { appearance.fontScale }, set: { (value: Double) in updateAppearance { $0.fontScale = value } })) {
-                        ForEach(GPAppearance.scaleOptions, id: \.value) { option in Text(option.title).tag(option.value) }
-                    }.pickerStyle(.segmented).accessibilityIdentifier("settings.fontScale")
-                    Picker("字体", selection: Binding(get: { appearance.fontFamily }, set: { (value: GPFontFamily) in updateAppearance { $0.fontFamily = value } })) {
-                        ForEach(GPFontFamily.allCases) { Text($0.title).tag($0) }
-                    }.pickerStyle(.segmented).accessibilityIdentifier("settings.fontFamily")
-                    ColorPicker("文字颜色", selection: inkBinding, supportsOpacity: false)
-                        .accessibilityIdentifier("settings.inkColor")
-                    ColorPicker("卡片颜色", selection: paperBinding, supportsOpacity: false)
-                        .accessibilityIdentifier("settings.paperColor")
-                    ColorPicker("背景颜色", selection: canvasBinding, supportsOpacity: false)
-                        .accessibilityIdentifier("settings.canvasColor")
-                    if appearance.hasCustomColors {
-                        Button("恢复主题默认颜色") { updateAppearance { $0.inkHex = nil; $0.paperHex = nil; $0.canvasHex = nil } }
-                            .font(.caption.weight(.semibold)).tint(p.forest)
+                    GPCard(accent: p.chartViolet) {
+                        Picker("主题", selection: Binding(get: { model.theme }, set: model.saveTheme)) { ForEach(GPTheme.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).accessibilityIdentifier("settings.theme")
+                        Picker("字号", selection: Binding(get: { appearance.fontScale }, set: { (value: Double) in updateAppearance { $0.fontScale = value } })) {
+                            ForEach(GPAppearance.scaleOptions, id: \.value) { option in Text(option.title).tag(option.value) }
+                        }.pickerStyle(.segmented).accessibilityIdentifier("settings.fontScale")
+                        Picker("字体", selection: Binding(get: { appearance.fontFamily }, set: { (value: GPFontFamily) in updateAppearance { $0.fontFamily = value } })) {
+                            ForEach(GPFontFamily.allCases) { Text($0.title).tag($0) }
+                        }.pickerStyle(.segmented).accessibilityIdentifier("settings.fontFamily")
+                        ColorPicker("文字颜色", selection: inkBinding, supportsOpacity: false)
+                            .accessibilityIdentifier("settings.inkColor")
+                        ColorPicker("卡片颜色", selection: paperBinding, supportsOpacity: false)
+                            .accessibilityIdentifier("settings.paperColor")
+                        ColorPicker("背景颜色", selection: canvasBinding, supportsOpacity: false)
+                            .accessibilityIdentifier("settings.canvasColor")
+                        if appearance.hasCustomColors {
+                            Button("恢复主题默认颜色") { updateAppearance { $0.inkHex = nil; $0.paperHex = nil; $0.canvasHex = nil } }
+                                .font(.caption.weight(.semibold)).tint(p.forest)
+                        }
+                        Text("字号改的是系统动态字体档位，导航栏、列表、表单会一起放大；颜色是在当前主题之上做覆盖。").font(.caption).foregroundStyle(p.muted)
                     }
-                    Text("字号改的是系统动态字体档位，导航栏、列表、表单会一起放大；颜色是在当前主题之上做覆盖。").font(.caption).foregroundStyle(p.muted)
                 }
-                EditorialSection(title: "通知与提醒") { NavigationLink(value: GPRoute.alerts) { IntentRow(icon: "bell.badge", title: "提醒和通知中心", detail: "价格、风险、限价计划与 NAS 状态") } }
-                EditorialSection(title: "账本与数据") { NavigationLink(value: GPRoute.fills) { IntentRow(icon: "list.bullet.rectangle", title: "审计记录", detail: "真实资产修改、撤销和版本") }; NavigationLink(value: GPRoute.backups) { IntentRow(icon: "externaldrive", title: "备份与恢复", detail: "数据隔离、校验、确认恢复") } }
+                EditorialSection(title: "通知与提醒") {
+                    GPCard { NavigationLink(value: GPRoute.alerts) { IntentRow(icon: "bell.badge", title: "提醒和通知中心", detail: "价格、风险、限价计划与 NAS 状态") } }
+                }
+                EditorialSection(title: "账本与数据") {
+                    GPCard {
+                        NavigationLink(value: GPRoute.fills) { IntentRow(icon: "list.bullet.rectangle", title: "审计记录", detail: "真实资产修改、撤销和版本") }
+                        NavigationLink(value: GPRoute.backups) { IntentRow(icon: "externaldrive", title: "备份与恢复", detail: "数据隔离、校验、确认恢复") }
+                    }
+                }
                 EditorialSection(title: "连接状态", trailing: model.hasPendingUpload ? "有改动待上传" : "已同步") {
-                    // 顺序按"用户最关心什么"排：账本有没有传上去 → 能不能自动传 → 服务在不在。
-                    GPDataRow(title: "账本上传", value: model.syncStateText,
-                              note: "按账本内容指纹判断；只有真的改了才会传，修订号冲突时停止不覆盖")
-                    Toggle("自动上传本机账本", isOn: Binding(
-                        get: { model.preferences.nasAutoUpload },
-                        set: { value in
-                            model.preferences.nasAutoUpload = value; model.preferences = model.preferences
-                            if value { Task { await model.autoUploadBookIfNeeded() } }
-                        }))
-                        .font(.caption)
-                        .accessibilityIdentifier("settings.nas.autoUpload")
-                    GPDataRow(title: "NAS 服务", value: model.syncStatus)
-                    GPDataRow(title: "行情服务", value: model.status,
-                              note: "盘中每 10 秒自动刷新，分时每 60 秒；收盘后每 5 分钟。打开应用即刷一次")
-                    GPDataRow(title: "同步通道", value: "账本(自动+手动) · 行情 · 研究，三条互相独立")
+                    GPCard {
+                        // 顺序按"用户最关心什么"排：账本有没有传上去 → 能不能自动传 → 服务在不在。
+                        GPDataRow(title: "账本上传", value: model.syncStateText,
+                                  note: "按账本内容指纹判断；只有真的改了才会传，修订号冲突时停止不覆盖")
+                        Toggle("自动上传本机账本", isOn: Binding(
+                            get: { model.preferences.nasAutoUpload },
+                            set: { value in
+                                model.preferences.nasAutoUpload = value; model.preferences = model.preferences
+                                if value { Task { await model.autoUploadBookIfNeeded() } }
+                            }))
+                            .font(.caption)
+                            .accessibilityIdentifier("settings.nas.autoUpload")
+                        GPDataRow(title: "NAS 服务", value: model.syncStatus)
+                        GPDataRow(title: "行情服务", value: model.status,
+                                  note: "盘中每 10 秒自动刷新，分时每 60 秒；收盘后每 5 分钟。打开应用即刷一次")
+                        GPDataRow(title: "同步通道", value: "账本(自动+手动) · 行情 · 研究，三条互相独立")
+                    }
                 }
-                EditorialSection(title: "AI 投资研究") {
+                EditorialSection(title: "AI 投资研究", accent: p.terracotta) {
+                    GPCard(accent: p.terracotta) {
                     Picker("DeepSeek 模型", selection: $deepSeekProfile) {
                         Text("Flash · 日常研究").tag("flash")
                         Text("Pro · 深度研究").tag("pro")
@@ -2184,8 +2196,10 @@ private struct SettingsScreen: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     GPActionButton(title: "检查 NAS 连接与 AI 配置状态", secondary: true, systemImage: "arrow.clockwise") { Task { await model.probeNAS() } }
+                    }
                 }
                 EditorialSection(title: "股息策略", accent: p.chartGold) {
+                    GPCard(accent: p.chartGold) {
                     HStack(spacing: 8) {
                         Text("目标股息率").font(.subheadline.weight(.medium)).foregroundStyle(p.ink)
                         Spacer()
@@ -2198,8 +2212,10 @@ private struct SettingsScreen: View {
                         }.font(.caption.weight(.semibold)).tint(p.forest)
                     }
                     Text("用于「收息 → 股息买入参考」的默认目标股息率，也作为持仓股息率标签的对照基准；只影响参考价计算，不构成买入建议。").font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 EditorialSection(title: "AI 巡检提醒", accent: p.forest) {
+                    GPCard {
                     Toggle("每日本机提醒", isOn: Binding(get: { inspectEnabled }, set: { value in
                         inspectEnabled = value
                         if value {
@@ -2223,8 +2239,10 @@ private struct SettingsScreen: View {
                         }.font(.caption.weight(.semibold)).tint(p.forest)
                     }
                     Text("这是设备本机定时提醒（非远端推送，不需要苹果证书）；到点打开 App，到「AI 引擎」点「一键巡检持仓」即可扫描全部持仓的盈亏、股息率与机会。").font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 EditorialSection(title: "新 NAS 连接") {
+                    GPCard {
                     TextField("NAS 地址，例如 http://192.168.1.10:8789", text: $nasURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).accessibilityIdentifier("settings.nas.address")
                     HStack { Button("保存并测试") { do { try model.configureNAS(baseURL: nasURL); Task { await model.probeNAS() } } catch { model.errorMessage = error.localizedDescription } }.font(.caption.weight(.semibold)).accessibilityIdentifier("settings.nas.save-test"); Spacer(); Button("重新检查") { Task { await model.probeNAS() } }.font(.caption).accessibilityIdentifier("settings.nas.recheck") }.tint(p.forest)
                     GPActionButton(title: "从 NAS 下载账本", secondary: true, systemImage: "arrow.down.doc") { confirmDownload = true }
@@ -2232,8 +2250,14 @@ private struct SettingsScreen: View {
                     Divider().padding(.vertical, 4)
                     Text("此并行顾问服务默认地址为 http://NAS内网地址:8789；原服务仍为 30001。公网连接必须使用 HTTPS。新服务使用独立数据库，账本同步采用修订号保护。")
                         .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                EditorialSection(title: "无障碍") { Button("减少动态效果") { dynamicTypeNote = true }.font(.caption.weight(.medium)); Text("底部导航、表单、列表行和图表均提供可访问标签；页面遵循安全区并避让系统键盘。").font(.caption).foregroundStyle(p.muted) }
+                EditorialSection(title: "无障碍") {
+                    GPCard {
+                    Button("减少动态效果") { dynamicTypeNote = true }.font(.caption.weight(.medium))
+                    Text("底部导航、表单、列表行和图表均提供可访问标签；页面遵循安全区并避让系统键盘。").font(.caption).foregroundStyle(p.muted)
+                    }
+                }
                 // 读取 Info.plist 真实版本，装错包一眼能看出来（旧包会显示老的 build 号）。
                 let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
                 let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
