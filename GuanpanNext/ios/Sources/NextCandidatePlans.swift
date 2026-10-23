@@ -61,6 +61,23 @@ struct NextCandidatePlan: Codable, Identifiable, Equatable {
     /// 行情突破这些边界时建议作废（趋势/区间失效）。
     let cancelAbove: Decimal?
     let cancelBelow: Decimal?
+    /// 用户是否看过这条建议（画像里「看了没做」与「没看到」必须分开）。
+    var viewedAt: Date? = nil
+    /// 一键反馈：只放六个粗选项，画像学习直接吃这条信号。
+    var feedback: NextPlanFeedback? = nil
+    /// 真实成交时填写的价格/份额：与建议值不同即说明 AI 报价口径需要校正。
+    var confirmedPrice: Decimal? = nil
+    var confirmedUnits: Int? = nil
+    var confirmedFee: Decimal? = nil
+
+    var priceWasEdited: Bool {
+        guard let confirmedPrice else { return false }
+        return abs(confirmedPrice - limitPrice) > (Decimal(string: "0.0005") ?? 0)
+    }
+    var unitsWereEdited: Bool {
+        guard let confirmedUnits else { return false }
+        return confirmedUnits != units
+    }
 
     func validate() throws {
         guard code.count == 6, code.allSatisfy(\.isNumber), !name.isEmpty,
@@ -127,6 +144,8 @@ struct NextGuidanceItem: Equatable, Identifiable {
     let score: Double
     let rank: Int
     let isActionable: Bool
+    /// 画像对排序的影响说明：只在「因为你的习惯被降级/加优先」时出现。
+    var profileNote: String? = nil
 }
 
 struct NextDailyGuidance: Equatable {
@@ -144,7 +163,8 @@ enum NextOpportunityScanner {
     /// 不预测涨跌；不交易是正常结论。
     static func scan(book: NextBook, quotes: [String: NextQuote], daily: [String: [NextChartSample]],
                      intraday: [String: [NextChartSample]], rules: [String: NextInstrumentRules],
-                     goal: NextGoal, nasAvailable: Bool, now: Date) -> NextDailyGuidance {
+                     goal: NextGoal, nasAvailable: Bool, profile: NextInvestorProfile? = nil,
+                     now: Date) -> NextDailyGuidance {
         let total = book.total(using: quotes)
         var items: [NextGuidanceItem] = []
 
@@ -242,12 +262,21 @@ enum NextOpportunityScanner {
                 whyToday.append("今日振幅 \(String(format: "%.2f", amplitude))%")
             }
 
+            // 画像只影响推荐优先级：不改「有没有机会」、不改风险与数据门槛、不改任何价格。
+            var profileNote: String?
+            if let profile {
+                let adjustment = NextProfileEngine.adjustment(tPlan: tPlan, gridPlan: gridPlan,
+                                                             isActionable: actionable, profile: profile)
+                score *= adjustment.multiplier
+                if adjustment.verdict != .neutral { profileNote = adjustment.explanation }
+            }
             items.append(NextGuidanceItem(code: position.code, name: position.name, state: reading.state,
                                           strategy: strategy.kind, headline: headline, whyToday: whyToday,
                                           tPlan: tPlan, gridPlan: gridPlan, recovery: recovery,
                                           confidence: confidence, portfolioNote: portfolioNote,
                                           riskNotes: riskNotes + reading.warnings + strategy.warnings,
-                                          score: score, rank: 0, isActionable: actionable))
+                                          score: score, rank: 0, isActionable: actionable,
+                                          profileNote: profileNote))
         }
 
         let sorted = items.sorted { $0.score == $1.score ? $0.code < $1.code : $0.score > $1.score }
@@ -256,16 +285,20 @@ enum NextOpportunityScanner {
                              headline: item.headline, whyToday: item.whyToday, tPlan: item.tPlan,
                              gridPlan: item.gridPlan, recovery: item.recovery, confidence: item.confidence,
                              portfolioNote: item.portfolioNote, riskNotes: item.riskNotes, score: item.score,
-                             rank: index + 1, isActionable: item.isActionable)
+                             rank: index + 1, isActionable: item.isActionable, profileNote: item.profileNote)
         }
 
         let actionable = ranked.filter(\.isActionable)
+        // 有机会但被画像门槛拦下的，必须如实说出来——不能假装今天什么都没发生。
+        let heldBack = ranked.filter { $0.isActionable && $0.profileNote != nil }
         let summary: String
         if actionable.isEmpty {
             summary = ranked.isEmpty ? "还没有真实持仓，先录入持仓再生成今日指导。" : "今天不建议交易，继续持有。"
         } else {
             let names = actionable.prefix(3).map { "\($0.name)（\($0.headline)）" }.joined(separator: "、")
-            summary = "今天有 \(actionable.count) 只值得关注：\(names)"
+            summary = heldBack.isEmpty
+                ? "今天有 \(actionable.count) 只值得关注：\(names)"
+                : "今天有 \(actionable.count) 只出现机会，其中 \(heldBack.count) 只低于你通常执行的门槛：\(names)"
         }
         let noAction = ranked.filter { !$0.isActionable }.map { "\($0.name)：\($0.strategy.rawValue)" }.joined(separator: "；")
         let dataState: String
@@ -289,12 +322,15 @@ struct NextDecisionContext: Equatable {
     let holdingsLines: [String]
     let nasResearchLines: [String]
     let newsLines: [String]
+    /// 本次在线 AI 实际收到的画像结论（可解释性：用户能查「AI 用了哪些画像信息」）。
+    let profileLines: [String]
     let promptBlock: String
 }
 
 enum NextDecisionContextBuilder {
     static func build(guidance: NextDailyGuidance, book: NextBook, quotes: [String: NextQuote],
-                      nasResearchLines: [String], newsLines: [String], now: Date) -> NextDecisionContext {
+                      nasResearchLines: [String], newsLines: [String], profileLines: [String] = [],
+                      now: Date) -> NextDecisionContext {
         var holdings: [String] = []
         for position in book.positions where position.units > 0 {
             let quote = quotes[position.code]
@@ -327,14 +363,18 @@ enum NextDecisionContextBuilder {
         【市场状态与候选计划】\(planLines.joined(separator: "\n"))
         【NAS 长期研究】\(nasResearchLines.isEmpty ? "暂无（NAS 离线或未返回）" : nasResearchLines.joined(separator: "\n"))
         【新闻】\(newsLines.isEmpty ? "暂无" : newsLines.joined(separator: "\n"))
+        【投资画像】\(profileLines.isEmpty ? "暂无足够行为样本，按默认门槛处理" : profileLines.joined(separator: "\n"))
         【今日结论】\(guidance.summary)
         硬性约束：
         1. 具体挂单价与份额只能引用上面的候选计划数值，禁止自行生成任何新价格；
         2. 候选计划标注「数据不足」的标的，直接回答今天无法给出可靠挂单价，不得给出伪精确价格；
         3. 最终只输出一份统一建议：做T/网格/持有/减仓/不交易（不交易是合法结论），并说明理由、风险、失效条件；
-        4. 如果本次判断与上次不同，必须指出是哪个数据变化导致（行情、状态、新闻或持仓）。
+        4. 如果本次判断与上次不同，必须指出是哪个数据变化导致（行情、状态、新闻或持仓）；
+        5. 投资画像只决定「推荐优先级」和「表达方式」，绝不能修改行情事实、不能降低数据质量与风险门槛、不能为了迎合偏好制造交易机会；当机会低于画像门槛时，如实说「有机会但低于你的执行门槛，因此不主动推荐」；
+        6. 不要输出画像里的原始成交明细，只引用上面的结论。
         """
         return NextDecisionContext(generatedAt: now, guidance: guidance, holdingsLines: holdings,
-                                   nasResearchLines: nasResearchLines, newsLines: newsLines, promptBlock: promptBlock)
+                                   nasResearchLines: nasResearchLines, newsLines: newsLines,
+                                   profileLines: profileLines, promptBlock: promptBlock)
     }
 }

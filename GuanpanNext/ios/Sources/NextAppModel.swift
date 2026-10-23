@@ -109,7 +109,9 @@ struct LocalPreferences: Codable {
             ("nas-research-v1.json", try encoder.encode(archive.nasResearch)),
             ("dividend-history-v1.json", try encoder.encode(archive.dividendEvents)),
             ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans)),
-            ("candidate-plans-v1.json", try encoder.encode(archive.candidatePlans))
+            ("candidate-plans-v1.json", try encoder.encode(archive.candidatePlans)),
+            ("investor-profile-v1.json", try encoder.encode(archive.profile)),
+            ("ai-suggestions-v1.json", try encoder.encode(archive.suggestions))
         ]
         let parent = directory.deletingLastPathComponent()
         let staging = parent.appendingPathComponent("GuanpanProNative-staging-\(UUID().uuidString)", isDirectory: true)
@@ -150,6 +152,10 @@ struct LocalPreferences: Codable {
     @Published var dividendEvents: [String: [NextETFDividendEvent]] { didSet { reportSave(repository.save(dividendEvents, filename: "dividend-history-v1.json")) } }
     @Published var patientLimitPlans: [NextPatientLimitPlan] { didSet { reportSave(repository.save(patientLimitPlans, filename: "patient-limit-plans-v1.json")) } }
     @Published var candidatePlans: [NextCandidatePlan] { didSet { reportSave(repository.save(candidatePlans, filename: "candidate-plans-v1.json")) } }
+    /// 动态投资者画像：只存结论与依据，不存原始成交流水（流水在账本里）。
+    @Published var profile: NextInvestorProfile { didSet { reportSave(repository.save(profile, filename: "investor-profile-v1.json")) } }
+    /// AI 给过的每一次具体机会：曝光 → 反馈 → 是否真实成交，画像学习只吃这条链。
+    @Published var suggestions: [NextSuggestionRecord] { didSet { reportSave(repository.save(suggestions, filename: "ai-suggestions-v1.json")) } }
     @Published var dailyGuidance: NextDailyGuidance?
     @Published var guidanceStatus = "尚未生成今日指导"
     @Published var gridStatus: NextNASGridStatus?
@@ -237,6 +243,8 @@ struct LocalPreferences: Codable {
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
         self.candidatePlans = repository.load([NextCandidatePlan].self, filename: "candidate-plans-v1.json", fallback: [])
+        self.profile = repository.load(NextInvestorProfile.self, filename: "investor-profile-v1.json", fallback: NextInvestorProfile())
+        self.suggestions = repository.load([NextSuggestionRecord].self, filename: "ai-suggestions-v1.json", fallback: [])
         self.errorMessage = repository.integrityWarning
         // 启动时把「只有代码、没有名字」的标的补一次：账本里的旧数据、旧自选都能认出来。
         Task { await backfillNamesIfNeeded() }
@@ -367,6 +375,8 @@ struct LocalPreferences: Codable {
         }
         updated.fills.append(NextFill(date: Date(), code: code, side: side, units: units, price: price, fee: fee, realized: realized))
         try commitRealLedger(updated, action: side == "buy" ? "记录成交买入" : "记录成交卖出", reason: "用户核对成交；本笔手续费 ¥\(NextMoney.text(fee))")
+        // 真实成交是画像的主要证据来源：记完账立刻重算一次，界面上的「AI 对我的了解」同步变化。
+        learnProfile()
     }
     func addIncomeEvent(_ event: NextIncomeEvent) throws {
         try event.validate()
@@ -529,6 +539,8 @@ struct LocalPreferences: Codable {
         dailyGuidance = guidance
         guidanceStatus = guidance.summary
         evaluateCandidatePlans()
+        logGuidanceSuggestions(guidance)
+        learnProfile()
     }
 
     private func buildGuidance(now: Date) -> NextDailyGuidance {
@@ -540,8 +552,8 @@ struct LocalPreferences: Codable {
             if let dataset = chartData[position.code] { intraday[position.code] = dataset.samples }
         }
         return NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
-                                           rules: rules, goal: goal,
-                                           nasAvailable: !preferences.nasBaseURL.isEmpty, now: now)
+                                           rules: rules, goal: goal, nasAvailable: !preferences.nasBaseURL.isEmpty,
+                                           profile: profile, now: now)
     }
 
     /// 计划状态自动迁移：过期、行情过期、价格突破作废线，都自动标记并留一条提醒。
@@ -601,6 +613,7 @@ struct LocalPreferences: Codable {
         }
         try plan.validate()
         candidatePlans.insert(plan, at: 0)
+        linkSuggestionToPlan(plan)
         notice = "候选计划已保存：只是价格建议，未成交前不影响持仓与现金。"
     }
 
@@ -616,7 +629,12 @@ struct LocalPreferences: Codable {
         candidatePlans[index].state = .confirmed
         candidatePlans[index].confirmedAt = Date()
         candidatePlans[index].stateChangedAt = Date()
+        candidatePlans[index].confirmedPrice = price
+        candidatePlans[index].confirmedUnits = units
+        candidatePlans[index].confirmedFee = fee
+        markSuggestionExecuted(for: plan, price: price, units: units)
         notice = "已按真实成交更新账本：份额、成本、现金和已实现收益已重算。"
+        learnProfile()
         Task { await refreshGuidance() }
     }
 
@@ -632,7 +650,187 @@ struct LocalPreferences: Codable {
         }
         let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
         return NextDecisionContextBuilder.build(guidance: guidance, book: book, quotes: quoteMap,
-                                                nasResearchLines: researchLines, newsLines: [], now: Date())
+                                                nasResearchLines: researchLines, newsLines: [],
+                                                profileLines: NextProfileEngine.promptLines(profile: profile),
+                                                now: Date())
+    }
+
+    // MARK: - 动态投资者画像
+
+    /// 从「真实持仓 + 真实成交 + 真实反馈」重新学习。绝不使用虚拟交易，也不因一次异常成交改写长期结论。
+    func learnProfile(now: Date = Date()) {
+        var quoteMap: [String: NextQuote] = [:]
+        for (code, cached) in quotes { quoteMap[code] = cached.quote }
+        var daily: [String: [NextChartSample]] = [:]
+        for position in book.positions {
+            if let dataset = chartData["\(position.code):day"] { daily[position.code] = dataset.samples }
+        }
+        let updated = NextProfileEngine.learn(book: book, goal: goal, quotes: quoteMap,
+                                              suggestions: suggestions, plans: candidatePlans,
+                                              daily: daily, previous: profile, now: now)
+        if updated != profile { profile = updated }
+    }
+
+    /// 把今日指导里真正可执行的机会落成一条轨迹。同一标的同一天同类型只记一次，避免刷新一次就刷一条。
+    func logGuidanceSuggestions(_ guidance: NextDailyGuidance, now: Date = Date()) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var added = 0
+        for item in guidance.items where item.isActionable {
+            if let tResult = item.tPlan, case let .ready(plan) = tResult {
+                let kind: NextPlanKind = plan.kind == .reverse ? .reverseT : .forwardT
+                let duplicated = suggestions.contains {
+                    $0.code == item.code && $0.kind == kind && calendar.isDate($0.createdAt, inSameDayAs: now)
+                }
+                if duplicated { continue }
+                suggestions.append(NextSuggestionRecord(code: item.code, name: item.name, kind: kind,
+                                                       expectedNetGain: plan.netGain,
+                                                       expectedSpreadPercent: NextProfileEngine.spreadPercent(sell: plan.sellPrice, buy: plan.buyPrice),
+                                                       expectedCostReduction: plan.costReductionPerUnit,
+                                                       confidenceLevel: plan.confidence.level.rawValue,
+                                                       marketState: item.state.rawValue, createdAt: now,
+                                                       expiresAt: plan.validUntil))
+                added += 1
+            } else if let gResult = item.gridPlan, case let .ready(grid) = gResult {
+                let duplicated = suggestions.contains {
+                    $0.code == item.code && $0.kind == .gridBuy && calendar.isDate($0.createdAt, inSameDayAs: now)
+                }
+                if duplicated { continue }
+                suggestions.append(NextSuggestionRecord(code: item.code, name: item.name, kind: .gridBuy,
+                                                       expectedNetGain: nil,
+                                                       expectedSpreadPercent: grid.spacingPercent,
+                                                       expectedCostReduction: nil,
+                                                       confidenceLevel: grid.confidence.level.rawValue,
+                                                       marketState: item.state.rawValue, createdAt: now,
+                                                       expiresAt: grid.validUntil))
+                added += 1
+            }
+        }
+        // 过了有效期、既没保存成计划也没成交 → 记「看了没做」，这是做 T 偏好最重要的一类样本。
+        for index in suggestions.indices where suggestions[index].outcome == .pending {
+            if now > suggestions[index].expiresAt, suggestions[index].savedPlanID == nil {
+                suggestions[index].outcome = .ignored
+            }
+        }
+        // 只保留近 180 天轨迹，避免文件无限增长
+        let cutoff = now.addingTimeInterval(-180 * 86_400)
+        if suggestions.contains(where: { $0.createdAt < cutoff }) {
+            suggestions = suggestions.filter { $0.createdAt >= cutoff }
+        }
+        if added > 0 { notice = "今日新增 \(added) 条机会记录（只用于让 AI 越来越懂你，不构成下单）" }
+    }
+
+    /// 用户打开过计划详情 → 之后没做才算「看了没做」，不能把没看到也算成不感兴趣。
+    func markPlanViewed(_ planID: UUID, now: Date = Date()) {
+        guard let index = candidatePlans.firstIndex(where: { $0.id == planID }) else { return }
+        if candidatePlans[index].viewedAt == nil { candidatePlans[index].viewedAt = now }
+        if let sIndex = suggestions.firstIndex(where: { $0.savedPlanID == planID }) {
+            if suggestions[sIndex].viewedAt == nil { suggestions[sIndex].viewedAt = now }
+        }
+    }
+
+    /// 一键反馈：进入画像学习，但不直接修改任何价格或计划。
+    func recordPlanFeedback(_ planID: UUID, kind: NextPlanFeedbackKind, note: String? = nil, now: Date = Date()) {
+        guard let index = candidatePlans.firstIndex(where: { $0.id == planID }) else { return }
+        candidatePlans[index].feedback = NextPlanFeedback(kind: kind, note: note, createdAt: now)
+        if let sIndex = suggestions.firstIndex(where: { $0.savedPlanID == planID }) {
+            suggestions[sIndex].feedback = candidatePlans[index].feedback
+            if !kind.isPositive && suggestions[sIndex].outcome == .pending {
+                suggestions[sIndex].outcome = kind.impliesHoldPreference ? .ignored : .rejected
+            }
+        }
+        notice = "已记录你的反馈：AI 会据此调整以后推荐什么、不推荐什么（不会改变行情判断）"
+        learnProfile(now: now)
+    }
+
+    /// 把保存下来的候选计划与建议轨迹连起来，画像才能判断「这条建议最后有没有被执行」。
+    func linkSuggestionToPlan(_ plan: NextCandidatePlan, now: Date = Date()) {
+        if let index = suggestions.firstIndex(where: { $0.savedPlanID == nil && $0.code == plan.code && $0.kind == plan.kind }) {
+            suggestions[index].savedPlanID = plan.id
+            if suggestions[index].outcome == .pending { suggestions[index].outcome = .saved }
+        }
+    }
+
+    private func markSuggestionExecuted(for plan: NextCandidatePlan, price: Decimal, units: Int) {
+        guard let index = suggestions.firstIndex(where: { $0.savedPlanID == plan.id })
+                ?? suggestions.firstIndex(where: { $0.code == plan.code && $0.kind == plan.kind }) else { return }
+        suggestions[index].outcome = .executed
+        suggestions[index].executedAt = Date()
+        suggestions[index].executedPrice = price
+        suggestions[index].executedUnits = units
+        suggestions[index].savedPlanID = plan.id
+        suggestions[index].priceEdited = plan.priceWasEdited
+        suggestions[index].unitsEdited = plan.unitsWereEdited
+    }
+
+    // MARK: 画像的「用户最终控制权」
+
+    /// 用户明确改一项：立刻变成 Explicit Preference 并锁定，学习引擎不再覆盖。
+    func setProfileTrait(_ id: NextProfileTraitID, value: String, label: String, detail: String,
+                         numeric: Double? = nil, lock: Bool = true, now: Date = Date()) {
+        var trait = profile.trait(id) ?? NextProfileTrait(id: id, value: value, label: label, detail: detail,
+                                                          confidence: 1, sampleCount: 1, windowDays: 0,
+                                                          source: .explicit, locked: true, basis: [],
+                                                          updatedAt: now, numeric: numeric)
+        trait.value = value
+        trait.label = label
+        trait.detail = detail
+        trait.source = .explicit
+        trait.locked = lock
+        trait.confidence = 1
+        trait.updatedAt = now
+        if let numeric { trait.numeric = numeric }
+        trait.basis = ["你在「AI 对我的了解」里手动设定（\(Self.stamp(now))）"]
+        if id == .minSpread, let numeric { profile.thresholds.minTSpreadPercent = numeric }
+        if id == .minNetGain, let numeric { profile.thresholds.minTNetGain = numeric }
+        if id == .gridTiers, let numeric { profile.thresholds.gridMaxTiers = Int(numeric.rounded()) }
+        if id == .tAppetite, value == "none" { profile.thresholds.tTradeFrequencyCap = 0 }
+        profile.setTrait(trait)
+        notice = "已更新「\(id.title)」：这是你明确设定的规则，AI 不会自行改动"
+    }
+
+    /// 用户说「这个判断不准确」→ 置信度清零并冷却 30 天，不用一次否认就永久删掉结论。
+    func markProfileTraitInaccurate(_ id: NextProfileTraitID, now: Date = Date()) {
+        guard var trait = profile.trait(id) else { return }
+        trait.confidence = 0
+        trait.mutedUntil = now.addingTimeInterval(30 * 86_400)
+        trait.basis = ["你标记过「这个判断不准确」，30 天内不再学习这一项（\(Self.stamp(now))）"]
+        trait.detail = "你标记过这个判断不准确，AI 会暂停这一项的推断，先按默认门槛处理"
+        profile.setTrait(trait)
+        notice = "已暂停学习「\(id.title)」30 天：期间这一项不参与排序"
+    }
+
+    /// 重新学习：清掉所有「学习得到」的结论，保留用户明确设定与锁定的规则。
+    func resetProfileLearning(now: Date = Date()) {
+        var fresh = NextInvestorProfile()
+        for (key, trait) in profile.traits where trait.locked || trait.source == .explicit {
+            fresh.traits[key] = trait
+        }
+        fresh.instrumentRoles = profile.instrumentRoles.filter { $0.value.locked || $0.value.source == .explicit }
+        fresh.updatedAt = now
+        profile = fresh
+        learnProfile(now: now)
+        notice = "已重置 AI 学习结果：你明确设定的规则和锁定的标的保持不变"
+    }
+
+    /// 用户指定「这只是长期核心仓 / 行业机动仓」→ 学习不会再改它。
+    func setInstrumentRole(_ code: String, role: NextInstrumentRole.Role, lock: Bool = true, now: Date = Date()) {
+        var entry = NextInstrumentRole()
+        entry.role = role
+        entry.source = .explicit
+        entry.locked = lock
+        entry.reason = "你在持仓里手动标记为\(role.rawValue)，AI 学习不会覆盖"
+        entry.updatedAt = now
+        profile.instrumentRoles[code] = entry
+        notice = "已把 \(name(for: code)) 标记为\(role.rawValue)：做 T / 网格建议会按这个身份重新判断"
+        learnProfile(now: now)
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     func removePriceAlert(_ id: UUID) { preferences.notifications.priceRules.removeAll { $0.id == id }; preferences = preferences }
@@ -1233,6 +1431,8 @@ struct LocalPreferences: Codable {
         dividendEvents = incoming.dividendEvents
         patientLimitPlans = incoming.patientLimitPlans
         candidatePlans = incoming.candidatePlans
+        profile = incoming.profile
+        suggestions = incoming.suggestions
     }
     func research(for code: String?) -> NextDecision? {
         do {
@@ -1267,6 +1467,8 @@ struct LocalPreferences: Codable {
         archive.dividendEvents = dividendEvents
         archive.patientLimitPlans = patientLimitPlans
         archive.candidatePlans = candidatePlans
+        archive.profile = profile
+        archive.suggestions = suggestions
         archive.theme = NextTheme(rawValue: theme.rawValue) ?? .light
         return archive
     }

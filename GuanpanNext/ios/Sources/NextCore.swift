@@ -1088,8 +1088,11 @@ struct NextAppArchive: Codable, Equatable {
     var dividendEvents: [String: [NextETFDividendEvent]] = [:]
     var patientLimitPlans: [NextPatientLimitPlan] = []
     var candidatePlans: [NextCandidatePlan] = []
+    /// 动态投资者画像与建议轨迹：备份/恢复必须一起带走，否则换机后画像从零开始。
+    var profile = NextInvestorProfile()
+    var suggestions: [NextSuggestionRecord] = []
     var theme: NextTheme = .light
-    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, theme }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, profile, suggestions, theme }
     init() {}
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1109,6 +1112,8 @@ struct NextAppArchive: Codable, Equatable {
         dividendEvents = try values.decodeIfPresent([String: [NextETFDividendEvent]].self, forKey: .dividendEvents) ?? [:]
         patientLimitPlans = try values.decodeIfPresent([NextPatientLimitPlan].self, forKey: .patientLimitPlans) ?? []
         candidatePlans = try values.decodeIfPresent([NextCandidatePlan].self, forKey: .candidatePlans) ?? []
+        profile = try values.decodeIfPresent(NextInvestorProfile.self, forKey: .profile) ?? NextInvestorProfile()
+        suggestions = try values.decodeIfPresent([NextSuggestionRecord].self, forKey: .suggestions) ?? []
         theme = try values.decodeIfPresent(NextTheme.self, forKey: .theme) ?? .light
     }
     func validate() throws {
@@ -1117,6 +1122,7 @@ struct NextAppArchive: Codable, Equatable {
         guard Set(patientLimitPlans.map(\.id)).count == patientLimitPlans.count else { throw NextError.invalid("耐心限价计划存在重复编号") }
         for plan in patientLimitPlans { try plan.validate() }
         guard Set(candidatePlans.map(\.id)).count == candidatePlans.count else { throw NextError.invalid("候选计划存在重复编号") }
+        guard Set(suggestions.map(\.id)).count == suggestions.count else { throw NextError.invalid("AI 建议记录存在重复编号") }
         for plan in candidatePlans { try plan.validate() }
         for (code, events) in dividendEvents {
             guard code.count == 6, code.allSatisfy(\.isNumber), events.allSatisfy({ $0.code == code }) else { throw NextError.invalid("分红历史代码与记录不一致") }
