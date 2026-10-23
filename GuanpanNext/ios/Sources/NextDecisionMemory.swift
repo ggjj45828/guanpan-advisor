@@ -214,7 +214,7 @@ enum NextDecisionDiff {
     static func priceMove(from oldText: String?, to newText: String?) -> Double? {
         guard let oldText, let newText,
               let old = Decimal(string: oldText), let new = Decimal(string: newText), old > 0 else { return nil }
-        let move = Double((new - old) / old * 100)
+        let move = NextNum.double((new - old) / old * 100)
         guard abs(move) >= priceMoveThresholdPercent else { return nil }
         return move
     }
@@ -345,7 +345,7 @@ enum NextDecisionMemory {
             if let price = quoteFor(copy.code), let limitText = copy.snapshot.limitPrice,
                let limit = Decimal(string: limitText), limit > 0,
                copy.snapshot.strategy.contains("做T") {
-                let gap = Double((price - limit) / limit * 100)
+                let gap = NextNum.double((price - limit) / limit * 100)
                 if abs(gap) > 5 {
                     copy.outcome = .invalidated
                     copy.outcomeAt = now
@@ -368,13 +368,13 @@ enum NextDecisionMemory {
         }
         review.laterPrice = "\(laterPrice)"
         if let filledText = review.filledPrice, let filled = Decimal(string: filledText), filled > 0 {
-            review.laterChangePercent = Double((laterPrice - filled) / filled * 100)
+            review.laterChangePercent = NextNum.double((laterPrice - filled) / filled * 100)
             let direction = (laterPrice - filled) >= 0 ? "上涨" : "下跌"
             review.note = "按 ¥\(filledText) 真实成交 \(review.filledUnits ?? 0) 份，此后\(direction) \(String(format: "%.2f", abs(review.laterChangePercent ?? 0)))%（仅复盘记录，不计入收益）"
         } else {
             let compare = record.snapshot.limitPrice.flatMap { Decimal(string: $0) }
             if let compare, compare > 0 {
-                let gap = Double((laterPrice - compare) / compare * 100)
+                let gap = NextNum.double((laterPrice - compare) / compare * 100)
                 review.note = "未记录真实成交；计划价 ¥\(compare) 与当前价 ¥\(laterPrice) 相差 \(String(format: "%+.2f", gap))%"
             } else {
                 review.note = "未记录真实成交，且当时没有给出限价"

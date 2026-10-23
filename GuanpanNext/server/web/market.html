@@ -175,6 +175,19 @@ details.exlist .body{padding:6px 10px}
       </div>
       <div class="sm mut">标的自动列出（持仓 + 自选），直接点「跑 AI 分析」即可，不用手输代码；分析上下文由 NAS 服务端用账本+行情+日K+分红自动拼装。</div>
       <div id="aiBody" class="sm mut">选好标的后点「跑 AI 分析」。</div>
+      <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+        <h3 style="font-size:13px;margin:0 0 4px">长期分时统计 <span class="tag t">1/5/20/60/120 日</span></h3>
+        <div class="sm mut" style="margin-bottom:4px">全部来自 NAS 分钟归档的实算：VWAP 偏离、日内振幅、往返次数、支撑压力、波动率、完整度与新鲜度。归档不够就明说不够，不做外推。</div>
+        <div id="minuteStats" class="sm mut">点「看缓存」时一并读取。</div>
+      </div>
+      <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+        <h3 style="font-size:13px;margin:0 0 4px">相关新闻与计划影响 <span class="tag" style="background:var(--terra)">标题级</span></h3>
+        <div style="display:flex;gap:6px;margin-bottom:4px;flex-wrap:wrap">
+          <button class="act mini" onclick="loadNews()">取新闻标题</button>
+          <span class="sm mut">只判读标题，用来判断原做T/网格计划是否要暂停</span>
+        </div>
+        <div id="newsBody" class="sm mut">还没有取新闻。</div>
+      </div>
     </div>
   </section>
 
@@ -876,7 +889,63 @@ async function loadResearch(){
       <div class="row"><span>规模(亿元)/年化波动</span><span class="right">${f.scale!=null?fmt(Number(f.scale)):'–'} / ${f.volatility!=null?pct(Number(f.volatility)):'–'}</span></div>
       <div class="row"><span>溢价率</span><span class="num">${f.premium!=null?pct(Number(f.premium)):'–'}</span></div>
       ${ai.text?`<div style="margin-top:8px;white-space:pre-wrap;font-size:12px;background:#f4f5f1;padding:10px;border-radius:8px">${escapeHtml(ai.text)}</div>`:'<div class="sm mut" style="margin-top:8px">暂无 AI 分析缓存，点“跑 AI 分析”。</div>'}`;
-  }catch(e){ body.className="sm mut"; body.textContent="读取失败："+e.message; }
+    renderMinuteStats(v.minuteStats);
+  }catch(e){ body.className="sm mut"; body.textContent="读取失败："+e.message;
+    $("minuteStats").className="sm mut"; $("minuteStats").textContent="长期分时统计读取失败："+e.message; }
+}
+
+/* ---------- 长期分时统计（NAS research.minute_stats 的原文渲染） ---------- */
+function renderMinuteStats(s){
+  const box=$("minuteStats"); box.className="";
+  if(!s||!s.days){ box.innerHTML='<div class="status err">NAS 上还没有这只标的的分时归档：长期结论不可用（不编造、不外推）</div>'; return; }
+  const q=s.quality||{}, f=s.freshness||{};
+  const windows=Object.entries(s.windows||{}).sort((a,b)=>Number(a[0])-Number(b[0]));
+  const rows=windows.map(([key,w])=>`<tr>
+      <td>${key} 日</td>
+      <td class="num">${w.daysUsed||0}/${w.expectedDays||key}</td>
+      <td class="num">${w.vwap||'–'}</td>
+      <td class="num ${(w.closeVsVwapPercent||0)>=0?'up':'down'}">${w.closeVsVwapPercent==null?'–':pct(w.closeVsVwapPercent)}</td>
+      <td class="num">${w.amplitudeMedianPercent==null?'–':fmt(w.amplitudeMedianPercent,2)+'%'}</td>
+      <td class="num">${w.roundTripsMedian==null?'–':fmt(w.roundTripsMedian,1)}</td>
+      <td class="num">${w.supportP10||w.support||'–'} – ${w.resistanceP90||w.resistance||'–'}</td>
+      <td class="num">${w.volatilityPercent==null?'–':fmt(w.volatilityPercent,2)+'%'}</td>
+      <td class="num">${Math.round((w.minuteCoverage||0)*100)}%</td>
+    </tr>`).join("");
+  box.innerHTML=`<div class="row"><span>归档</span><span class="right">${s.days} 天 · ${s.minutes} 分钟${q.enoughForLongTerm?'':' <span class="mut">（不足以支撑长期结论）</span>'}</span></div>
+    <div class="row"><span>分钟完整度</span><span class="num">${Math.round((q.minuteCoverage||0)*100)}%</span></div>
+    <div class="row"><span>新鲜度</span><span class="right">${f.lastDay||'–'} ${f.stale?'<span class="mut">· 已过期</span>':'· 新鲜'}${f.ageMinutes!=null?' · '+Math.round(f.ageMinutes)+' 分钟前':''}</span></div>
+    <div class="sm mut" style="margin-top:4px">成交量统计：${q.hasVolume?'有（VWAP 按成交量加权）':'无（VWAP 退化为时间等权，已标注）'}</div>
+    <table style="margin-top:6px"><tr><th>窗口</th><th>天数</th><th>VWAP</th><th>偏离</th><th>振幅中位</th><th>往返</th><th>支撑–压力(p10/p90)</th><th>波动率</th><th>覆盖</th></tr>${rows}</table>
+    <div class="sm mut" style="margin-top:4px">读法：偏离为正表示现价高于该窗口成交量加权均价；往返次数是价格穿越当日中位价的次数，代表日内可做T的次数；波动率是日收益标准差，不是年化。</div>`;
+}
+
+/* ---------- 新闻 → 持仓 → 计划 ---------- */
+const NEWS_MAJOR=["停牌","退市","立案","调查","处罚","清盘","清算","违约","暴雷","暴跌","跌停","涨停","重组","合并","收购","拆分","终止","风险警示","重大事项"];
+const NEWS_WATCH=["减持","增持","回购","分红","派息","调仓","费率","溢价","折价","规模","份额","跟踪","指数调整","流动性","公告","业绩","净值"];
+function newsLevel(title){
+  const t=String(title||"").toUpperCase();
+  const major=NEWS_MAJOR.filter(w=>t.includes(w.toUpperCase()));
+  if(major.length) return {level:"重大",tone:"var(--terra)",words:major};
+  const watch=NEWS_WATCH.filter(w=>t.includes(w.toUpperCase()));
+  if(watch.length) return {level:"关注",tone:"var(--gold)",words:watch};
+  return {level:"中性",tone:"var(--mut)",words:[]};
+}
+async function loadNews(){
+  const code=$("aiCode").value.trim(); if(!isSix(code)){toast("请输入6位代码");return;}
+  const box=$("newsBody"); box.className="sm mut"; box.textContent="正在向 NAS 取标题…";
+  try{
+    const v=await api("/v1/news/"+code);
+    const items=(v.items||[]);
+    if(!items.length){ box.className=""; box.innerHTML=`<div class="status err">新闻源没有返回标题（${v.state||'unavailable'}）：本次计划判断不含新闻因素。</div>`; return; }
+    const major=items.filter(i=>newsLevel(i.title).level==="重大").length;
+    box.className="";
+    box.innerHTML=`<div class="status ${major?'err':'ok'}">${items.length} 条标题，其中重大 ${major} 条${v.cached?' · 15 分钟内缓存':''}</div>
+      ${items.slice(0,8).map(i=>{const lv=newsLevel(i.title);return `<div style="padding:4px 0;border-bottom:1px dashed var(--line)">
+        <div style="font-size:12px">${escapeHtml(i.title)}</div>
+        <div class="sm mut"><span style="color:${lv.tone}">${lv.level}</span>${lv.words.length?' · 命中 '+escapeHtml(lv.words.join('/')):''}${i.source?' · '+escapeHtml(i.source):''}${i.publishedAt?' · '+escapeHtml(i.publishedAt):''}</div>
+      </div>`;}).join("")}
+      <div class="sm mut" style="margin-top:6px">重大事件未经人工确认前，手机端会收回原做T/网格计划；这里只做标题级提示，不读正文、不下单。</div>`;
+  }catch(e){ box.className=""; box.innerHTML='<div class="status err">新闻不可用：'+escapeHtml(e.message)+'</div>'; }
 }
 /* ---------- AI 结果排版 ----------
    服务端 prompt 已固定输出「结论 / 置信度 / 证据 / 风险 / 等待条件 / 失效条件 / 后续跟踪」六节，
