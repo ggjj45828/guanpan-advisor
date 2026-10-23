@@ -8,8 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_tencent_quotes, fetch_dividend_events
-from ai import generate_research, generate_g_twin_plan
-from simulations import execute_open_orders, close_g_session
+from ai import generate_research
 import grid as grid_engine
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -173,66 +172,6 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                    f"{researched}/{len(codes)} codes have usable 250-day research; next run in 15m{missing_note(failures)}")
             time.sleep(900)
 
-    def g_simulation_loop():
-        update("g-live-simulation", "starting", "G waits for an explicitly started virtual account and DeepSeek configuration")
-        while True:
-            local = datetime.now(SHANGHAI)
-            if local.weekday() < 5 and (local.hour, local.minute) >= (15, 20):
-                try:
-                    snapshot = database.get_twin_account("G")
-                    account = snapshot["account"]
-                    if not account or account.get("status") != "running":
-                        update("g-live-simulation", "idle", "G account not started or paused; no AI call or simulated order")
-                    else:
-                        codes = account["config"]["codes"]
-                        archives = {code: database.get_daily(code) for code in codes}
-                        if any(not data for data in archives.values()):
-                            raise ValueError("G daily archive missing for one or more configured securities")
-                        common_days = set.intersection(*(set(row["date"] for row in item["bars"]) for item in archives.values()))
-                        if not common_days:
-                            raise ValueError("G securities have no common archived session")
-                        session = max(common_days)
-                        if session != local.date().isoformat():
-                            update("g-live-simulation", "degraded", f"latest common archived session is {session}, not today's completed session; no decision generated")
-                        elif account.get("lastProcessedSession") == session:
-                            update("g-live-simulation", "ok", f"G session {session} already processed; orders and AI record are idempotent")
-                        else:
-                            bars = {code: next(row for row in archives[code]["bars"] if row["date"] == session) for code in codes}
-                            opened = execute_open_orders(account, bars, session)
-                            closes = {code: Decimal(bars[code]["close"]) for code in codes}
-                            equity = Decimal(opened["cash"]) + sum((Decimal(opened["positions"][c]) * closes[c] for c in codes), Decimal(0))
-                            current_weights = {c: str((Decimal(opened["positions"][c]) * closes[c] / equity) if equity else Decimal(0)) for c in codes}
-                            daily = {code: archives[code]["bars"][-640:] for code in codes}
-                            plan = None
-                            failure = None
-                            try:
-                                if any(rows[-1]["date"] != session or len(rows) < 250 for rows in daily.values()):
-                                    raise ValueError("G requires at least 250 daily bars ending on today's session for every security")
-                                context = {"asOf": session, "codes": codes, "dailyBars": daily,
-                                    "cash": opened["cash"], "positions": opened["positions"],
-                                    "currentWeights": current_weights, "baseWeights": opened["config"]["targetWeights"]}
-                                plan = generate_g_twin_plan(context)
-                                plan["createdAt"] = datetime.now(timezone.utc).isoformat()
-                            except Exception as error:
-                                # Existing next-open intents and the close mark must be
-                                # persisted even if today's new AI call is unavailable.
-                                failure = str(error)
-                            stamp = datetime.now(timezone.utc).isoformat()
-                            closed, changed = close_g_session(opened, bars, plan, stamp, failure)
-                            if not changed:
-                                update("g-live-simulation", "ok", f"G session {session} already processed")
-                            else:
-                                revision = database.put_twin_account("G", snapshot["revision"], closed)
-                                if plan:
-                                    update("g-live-simulation", "ok", f"DeepSeek decision and daily-open-proxy simulation recorded for {session}; revision {revision}; no broker orders")
-                                else:
-                                    update("g-live-simulation", "degraded", f"G marked {session} and settled prior virtual orders; no new AI order was created: {failure}; revision {revision}")
-                except Exception as error:
-                    update("g-live-simulation", "degraded", f"G did not advance; previous virtual account retained: {error}")
-            else:
-                update("g-live-simulation", "idle", "G evaluates only after 15:20 China time on weekdays")
-            time.sleep(900)
-
     def grid_loop():
         """组合网格：按真实持仓每秒/每分钟推进一次，收盘记净值。
 
@@ -265,22 +204,20 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                             state = grid_engine.build(book, quotes, bars)
                         else:
                             state = grid_engine.sync_with_book(state, book, quotes, bars)
-                        fills = []
+                        touches = []
                         if quotes:
-                            state, fills = grid_engine.tick(state, quotes)
-                            local = datetime.now(SHANGHAI)
-                            if local.hour >= 15 or local.hour < 9:
-                                state = grid_engine.mark_day(state, quotes, local.date().isoformat())
+                            state, touches = grid_engine.tick(state, quotes)
                         database.put_grid_state(state)
                         info = grid_engine.summary(state, quotes)
                         update("portfolio-grid", "ok",
-                               f"{len(codes)} 只 · 权益 ¥{info['equity']} · 买 {info['buys']} / 卖 {info['sells']}"
-                               + (f" · 本次 {len(fills)} 笔" if fills else ""))
+                               f"{info['holdingsCovered']} 只 · 计划占用 ¥{info['plannedBuyCapital']}"
+                               f" · 单档净收益 ¥{info['netPerRungTotal']}"
+                               + (f" · 本次触达 {len(touches)} 档" if touches else ""))
             except Exception as error:
                 update("portfolio-grid", "degraded", f"网格未推进：{error}")
             local = datetime.now(SHANGHAI)
             in_session = local.weekday() < 5 and ((9, 30) <= (local.hour, local.minute) <= (15, 0))
             time.sleep(60 if in_session else 600)
 
-    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-research", dividend_loop), ("factor-research", research_loop), ("g-live-simulation", g_simulation_loop), ("portfolio-grid", grid_loop)):
+    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-research", dividend_loop), ("factor-research", research_loop), ("portfolio-grid", grid_loop)):
         threading.Thread(target=target, name=name, daemon=True).start()

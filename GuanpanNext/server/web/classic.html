@@ -14475,13 +14475,15 @@ function gridTradeSignal(g){
   return {side:'wait',level:null,crossed:0};
 }
 function toolGridTrade(){
-  var h='<div style="padding:10px 14px 0;font-size:11.5px;color:var(--sub);line-height:1.75">网格支持<b>模拟</b>与<b>真实记账</b>两种模式，绝不自动下单。每条计划另有独立自动影子盘：按本机分钟行情记模拟信号，不改变主账户；真实模式须先在券商成交再手动确认，才写入主账户流水/持仓。页面还会合并查看计划资金、压力预算、单边冲击情景和当日复盘。自动方案依据行情/ATR生成，无需 API Key；大模型解读需另行配置。</div>'+ 
+  var h='<div style="padding:10px 14px 0;font-size:11.5px;color:var(--sub);line-height:1.75">网格只做<b>真实记账</b>（不提供模拟账户），绝不自动下单。每条计划另有独立自动影子盘：按本机分钟行情记模拟信号，不改变主账户；真实模式须先在券商成交再手动确认，才写入主账户流水/持仓。页面还会合并查看计划资金、压力预算、单边冲击情景和当日复盘。自动方案依据行情/ATR生成，无需 API Key；大模型解读需另行配置。</div>'+ 
     '<div style="padding:10px 14px;display:flex;gap:8px"><button class="btn" id="gridTradeAdd">＋ 新建日内网格</button><button class="btn" id="gridTradeReplay">📊 历史复盘 / 学习</button></div>';
   var capRows=gridCaptureReport(),capHtml=capRows.length?capRows.map(function(x){var tone=x.state==='当日可复盘'?'var(--up)':(/失败|中断|不完整|不足/.test(x.state)?'var(--down)':'var(--sub)');return '<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid var(--line)"><span>'+escText(nameOf({code:x.code})||x.code)+' · '+escText(x.code)+'</span><span style="color:'+tone+';text-align:right">'+escText(x.state)+' · '+x.count+' 点 / '+x.coverage.toFixed(0)+'% · 缺口 '+x.maxGap+' 分'+(x.lastTime?' · '+escText(x.lastTime):'')+'</span></div>';}).join(''):'暂无自选/持仓标的',portfolio=gridTradePortfolioSummary(),reviewDay=portfolio.latest||fmtD(new Date()),review=gridTradeShadowDaily(reviewDay),shockRows=[-10,-5,5,10].map(function(pc){var net=0;portfolio.grids.forEach(function(g){net+=gridTradeScenario(g,pc).change;});return '<span style="display:inline-block;margin-right:8px">'+(pc>0?'+':'')+pc+'%：'+money(net)+'</span>';}).join('');
   h+='<div class="ind" style="margin:10px 14px"><div class="indh">分时采集状态</div><div style="padding:8px 12px;font-size:11px;line-height:1.7;color:var(--sub)">保持页面在前台并连接网络，iPhone切后台可能暂停；覆盖率按今天已过去的交易分钟估算，收盘后才适合判断整天是否完整。'+capHtml+'</div></div>';
   h+='<div class="ind" style="margin:10px 14px"><div class="indh">日内网格总览 · 独立影子模拟</div><div style="padding:10px 12px;font-size:11.5px;line-height:1.85">运行中 '+portfolio.count+' 条 · 计划资金合计 '+money(portfolio.budget)+' · 下界压力损失估算 '+money(portfolio.stress)+' / 预算 '+money(portfolio.risk)+'<br>影子模拟浮动 '+money(portfolio.shadowPnl)+' · '+(review.found?'最近有记录 '+reviewDay+'：'+review.buy+' 买 / '+review.sell+' 卖 · 手续费/滑点 '+money(review.fees)+' · 已实现 '+money(review.realized)+' · 采集区间资产变化 '+money(review.pnl):'尚无自动影子成交记录')+'<br><b>单边冲击情景（所有运行中计划合计）：</b>'+shockRows+'<br>'+ (portfolio.duplicates.length?'⚠ 同标的有多条网格：'+portfolio.duplicates.join('、')+'，情景按每条计划分别计算，注意重复暴露。':'未发现同标的重复网格。')+'<br><span style="color:var(--dim)">影子盘按前台分钟行情自动模拟，不连接券商；情景是单边价格冲击，不是预测。费用和成交均为估算。</span></div></div>';
   var arr=DB.gridTrades||[];
-  var migrated=false;arr.forEach(function(g){if(!g.mode){g.mode='real';migrated=true;}});if(migrated)save();
+  // 模拟账户已下线：所有网格一律走真实记账，历史遗留的虚拟资金/虚拟份额字段就地清空。
+  // 网格仍然只是「档位计划 + 观察」，永远不会自动下单。
+  var migrated=false;arr.forEach(function(g){if(g.mode!=='real'){g.mode='real';g.simCash=0;g.simShares=0;g.simCapital=0;g.simRealized=0;migrated=true;}});if(migrated)save();
   if(!arr.length)return h+'<div class="empty" style="padding:24px">还没有网格。选择自选或持仓标的，系统会根据现价、ATR 和历史波动自动生成模拟或真实记账方案。</div>'+gridTradeGuide();
   arr.forEach(function(g){
     var p=gridTradeQuote(g.code),sig=gridTradeSignal(g),sellable=gridTradeSellable(g),qnum=+g.qty||0;

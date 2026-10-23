@@ -538,10 +538,11 @@ struct NextNASGridStatus: Decodable {
     let updatedAt: String?
     let summary: NextNASGridSummary?
     let ladder: [NextNASGridLadderRow]
-    let daily: [NextNASGridDaily]
-    let fills: [NextNASGridFill]
+    /// 价格触及过哪一档。这是观察日志，**不是成交**：真正的成交只发生在券商。
+    let touches: [NextNASGridTouch]
+    let skipped: [NextNASGridSkipped]
 
-    enum CodingKeys: String, CodingKey { case ok, initialized, updatedAt, summary, ladder, daily, fills }
+    enum CodingKeys: String, CodingKey { case ok, initialized, updatedAt, summary, ladder, touches, skipped }
 
     // 未初始化的 NAS 只回 {ok, initialized:false, summary:null, daily:[], fills:[]}，
     // 整个 ladder 键都不存在。用合成 Decodable 会抛 keyNotFound，导致新 NAS 一打开就报错，
@@ -553,22 +554,44 @@ struct NextNASGridStatus: Decodable {
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
         summary = try c.decodeIfPresent(NextNASGridSummary.self, forKey: .summary)
         ladder = try c.decodeIfPresent([NextNASGridLadderRow].self, forKey: .ladder) ?? []
-        daily = try c.decodeIfPresent([NextNASGridDaily].self, forKey: .daily) ?? []
-        fills = try c.decodeIfPresent([NextNASGridFill].self, forKey: .fills) ?? []
+        touches = try c.decodeIfPresent([NextNASGridTouch].self, forKey: .touches) ?? []
+        skipped = try c.decodeIfPresent([NextNASGridSkipped].self, forKey: .skipped) ?? []
     }
 }
+/// 网格计划的整体口径。**没有虚拟本金、没有模拟盈亏**——这里描述的是
+/// 「按我的真实持仓和真实现金，能挂出多少档、每档占用多少、单档往返净赚多少」。
 struct NextNASGridSummary: Decodable {
-    let startEquity: String
-    let equity: String
-    let cash: String
-    let pnl: String
-    let pnlPercent: String
-    let fees: String
-    let buys: Int
-    let sells: Int
-    let todayFills: Int
-    let days: Int
+    let mode: String
+    let holdingsCovered: Int
+    let plannedBuyCapital: String
+    let plannedSellUnits: Int
+    let deployableCash: String
+    let reservedCash: String
+    let netPerRungTotal: String
+    let feePerRungTotal: String
+    let todayTouches: Int
+    let cashEnoughForAllBuys: Bool
     let plans: [NextNASGridPlan]
+
+    enum CodingKeys: String, CodingKey {
+        case mode, holdingsCovered, plannedBuyCapital, plannedSellUnits, deployableCash,
+             reservedCash, netPerRungTotal, feePerRungTotal, todayTouches, cashEnoughForAllBuys, plans
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "plan-only"
+        holdingsCovered = try c.decodeIfPresent(Int.self, forKey: .holdingsCovered) ?? 0
+        plannedBuyCapital = try c.decodeIfPresent(String.self, forKey: .plannedBuyCapital) ?? "0"
+        plannedSellUnits = try c.decodeIfPresent(Int.self, forKey: .plannedSellUnits) ?? 0
+        deployableCash = try c.decodeIfPresent(String.self, forKey: .deployableCash) ?? "0"
+        reservedCash = try c.decodeIfPresent(String.self, forKey: .reservedCash) ?? "0"
+        netPerRungTotal = try c.decodeIfPresent(String.self, forKey: .netPerRungTotal) ?? "0"
+        feePerRungTotal = try c.decodeIfPresent(String.self, forKey: .feePerRungTotal) ?? "0"
+        todayTouches = try c.decodeIfPresent(Int.self, forKey: .todayTouches) ?? 0
+        cashEnoughForAllBuys = try c.decodeIfPresent(Bool.self, forKey: .cashEnoughForAllBuys) ?? false
+        plans = try c.decodeIfPresent([NextNASGridPlan].self, forKey: .plans) ?? []
+    }
 }
 struct NextNASGridPlan: Decodable {
     let code: String
@@ -577,9 +600,10 @@ struct NextNASGridPlan: Decodable {
     let levels: Int
     let sharesPerRung: Int
     let units: Int
-    let buys: Int
-    let sells: Int
-    let fees: String
+    let price: String?
+    let buyCapital: String?
+    let sellUnits: Int?
+    let netPerRung: String?
 }
 struct NextNASGridLadderRow: Decodable, Identifiable {
     let code: String
@@ -603,18 +627,20 @@ struct NextNASGridRung: Decodable, Identifiable {
     var id: String { "\(side)-\(level)" }
     var isBuy: Bool { side == "buy" }
 }
-struct NextNASGridDaily: Decodable {
-    let day: String?
-    let equity: String?
-    let cash: String?
-    let pnl: String?
-}
-struct NextNASGridFill: Decodable {
+/// 价格触及某档的记录。**不是成交**：只说明「价格到过这里」。
+struct NextNASGridTouch: Decodable, Identifiable {
     let code: String?
     let side: String?
     let level: Int?
     let price: String?
     let units: Int?
     let at: String?
+    var id: String { "\(code ?? "")-\(side ?? "")-\(level ?? 0)-\(at ?? "")" }
+    var isBuy: Bool { side == "buy" }
+}
+/// 因为市值不足一手而没能建出档位的标的。**如实说**，不假装有网格。
+struct NextNASGridSkipped: Decodable {
+    let code: String?
+    let reason: String?
 }
 private extension NextBook { func validated() throws -> NextBook { try validate(); return self } }

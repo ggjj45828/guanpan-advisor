@@ -1145,7 +1145,8 @@ struct LocalPreferences: Codable {
             if !result.initialized {
                 gridStatusMessage = "NAS 网格尚未初始化；首次启动后由后台按持仓自动建网格"
             } else if let summary = result.summary {
-                gridStatusMessage = "网格运行中 · 账户权益 ¥\(NextMoney.text(Decimal(string: summary.equity) ?? 0)) · 已运行 \(summary.days) 天 · 待办挂单 \(result.ladder.reduce(0) { $0 + $1.rungs.count }) 档"
+                let rungs = result.ladder.reduce(0) { $0 + $1.rungs.count }
+                gridStatusMessage = "网格计划 · 覆盖 \(summary.holdingsCovered) 只 · 计划占用 ¥\(NextMoney.text(Decimal(string: summary.plannedBuyCapital) ?? 0)) · 单档净收益 ¥\(NextMoney.text(Decimal(string: summary.netPerRungTotal) ?? 0)) · 档位 \(rungs) 档"
             } else {
                 gridStatusMessage = "NAS 网格已连接，但无汇总数据"
             }

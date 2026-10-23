@@ -1,15 +1,14 @@
-"""组合网格引擎（NAS 后台按真实持仓自动跑）。
+"""组合网格「档位计划」引擎（NAS 后台按真实持仓算）。
 
-设计取舍写在这里，避免以后又改回去：
+**这里没有虚拟账户**：不记虚拟现金、不记虚拟持仓、不算模拟盈亏。
+网格只做一件事——按你真实持仓与真实现金，算出「价格走到某个位置该挂多少买卖单」，
+并把「价格触及过哪一档」记成观察日志。它永远不改账本，也不产生任何"模拟成交收益"。
 
-1. **不用 A–H 那种抽象策略**。只有一套「按你当前持仓做 T」的网格：每只持仓一份，
-   新增标的自动纳入、清仓自动移出。起点权益 = 你账本的总资产，所以两条曲线可比。
-2. **只做模拟，不碰真实账本**。它读 real_books 的持仓与现金，写入自己的 grid_state。
-3. **参数从数据来，不拍脑袋**：锚点取上一交易日收盘，步长取「近 20 日日内振幅中位数 × 0.25」
-   与「手续费地板」的较大者，并限在 0.25%–1%；每边 3 档，每格资金 = 该标的市值 / (2×档数+2)。
-4. **触发按报价逐次比较**（不是按分钟 K 线补齐），因为 NAS 上报价是实时的，分时档案有缺采。
-
-数据结构全部放在 grid_state 一行 JSON 里：plans / cash / fills / daily，条数都有上限。
+设计取舍：
+1. 每只真实持仓一份计划，新增标的自动纳入、清仓自动移出（sync_with_book）。
+2. 参数从数据来，不拍脑袋：锚点=上一交易日收盘；步长=近 20 日日内振幅中位数×0.25
+   与「手续费地板」的较大者，限在 0.25%–1%；档数由「可用手数」反推（不是固定 4 档）。
+3. 触达按报价逐次比较，只记观察日志（touches），不改现金、不改持仓。
 """
 from __future__ import annotations
 
@@ -19,9 +18,8 @@ from decimal import Decimal, InvalidOperation
 
 CASH_TOLERANCE = Decimal("0.01")
 DEFAULT_FEE = Decimal("0.10")
-MAX_FILLS = 400
-MAX_DAYS = 400
 LEVELS = 3
+MAX_TOUCHES = 400
 STEP_MIN = Decimal("0.0025")
 STEP_MAX = Decimal("0.01")
 # 现金预留比例：网格只拿 (1 - 该比例) 的现金去挂买单，剩下永久不部署，作备用弹药。
@@ -37,9 +35,10 @@ def _d(value, default="0"):
 
 
 def empty_state():
-    return {"version": 1, "createdAt": None, "day": None, "cash": Decimal("0"),
-            "reservedCash": Decimal("0"), "startEquity": Decimal("0"), "equity": Decimal("0"),
-            "plans": {}, "fills": [], "daily": []}
+    """网格状态里只有「计划 + 触达日志」，没有任何虚拟资金/虚拟持仓字段。"""
+    return {"version": 2, "createdAt": None, "day": None,
+            "deployableCash": Decimal("0"), "reservedCash": Decimal("0"),
+            "plans": {}, "touches": [], "skipped": []}
 
 
 def _median(values):
@@ -87,14 +86,17 @@ def plan_for(anchor, capital, step_hint=None, fee=DEFAULT_FEE, lot=100, levels=L
 
 
 def build(book, quotes, bars_by_code, now=None, fee=DEFAULT_FEE):
-    """按真实账本重建一份网格账户。quotes: {code: {price, previousClose}}。"""
+    """按真实账本算一份网格计划（**不建虚拟账户**）。
+
+    只读：持仓份额、账本现金、行情、日 K。产出每只标的的锚点/步长/档数/每档份额，
+    外加「计划占用多少现金、最多卖出多少份额」。不写任何虚拟资金、虚拟持仓。
+    """
     now = now or datetime.now(timezone.utc)
     state = empty_state()
     state["createdAt"] = now.isoformat()
     cash_total = _d(book.get("cash"))
     reserved = (cash_total * CASH_RESERVE_RATIO).quantize(Decimal("0.01"))
-    cash = cash_total - reserved
-    plans, equity, skipped = {}, cash, []
+    plans, skipped = {}, []
     for position in book.get("positions") or []:
         code = position.get("code")
         units = int(position.get("units") or 0)
@@ -115,27 +117,23 @@ def build(book, quotes, bars_by_code, now=None, fee=DEFAULT_FEE):
             skipped.append({"code": code,
                             "reason": f"市值 ¥{capital:.2f} 不足一手（100 份约 ¥{previous * 100:.0f}），无法分档"})
             continue
-        plan.update({"units": units, "baseUnits": units, "lastPrice": price,
-                     "buys": 0, "sells": 0, "fees": Decimal("0")})
+        plan.update({"units": units, "baseUnits": units, "lastPrice": price})
         plans[code] = plan
-        equity += capital
-    state["cash"] = cash
+    state["deployableCash"] = cash_total - reserved
     state["reservedCash"] = reserved
     state["plans"] = plans
-    state["equity"] = equity
-    # 起点权益 = 账本总资产（持仓市值 + 全部现金），与文件头注释一致；
-    # 含预留现金，确保未交易时当日盈亏为 0。
-    state["startEquity"] = equity_of(state, quotes) + reserved
     state["skipped"] = skipped
     state["day"] = now.astimezone().date().isoformat()
     return state
 
 
 def tick(state, quotes, now=None):
-    """推进一次：价格跨过档位就成交。返回 (state, 本次成交列表)。"""
+    """推进一次：只记录「价格触及了哪一档」，不改现金、不改持仓、不产生收益。
+
+    返回 (state, 本次新记的触达)。真正的成交只发生在券商，用户自己回 App 确认。
+    """
     now = now or datetime.now(timezone.utc)
-    fills = []
-    cash = _d(state.get("cash"))
+    touches = []
     plans = state.get("plans") or {}
     for code, plan in plans.items():
         quote = quotes.get(code) or {}
@@ -146,112 +144,102 @@ def tick(state, quotes, now=None):
         step = _d(plan.get("step")) or STEP_MIN
         levels = int(plan.get("levels") or LEVELS)
         shares_per_rung = int(plan.get("sharesPerRung") or 0)
-        fee = _d(plan.get("fee"), str(DEFAULT_FEE))
         previous_price = _d(plan.get("lastPrice")) or price
-        units = int(plan.get("units") or 0)
         if anchor <= 0 or shares_per_rung <= 0:
             plan["lastPrice"] = price
             continue
         for level in range(1, levels + 1):
             buy_level = anchor * (Decimal(1) - step) ** level
             sell_level = anchor * (Decimal(1) + step) ** level
-            # 只有「上一笔价格在这一档之上、现在跌到档位」才算一次触发，
-            # 避免价格在档位附近来回抖动时同一档重复成交。
+            # 只有「上一笔价格在这一档之上、现在跌到档位」才算一次触达，
+            # 避免价格在档位附近来回抖动时同一档重复记录。
             if previous_price > buy_level >= price:
-                cost = price * shares_per_rung + fee
-                if cash >= cost:
-                    cash -= cost
-                    units += shares_per_rung
-                    plan["fees"] = _d(plan.get("fees")) + fee
-                    plan["buys"] = int(plan.get("buys") or 0) + 1
-                    fills.append({"code": code, "side": "buy", "level": level, "price": price,
-                                  "units": shares_per_rung, "fee": fee, "at": now.isoformat()})
+                touches.append({"code": code, "side": "buy", "level": level, "price": str(price),
+                                "units": shares_per_rung, "at": now.isoformat()})
             elif previous_price < sell_level <= price:
-                if units >= shares_per_rung:
-                    cash += price * shares_per_rung - fee
-                    units -= shares_per_rung
-                    plan["fees"] = _d(plan.get("fees")) + fee
-                    plan["sells"] = int(plan.get("sells") or 0) + 1
-                    fills.append({"code": code, "side": "sell", "level": level, "price": price,
-                                  "units": shares_per_rung, "fee": fee, "at": now.isoformat()})
-        plan["units"] = units
+                touches.append({"code": code, "side": "sell", "level": level, "price": str(price),
+                                "units": shares_per_rung, "at": now.isoformat()})
         plan["lastPrice"] = price
-    state["cash"] = cash
-    state["equity"] = equity_of(state, quotes)
-    if fills:
-        history = list(state.get("fills") or []) + fills
-        state["fills"] = history[-MAX_FILLS:]
-    return state, fills
+    if touches:
+        state["touches"] = (list(state.get("touches") or []) + touches)[-MAX_TOUCHES:]
+    return state, touches
 
 
-def equity_of(state, quotes):
-    total = _d(state.get("cash"))
-    for code, plan in (state.get("plans") or {}).items():
-        quote = quotes.get(code) or {}
-        price = _d(quote.get("price")) or _d(plan.get("lastPrice"))
-        total += price * Decimal(int(plan.get("units") or 0))
-    return total
-
-
-def mark_day(state, quotes, day=None, now=None):
-    """收盘记一条净值。同一天重复调用只更新最后一条。"""
-    now = now or datetime.now(timezone.utc)
-    day = day or now.astimezone().date().isoformat()
-    equity = equity_of(state, quotes)
-    state["equity"] = equity
-    daily = [row for row in state.get("daily") or [] if row.get("day") != day]
-    cash = _d(state.get("cash"))
-    holdings = {}
-    for code, plan in (state.get("plans") or {}).items():
-        quote = quotes.get(code) or {}
-        price = _d(quote.get("price")) or _d(plan.get("lastPrice"))
-        holdings[code] = {"units": int(plan.get("units") or 0), "price": str(price)}
-    daily.append({"day": day, "equity": str(equity), "cash": str(cash + _d(state.get("reservedCash"))), "holdings": holdings})
-    daily.sort(key=lambda row: row.get("day") or "")
-    state["daily"] = daily[-MAX_DAYS:]
-    state["day"] = day
-    return state
+def plan_metrics(plan, fee=DEFAULT_FEE):
+    """单只标的的计划口径：计划占用现金、最多卖出份额、单档往返净收益。"""
+    anchor = _d(plan.get("anchor"))
+    step = _d(plan.get("step")) or STEP_MIN
+    levels = int(plan.get("levels") or 0)
+    shares = int(plan.get("sharesPerRung") or 0)
+    fee = _d(plan.get("fee"), str(fee))
+    buy_capital = Decimal("0")
+    for level in range(1, levels + 1):
+        buy_capital += anchor * (Decimal(1) - step) ** level * Decimal(shares)
+    sell_units = levels * shares
+    sell_value = Decimal("0")
+    for level in range(1, levels + 1):
+        sell_value += anchor * (Decimal(1) + step) ** level * Decimal(shares)
+    # 单档往返：买入一档、再卖出一档（相邻档）扣掉两次手续费后的净收益。
+    gross = anchor * step * Decimal(shares)
+    net = gross - fee * 2
+    return {"buyCapital": buy_capital.quantize(Decimal("0.01")),
+            "sellUnits": sell_units,
+            "sellValue": sell_value.quantize(Decimal("0.01")),
+            "grossPerRung": gross.quantize(Decimal("0.01")),
+            "netPerRung": net.quantize(Decimal("0.01")),
+            "feePerRung": (fee * 2).quantize(Decimal("0.01"))}
 
 
 def summary(state, quotes):
+    """网格计划的整体口径。**没有任何"累计盈亏/虚拟本金"字段。**"""
     plans = state.get("plans") or {}
-    start = _d(state.get("startEquity"))
+    cash = _d(state.get("deployableCash"))
     reserved = _d(state.get("reservedCash"))
-    equity = equity_of(state, quotes) + reserved  # 含预留现金的总资产
-    cash_total = _d(state.get("cash")) + reserved
-    fills = state.get("fills") or []
-    today = (state.get("daily") or [{}])[-1].get("day")
-    today_fills = [f for f in fills if (f.get("at") or "")[:10] == (today or "")]
+    touches = state.get("touches") or []
+    today = datetime.now(timezone.utc).astimezone().date().isoformat()
+    buy_capital = Decimal("0")
+    sell_units = 0
+    net_per_rung = Decimal("0")
+    fee_per_rung = Decimal("0")
+    rows = []
+    for code, plan in plans.items():
+        metrics = plan_metrics(plan)
+        buy_capital += metrics["buyCapital"]
+        sell_units += metrics["sellUnits"]
+        net_per_rung += metrics["netPerRung"]
+        fee_per_rung += metrics["feePerRung"]
+        quote = quotes.get(code) or {}
+        price = _d(quote.get("price")) or _d(plan.get("lastPrice"))
+        rows.append({"code": code,
+                     "anchor": str(_d(plan.get("anchor"))),
+                     "stepPercent": str(_d(plan.get("step")) * 100),
+                     "levels": int(plan.get("levels") or 0),
+                     "sharesPerRung": int(plan.get("sharesPerRung") or 0),
+                     "units": int(plan.get("units") or 0),
+                     "price": str(price),
+                     "buyCapital": str(metrics["buyCapital"]),
+                     "sellUnits": metrics["sellUnits"],
+                     "netPerRung": str(metrics["netPerRung"])})
     return {
-        "startEquity": str(start),
-        "equity": str(equity),
-        "cash": str(cash_total),
+        "mode": "plan-only",
+        "holdingsCovered": len(plans),
+        "plannedBuyCapital": str(buy_capital.quantize(Decimal("0.01"))),
+        "plannedSellUnits": sell_units,
+        "deployableCash": str(cash),
         "reservedCash": str(reserved),
-        "pnl": str(equity - start),
-        "pnlPercent": str((equity - start) / start * 100) if start > 0 else "0",
-        "fees": str(sum((_d(p.get("fees")) for p in plans.values()), Decimal("0"))),
-        "buys": sum(int(p.get("buys") or 0) for p in plans.values()),
-        "sells": sum(int(p.get("sells") or 0) for p in plans.values()),
-        "todayFills": len(today_fills),
-        "days": len(state.get("daily") or []),
-        "plans": [{"code": code,
-                   "anchor": str(p.get("anchor")),
-                   "stepPercent": str(_d(p.get("step")) * 100),
-                   "levels": int(p.get("levels") or 0),
-                   "sharesPerRung": int(p.get("sharesPerRung") or 0),
-                   "units": int(p.get("units") or 0),
-                   "buys": int(p.get("buys") or 0),
-                   "sells": int(p.get("sells") or 0),
-                   "fees": str(_d(p.get("fees")))} for code, p in plans.items()],
+        "netPerRungTotal": str(net_per_rung.quantize(Decimal("0.01"))),
+        "feePerRungTotal": str(fee_per_rung.quantize(Decimal("0.01"))),
+        "todayTouches": sum(1 for t in touches if (t.get("at") or "")[:10] == today),
+        "cashEnoughForAllBuys": cash >= buy_capital,
+        "skipped": state.get("skipped") or [],
+        "plans": rows,
     }
 
 
 def sync_with_book(state, book, quotes, bars_by_code, fee=DEFAULT_FEE):
-    """让网格账户跟上真实账本的持仓变化（新增标的、加仓、清仓）。
+    """让网格计划跟上真实账本的持仓变化（新增标的、加仓、清仓、现金变动）。
 
-    startEquity 始终 = 账本总资产（持仓市值 + 全部现金），由持仓与现金直接重算，
-    不再用「注资/提现」增量调整 —— 那样无法区分「用现有现金买入」与「真的存入新钱」，
-    会让收益率虚高或虚低。现金按 CASH_RESERVE_RATIO 拆成可部署与预留两部分。
+    只同步「有哪些标的、各有多少份额、可用现金多少」；不保存任何虚拟持仓/虚拟现金。
     """
     plans = state.get("plans") or {}
     positions = {}
@@ -275,8 +263,7 @@ def sync_with_book(state, book, quotes, bars_by_code, fee=DEFAULT_FEE):
                              daily_range_median(bars_by_code.get(code, [])), fee=fee)
             if not built:
                 continue
-            built.update({"units": units, "baseUnits": units, "lastPrice": price,
-                          "buys": 0, "sells": 0, "fees": Decimal("0")})
+            built.update({"units": units, "baseUnits": units, "lastPrice": price})
             plans[code] = built
             added.append(code)
             continue
@@ -293,14 +280,12 @@ def sync_with_book(state, book, quotes, bars_by_code, fee=DEFAULT_FEE):
         plans.pop(code, None)
         removed.append(code)
 
-    # 现金：账本全部现金，按预留比例拆成可部署 + 预留。
+    # 现金：账本全部现金，按预留比例拆成可部署 + 预留（只是额度，不是虚拟资金账户）。
     cash_total = _d(book.get("cash"))
     reserved = (cash_total * CASH_RESERVE_RATIO).quantize(Decimal("0.01"))
-    state["cash"] = cash_total - reserved
+    state["deployableCash"] = cash_total - reserved
     state["reservedCash"] = reserved
     state["plans"] = plans
-    # 总资产 = 持仓市值（含可部署现金） + 预留现金
-    state["startEquity"] = equity_of(state, quotes) + reserved
     if added or removed:
         state["lastSync"] = {"added": added, "removed": removed}
     return state
@@ -317,7 +302,7 @@ def ladder(state, quotes):
     这些是条件单，不是预测；价格不到就不成交。
     """
     rows = []
-    cash = _d(state.get("cash"))
+    cash = _d(state.get("deployableCash"))
     for code, plan in (state.get("plans") or {}).items():
         anchor = _d(plan.get("anchor"))
         step = _d(plan.get("step")) or STEP_MIN

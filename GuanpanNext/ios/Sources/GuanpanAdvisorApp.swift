@@ -1566,34 +1566,42 @@ private struct GridLabScreen: View {
         }.safeAreaInset(edge: .bottom) { Color.clear.frame(height: 4) }
         .task { await model.refreshGridStatus() }
     }
-    /// 模拟账户英雄卡：权益大数字 + 盈亏徽标 + 一行口径（天数/笔数/本金/手续费）。
+    /// 网格计划英雄卡：**只讲计划，不讲模拟收益**。
+    /// 参考稿那张紫色大数字卡原本是虚拟账户权益，产品明确不要模拟账户，所以这里换成
+    /// 「覆盖几只 / 计划占用多少现金 / 单档往返净收益 / 今日触达几档」。
     @ViewBuilder private func gridHeroCard(_ summary: NextNASGridSummary) -> some View {
-        let equity = dec(summary.equity) ?? 0
-        let pnl = dec(summary.pnl) ?? 0
-        let pnlPct = NextNum.double(dec(summary.pnlPercent) ?? 0)
+        let buyCapital = dec(summary.plannedBuyCapital) ?? 0
+        let deployable = dec(summary.deployableCash) ?? 0
+        let reserved = dec(summary.reservedCash) ?? 0
+        let net = dec(summary.netPerRungTotal) ?? 0
+        let fee = dec(summary.feePerRungTotal) ?? 0
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("模拟账户 · 虚拟资金").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white.opacity(0.78))
-                    Text("¥\(NextMoney.text(equity))").font(.system(size: 30, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.72)
+                    Text("网格计划 · 按真实持仓计算").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white.opacity(0.78))
+                    Text("覆盖 \(summary.holdingsCovered) 只").font(.system(size: 26, weight: .medium, design: .rounded)).foregroundStyle(.white).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "sparkles").font(.system(size: 24)).foregroundStyle(Color.white.opacity(0.85))
+                Image(systemName: "square.grid.3x3.fill").font(.system(size: 22)).foregroundStyle(Color.white.opacity(0.85))
             }
             HStack(spacing: 8) {
-                Text("累计盈亏 \(pnl >= 0 ? "+" : "")¥\(NextMoney.text(pnl))").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.white)
-                Text("\(pnlPct >= 0 ? "+" : "")\(NextNum.signed(pnlPct))%")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text("计划占用 ¥\(NextMoney.text(buyCapital))").font(.system(size: 12, weight: .semibold, design: .rounded)).foregroundStyle(.white)
+                Text(summary.cashEnoughForAllBuys ? "现金够" : "现金不够全挂")
+                    .font(.system(size: 10, weight: .semibold))
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Color.white.opacity(0.2), in: Capsule())
                     .foregroundStyle(.white)
             }
-            Text("运行 \(summary.days) 天 · 买/卖 \(summary.buys)/\(summary.sells) 笔 · 本金 ¥\(NextMoney.text(dec(summary.startEquity) ?? 0)) · 手续费 ¥\(NextMoney.text(dec(summary.fees) ?? 0))")
-                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.68))
+            Text("可部署 ¥\(NextMoney.text(deployable)) · 预留 ¥\(NextMoney.text(reserved)) · 单档往返净收益 ¥\(NextMoney.text(net))（含手续费 ¥\(NextMoney.text(fee))）")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.72))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("今日触达 \(summary.todayTouches) 档 · 触达只代表价格到过，不等于成交")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            LinearGradient(colors: [Color(hex: 0x5B3CC4), Color(hex: 0x795CE0), Color(hex: 0x9B7BF0)],
+            LinearGradient(colors: [Color(hex: 0x3B2E7E), Color(hex: 0x5B3CC4), Color(hex: 0x795CE0)],
                            startPoint: .topLeading, endPoint: .bottomTrailing),
             in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: Color(hex: 0x795CE0).opacity(0.3), radius: 12, x: 0, y: 6)

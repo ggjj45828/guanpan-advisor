@@ -22,7 +22,6 @@ from workers import start_workers
 import grid
 import advisor
 from backtest import run_backtest
-from simulations import apply_action, create_account
 
 WEB_ROOT = Path(__file__).with_name("web")
 
@@ -162,23 +161,25 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     state = stored.get("state")
                     if not state:
                         return self.reply(200, {"ok": True, "initialized": False, "summary": None,
-                                                "daily": [], "fills": []})
+                                                "touches": [], "skipped": []})
                     codes = list((state.get("plans") or {}).keys())
                     quotes = grid_quotes(codes)
                     return self.reply(200, {"ok": True, "initialized": True, "updatedAt": stored.get("updatedAt"),
+                                            # 只有计划口径：覆盖几只、计划占用多少现金、单档往返净收益。
+                                            # 没有虚拟本金、没有模拟盈亏。
                                             "summary": grid.summary(state, quotes),
                                             # 明天的挂单表：网格真正的"未来指导"，不是预测涨跌
                                             "ladder": grid.ladder(state, quotes),
-                                            "daily": (state.get("daily") or [])[-90:],
-                                            "fills": (state.get("fills") or [])[-20:]})
+                                            # 价格触及过哪一档（观察日志，不是成交）
+                                            "touches": (state.get("touches") or [])[-20:],
+                                            "skipped": state.get("skipped") or []})
                 except (InvalidData, ValueError) as error:
                     return self.reply(400, {"error": str(error)})
             if path == "/v1/grid/history":
                 try:
                     stored = database.get_grid_state()
                     state = stored.get("state") or {}
-                    return self.reply(200, {"ok": True, "daily": state.get("daily") or [],
-                                            "fills": (state.get("fills") or [])[-100:]})
+                    return self.reply(200, {"ok": True, "touches": (state.get("touches") or [])[-100:]})
                 except (InvalidData, ValueError) as error:
                     return self.reply(400, {"error": str(error)})
             if path == "/v1/legacy/books/main":
@@ -204,16 +205,10 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     return self.reply(200, result) if result else self.reply(404, {"error": "backtest run not found"})
                 except InvalidData as error: return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/simulations/"):
-                try:
-                    parts = path.strip("/").split("/")
-                    if len(parts) not in (3, 4): raise InvalidData("invalid simulation path")
-                    strategy = parts[2]
-                    current = database.get_twin_account(strategy)
-                    if len(parts) == 4:
-                        if parts[3] != "history": raise InvalidData("unknown simulation resource")
-                        return self.reply(200, {"strategy": strategy, "history": database.twin_account_history(strategy)})
-                    return self.reply(200, {"strategy": strategy, **current})
-                except InvalidData as error: return self.reply(400, {"error": str(error)})
+                # 数字孪生 / 虚拟账户已下线：产品只允许真实账户。这里保留 410，
+                # 让旧客户端与旧收藏脚本明确知道「接口没了」，而不是拿到一份假的模拟数据。
+                return self.reply(410, {"error": "数字孪生与虚拟账户已下线：观盘只使用真实持仓与真实成交。",
+                                        "code": "simulation_removed"})
             if path == "/v1/market/indices":
                 try: return self.reply(200, {"indices": fetch_indices()})
                 except Exception: return self.reply(502, {"error": "index source unavailable"})
@@ -410,38 +405,8 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     except Exception:
                         return self.reply(502, {"error": "DeepSeek 分析失败；未生成建议"})
                 if path.startswith("/v1/simulations/"):
-                    parts = path.strip("/").split("/")
-                    if len(parts) != 3: raise InvalidData("invalid simulation path")
-                    strategy = parts[2]
-                    if value.get("userConfirmed") is not True:
-                        raise InvalidData("virtual account changes require explicit confirmation")
-                    expected = value.get("expectedRevision")
-                    if type(expected) is not int or expected < 0:
-                        raise InvalidData("expectedRevision is required")
-                    action = value.get("action")
-                    now = datetime.now(timezone.utc).isoformat()
-                    current = database.get_twin_account(strategy)
-                    if current["revision"] != expected:
-                        raise Conflict("simulation revision changed")
-                    if action == "start":
-                        if set(value) != {"action", "userConfirmed", "expectedRevision", "config"}:
-                            raise InvalidData("simulation start fields are invalid")
-                        if current["account"] is not None and current["account"].get("status") != "reset":
-                            raise InvalidData("account already exists; pause it or reset it before restarting")
-                        config = value.get("config")
-                        account = create_account(strategy, config, now)
-                    else:
-                        if current["account"] is None: raise InvalidData("start this virtual account first")
-                        if set(value) - {"action", "userConfirmed", "expectedRevision", "amount", "reason"}:
-                            raise InvalidData("unexpected simulation action fields")
-                        action_request = {"action": action}
-                        if action == "reset": action_request["userConfirmed"] = value.get("userConfirmed")
-                        if action in ("fund", "withdraw"):
-                            for key in ("amount", "reason"):
-                                if key in value: action_request[key] = value[key]
-                        account = apply_action(current["account"], action_request, now)
-                    revision = database.put_twin_account(strategy, expected, account)
-                    return self.reply(200, {"strategy": strategy, "revision": revision, "account": account, "realOrder": False})
+                    return self.reply(410, {"error": "数字孪生与虚拟账户已下线：观盘只使用真实持仓与真实成交。",
+                                            "code": "simulation_removed"})
                 if path == "/api/data":
                     if value.get("mode") != "legacy-stage-confirmed":
                         raise InvalidData("legacy staging requires explicit migration action")
@@ -457,7 +422,7 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                                                          int(expected) if isinstance(expected, int) else None)
                     return self.reply(200, {"ok": True, "revision": revision})
                 if path == "/v1/grid/reset":
-                    # 按当前真实持仓重建网格账户。只影响模拟，不动账本。
+                    # 按当前真实持仓重建网格计划。只写档位计划，不动账本。
                     if value.get("mode") != "grid-reset-confirmed":
                         raise InvalidData("grid reset requires explicit confirmation")
                     book = grid_book()
@@ -483,11 +448,9 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                         state = grid.build(book, quotes, grid_bars(codes))
                     else:
                         state = grid.sync_with_book(state, book, quotes, grid_bars(codes))
-                    state, fills = grid.tick(state, quotes)
-                    if datetime.now(ZoneInfo("Asia/Shanghai")).hour >= 15:
-                        state = grid.mark_day(state, quotes)
+                    state, touches = grid.tick(state, quotes)
                     database.put_grid_state(state)
-                    return self.reply(200, {"ok": True, "fills": len(fills),
+                    return self.reply(200, {"ok": True, "touches": len(touches),
                                             "summary": grid.summary(state, quotes)})
                 if path.startswith("/v1/backtests/"):
                     strategy = path.rsplit("/", 1)[-1]
