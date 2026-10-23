@@ -490,7 +490,7 @@ private struct InstrumentDetailScreen: View {
                 DataPanel(title: "行情图表", accent: p.chartBlue, caption: model.chartData[code].map { "\($0.priceSource) · \($0.observedAt.formatted(date: .omitted, time: .shortened))" } ?? "暂无本机历史") {
                     UnifiedChartView(dataset: interval == .intraday ? model.chartData[code] : model.chartData["\(code):day"], interval: $interval, costPerUnit: cost, selectedTime: $selectedTime, securityCode: code)
                     if interval != .intraday, let dailyError = model.dailyErrors[code] {
-                        GPStatus(title: "NAS 日 K 暂不可用", detail: dailyError, symbol: "externaldrive.badge.exclamationmark", actionTitle: "重新获取") { Task { await model.refreshDaily(code, required: true) } }
+                        GPStatus(title: "日 K 暂不可用", detail: dailyError, symbol: "externaldrive.badge.exclamationmark", actionTitle: "重新获取") { Task { await model.refreshDaily(code, required: true) } }
                     }
                     HStack { Button { Task { await model.refreshInstrument(code) } } label: { Label("刷新行情与分时", systemImage: "arrow.clockwise").font(.caption.weight(.semibold)) }; Spacer(); NavigationLink(value: GPRoute.chart(code)) { Label("全屏分析", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.semibold)) }.accessibilityIdentifier("chart.fullscreen") }.tint(p.forest)
                 }
@@ -624,7 +624,7 @@ private struct FullscreenChartScreen: View {
                 DataPanel(title: "价格与 IOPV", accent: p.chartViolet, caption: geo.size.width > geo.size.height ? "横屏 · 拖动/双指缩放" : "竖屏") {
                     UnifiedChartView(dataset: interval == .intraday ? model.chartData[code] : model.chartData["\(code):day"], interval: $interval, costPerUnit: model.book.positions.first(where: { $0.code == code })?.costPerUnit, selectedTime: $crosshair, securityCode: code, expanded: true)
                     if interval != .intraday, let dailyError = model.dailyErrors[code] {
-                        GPStatus(title: "NAS 日 K 暂不可用", detail: dailyError, symbol: "externaldrive.badge.exclamationmark", actionTitle: "重新获取") { Task { await model.refreshDaily(code, required: true) } }
+                        GPStatus(title: "日 K 暂不可用", detail: dailyError, symbol: "externaldrive.badge.exclamationmark", actionTitle: "重新获取") { Task { await model.refreshDaily(code, required: true) } }
                     }
                     if let dataset = (interval == .intraday ? model.chartData[code] : model.chartData["\(code):day"]) { Text("图表来源：\(dataset.priceSource) · 观测 \(dataset.observedAt.formatted(date: .numeric, time: .shortened)) · IOPV 历史\(dataset.iopvSource == nil ? "不可用" : "可用")").font(.caption2).foregroundStyle(p.muted) }
                 }

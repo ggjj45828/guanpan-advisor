@@ -788,21 +788,37 @@ struct LocalPreferences: Codable {
         status = "正在核验行情…"
         do {
             var sourceNote = ""
+            var skippedStale = 0
             let fetched: [NextQuote]
             if !preferences.nasBaseURL.isEmpty {
-                do { fetched = try await NextNASService.fetchQuotes(codes: unique, baseURL: preferences.nasBaseURL); sourceNote = "NAS 代理" }
-                catch { fetched = try await NextMarketDataService.fetchQuotes(codes: unique); sourceNote = "NAS 离线，已直连" }
+                do {
+                    fetched = try await NextNASService.fetchQuotes(codes: unique, baseURL: preferences.nasBaseURL)
+                    sourceNote = "NAS 代理"
+                } catch {
+                    // NAS 不可用不等于没有行情：直连链 腾讯 → 东财 → 新浪 依次兜底。
+                    let direct = try await NextMarketDataService.fetchQuotes(codes: unique)
+                    fetched = direct.value
+                    sourceNote = "NAS 离线 · \(direct.source) 直连"
+                }
             } else {
-                fetched = try await NextMarketDataService.fetchQuotes(codes: unique)
-                sourceNote = "Tencent 直连"
+                let direct = try await NextMarketDataService.fetchQuotes(codes: unique)
+                fetched = direct.value
+                sourceNote = "\(direct.source) 直连"
             }
             var updated = quotes
             var updatedRules = rules
+            var accepted: [NextQuote] = []
             for quote in fetched {
+                // 旧数据不覆盖新数据：缓存里已有不早于本次的报价时，保留原值。
+                if let cached = quotes[quote.code], cached.quote.time >= quote.time {
+                    skippedStale += 1
+                    continue
+                }
                 let quality: NextDataQuality = quote.isFresh(at: Date()) ? .live : .delayed
                 let cached = NextCachedQuote(quote: quote, stamp: NextDataStamp(source: quote.source, observedAt: quote.time, quality: quality, detail: "按行情源时间标记；未补造 IOPV"))
                 try validateQuote(cached)
                 updated[quote.code] = cached
+                accepted.append(quote)
                 if quote.providerInstrumentType == "ETF" {
                     let market = quote.code.hasPrefix("15") ? "SZSE" : "SSE"
                     if let rule = NextInstrumentRules.verifiedETFMarketRule(code: quote.code, market: market) {
@@ -814,13 +830,14 @@ struct LocalPreferences: Codable {
             rules = updatedRules
             // 名称随报价一起收进名称簿：这样流水、提醒、分红里只存了代码的位置也能显示名字。
             recordDailySnapshotIfNeeded()
-            NextNameBook.remember(pairs: fetched.compactMap { quote in
+            NextNameBook.remember(pairs: accepted.compactMap { quote in
                 let name = quote.name.trimmingCharacters(in: .whitespaces)
                 return name.isEmpty ? nil : (code: quote.code, name: name)
             })
-            evaluatePriceAlerts(fetched)
-            evaluatePatientLimitPlans(fetched)
-            status = "行情已更新 · \(sourceNote) · \(fetched.count)/\(unique.count) · \(Date.now.formatted(date: .omitted, time: .shortened))"
+            evaluatePriceAlerts(accepted)
+            evaluatePatientLimitPlans(accepted)
+            var staleNote = skippedStale > 0 ? " · \(skippedStale) 只保留较新缓存" : ""
+            status = "行情已更新 · \(sourceNote) · \(accepted.count)/\(unique.count)\(staleNote) · \(Date.now.formatted(date: .omitted, time: .shortened))"
         } catch {
             status = "行情连接失败 · 显示本地缓存"
             errorMessage = "\(error.localizedDescription)。本地账本和历史缓存仍可查看。"
@@ -855,8 +872,9 @@ struct LocalPreferences: Codable {
     /// 失败就静默保留现有曲线 —— 自动刷新不该弹窗打断人。
     func refreshIntraday(_ code: String) async {
         do {
-            let raw = try await NextMarketDataService.fetchIntraday(code: code)
-            let dataset = quotes[code].map { raw.attachingVerifiedIOPV($0.quote) } ?? raw
+            // 分时多源链：腾讯 → 东财 1 分钟 K。失败静默保留现有曲线，自动刷新不弹窗打断人。
+            let result = try await NextMarketDataService.fetchIntraday(code: code)
+            let dataset = quotes[code].map { result.value.attachingVerifiedIOPV($0.quote) } ?? result.value
             try dataset.validate()
             chartData[code] = dataset
         } catch { }
@@ -867,11 +885,12 @@ struct LocalPreferences: Codable {
         await refreshQuotes(codes: [code])
         await refreshDaily(code)
         do {
-            let raw = try await NextMarketDataService.fetchIntraday(code: code)
-            let dataset = quotes[code].map { raw.attachingVerifiedIOPV($0.quote) } ?? raw
+            // 分时多源链：腾讯 → 东财；两者都失败再退回 NAS 归档分时。
+            let result = try await NextMarketDataService.fetchIntraday(code: code)
+            let dataset = quotes[code].map { result.value.attachingVerifiedIOPV($0.quote) } ?? result.value
             try dataset.validate()
             chartData[code] = dataset
-            status = "行情与分时已更新 · \(dataset.samples.count) 点 · \(dataset.observedAt.formatted(date: .omitted, time: .shortened))"
+            status = "行情与分时已更新 · \(result.source) · \(dataset.samples.count) 点 · \(dataset.observedAt.formatted(date: .omitted, time: .shortened))"
         } catch {
             if !preferences.nasBaseURL.isEmpty {
                 await loadNASMinute(code: code, day: Date())
@@ -1020,18 +1039,42 @@ struct LocalPreferences: Codable {
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
+    /// 日 K 多源链：NAS（部署服务的缓存口径）优先，失败自动直连 腾讯 → 东财 → 新浪。
+    /// 任一源成功即写入缓存；全部失败才记录错误——不再因为「NAS 取不到」就没有日 K。
+    /// 旧数据不覆盖新数据：新结果的最新样本不晚于缓存时，保留原缓存。
     func refreshDaily(_ code: String, required: Bool = false) async {
-        guard !preferences.nasBaseURL.isEmpty else {
-            if required { dailyErrors[code] = "请先在设置中配置 NAS 地址；连接成功后可读取 NAS 日 K，分时仍可独立使用。" }
-            return
+        if !preferences.nasBaseURL.isEmpty {
+            do {
+                let dataset = try await NextNASService.fetchDaily(code: code, baseURL: preferences.nasBaseURL)
+                dailyErrors.removeValue(forKey: code)
+                if shouldReplaceDayDataset(chartData["\(code):day"], with: dataset) { chartData["\(code):day"] = dataset }
+                return
+            } catch let nasFailure {
+                do {
+                    let direct = try await NextMarketDataService.fetchDaily(code: code)
+                    dailyErrors.removeValue(forKey: code)
+                    if shouldReplaceDayDataset(chartData["\(code):day"], with: direct.value) { chartData["\(code):day"] = direct.value }
+                } catch {
+                    dailyErrors[code] = "NAS 日 K 失败：\(nasFailure.localizedDescription)；直连也失败：\(error.localizedDescription)"
+                }
+                return
+            }
         }
         do {
-            let dataset = try await NextNASService.fetchDaily(code: code, baseURL: preferences.nasBaseURL)
-            chartData["\(code):day"] = dataset
+            let direct = try await NextMarketDataService.fetchDaily(code: code)
             dailyErrors.removeValue(forKey: code)
+            if shouldReplaceDayDataset(chartData["\(code):day"], with: direct.value) { chartData["\(code):day"] = direct.value }
         } catch {
             dailyErrors[code] = error.localizedDescription
         }
+    }
+
+    /// 多源 fallback 后各源样本口径可能不同，用「最新样本时间」做唯一裁判：
+    /// 新数据没有更新就不替换，避免旧数据覆盖新数据。
+    private func shouldReplaceDayDataset(_ cached: NextChartDataset?, with incoming: NextChartDataset) -> Bool {
+        guard let cached, let cachedLast = cached.orderedSamples.last?.timestamp,
+              let incomingLast = incoming.orderedSamples.last?.timestamp else { return true }
+        return incomingLast >= cachedLast
     }
     func acceptOrderBook(_ snapshot: NextOrderBookSnapshot, marketOpen: Bool) throws {
         try snapshot.validate()
