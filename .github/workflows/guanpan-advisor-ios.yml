@@ -189,6 +189,8 @@ jobs:
           shoot "$DEVICE_ID" 4_magazine -demo -theme magazine
           shoot "$DEVICE_ID" 5_puzzle -demo -theme puzzle
           shoot "$DEVICE_ID" 6_profile -demo -theme editorial -screen profile
+          # 持仓页（assets tab）：回归「持仓结构」环形卡——窄屏下应上下堆叠、图例横排，不塌成竖排。
+          shoot "$DEVICE_ID" 9_assets -demo -tab assets
           # 小屏（SE 一档）单独跑一遍首页与拼图：专门看长名称、大金额、四联卡会不会挤爆。
           SMALL_ID="$(pick 'SE')"
           if [ -n "$SMALL_ID" ] && [ "$SMALL_ID" != "$DEVICE_ID" ]; then

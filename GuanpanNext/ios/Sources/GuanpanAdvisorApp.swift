@@ -141,6 +141,7 @@ struct RootView: View {
     /// 底栏没有「overview」页签：历史默认值 / 旧版本存档里的 .overview 一律落到今日指导，
     /// 否则首次启动会整屏空白（所有页面 opacity 都是 0）。
     private var activeTab: NextTab {
+        if let forced = Self.tabArgument { return forced }
         let stored = model.preferences.navigation.selectedTab
         return stored == .overview ? .decision : stored
     }
@@ -168,6 +169,14 @@ struct RootView: View {
         let args = ProcessInfo.processInfo.arguments
         guard let index = args.firstIndex(of: "-screen"), args.indices.contains(index + 1) else { return nil }
         return args[index + 1]
+    }()
+    /// 截图/回归专用：`-tab assets` 等直达对应页签（持仓结构卡在 assets 页，窄屏环形图布局回归要截它）。
+    /// 只作用于本次运行，绝不写回偏好（与 themeArgument 一致）。
+    static let tabArgument: NextTab? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-tab"), args.indices.contains(index + 1) else { return nil }
+        let tab = NextTab(rawValue: args[index + 1])
+        return tab == .overview ? .decision : tab
     }()
     /// 手动选择优先于场景推断；没选过就跟随场景。
     private var themeSelection: ThemeSelection {
@@ -1685,6 +1694,7 @@ private struct GridLabScreen: View {
 private struct AssetsScreen: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.gp) private var p
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var addPosition = false
     @State private var addIncome = false
     @State private var cashAmount = ""
@@ -1785,9 +1795,20 @@ private struct AssetsScreen: View {
                     history: model.book.history
                 )
                 .padding(.top, 6)
-                HStack(spacing: 10) {
-                    GPDonutView(segments: donutSegments, centerValue: "¥\(NextMoney.text(valuation.total ?? 0))", centerLabel: "总资产")
-                    GPGaugeView(value: marketTemp, caption: marketTempCaption)
+                // 持仓结构 + 市场温度：窄屏（compact，iPhone 竖屏）上下堆叠，宽屏（regular，iPad/横屏）并排。
+                // 之前恒为并排，窄屏下环形卡的图例列被压到约 1 字宽，「现金 / 100.0%」逐字竖排——即"字体显示不出来"。
+                Group {
+                    if hSizeClass == .regular {
+                        HStack(spacing: 10) {
+                            GPDonutView(segments: donutSegments, centerValue: "¥\(NextMoney.text(valuation.total ?? 0))", centerLabel: "总资产")
+                            GPGaugeView(value: marketTemp, caption: marketTempCaption)
+                        }
+                    } else {
+                        VStack(spacing: 10) {
+                            GPDonutView(segments: donutSegments, centerValue: "¥\(NextMoney.text(valuation.total ?? 0))", centerLabel: "总资产")
+                            GPGaugeView(value: marketTemp, caption: marketTempCaption)
+                        }
+                    }
                 }
                 HStack(spacing: 10) {
                     GPQuickActionCard(icon: "gauge.with.dots.needle.50percent", title: "值不值得买", detail: "本机规则打分，逐只看依据", tint: p.jade, route: .worthOverview)

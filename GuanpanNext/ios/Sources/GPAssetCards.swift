@@ -215,10 +215,10 @@ struct GPDonutView: View {
                     ForEach(segments) { segment in
                         HStack(spacing: 7) {
                             Circle().fill(segment.color).frame(width: 8, height: 8)
-                            Text(segment.title).font(.system(size: 11)).foregroundStyle(p.ink)
+                            Text(segment.title).font(.system(size: 11)).foregroundStyle(p.ink).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(total > 0 ? NextNum.percent(max(segment.value, 0) / total * 100, digits: 1) : "—")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(p.ink)
+                                .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(p.ink).lineLimit(1)
                         }
                     }
                 }
@@ -265,6 +265,7 @@ struct GPGaugeView: View {
                 }
                 .offset(y: 22)
             }
+            .frame(maxWidth: .infinity)
             .frame(height: 58)
             .clipped()
             HStack {
