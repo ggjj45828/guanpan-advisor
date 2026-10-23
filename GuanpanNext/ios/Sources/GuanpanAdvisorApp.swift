@@ -146,9 +146,24 @@ struct RootView: View {
         case .laboratory, .mine, .overview: return .detail
         }
     }
+    /// 截图/回归专用启动参数：`-theme editorial|modern|dashboard|magazine|puzzle`
+    /// 只在启动参数里出现时才生效，且只作用于本次运行，绝不写回偏好。
+    /// 目的是让自动截图能拍到五套主题的真实渲染结果，而不是靠人手点。
+    static let themeArgument: AppTheme? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-theme"), args.indices.contains(index + 1) else { return nil }
+        return AppTheme(rawValue: args[index + 1])
+    }()
+    /// `-screen profile` 直达「AI 对我的了解」，用于截该页。
+    static let screenArgument: String? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-screen"), args.indices.contains(index + 1) else { return nil }
+        return args[index + 1]
+    }()
     /// 手动选择优先于场景推断；没选过就跟随场景。
     private var themeSelection: ThemeSelection {
-        model.preferences.themeStyle.map { ThemeSelection.fixed($0) } ?? .auto
+        if let forced = Self.themeArgument { return .fixed(forced) }
+        return model.preferences.themeStyle.map { ThemeSelection.fixed($0) } ?? .auto
     }
     private var resolvedTheme: AppTheme {
         ThemeManager.resolve(selection: themeSelection, scene: activeScene)
@@ -194,6 +209,9 @@ struct RootView: View {
         .dynamicTypeSize(model.preferences.appearance.dynamicTypeSize)
         .preferredColorScheme(model.theme.colorScheme)
         .sheet(isPresented: $model.showSearch) { SearchSheet() }
+        .fullScreenCover(isPresented: .constant(Self.screenArgument == "profile")) {
+            NavigationStack { InvestorProfileScreen() }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             // 派息不再需要手工一条条录：每次回到前台先同步派息历史，
