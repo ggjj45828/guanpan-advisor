@@ -108,7 +108,8 @@ struct LocalPreferences: Codable {
             ("decision-history-v1.json", try encoder.encode(archive.decisionHistory)),
             ("nas-research-v1.json", try encoder.encode(archive.nasResearch)),
             ("dividend-history-v1.json", try encoder.encode(archive.dividendEvents)),
-            ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans))
+            ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans)),
+            ("candidate-plans-v1.json", try encoder.encode(archive.candidatePlans))
         ]
         let parent = directory.deletingLastPathComponent()
         let staging = parent.appendingPathComponent("GuanpanProNative-staging-\(UUID().uuidString)", isDirectory: true)
@@ -148,6 +149,9 @@ struct LocalPreferences: Codable {
     @Published var researchStatus: [String: String] = [:]
     @Published var dividendEvents: [String: [NextETFDividendEvent]] { didSet { reportSave(repository.save(dividendEvents, filename: "dividend-history-v1.json")) } }
     @Published var patientLimitPlans: [NextPatientLimitPlan] { didSet { reportSave(repository.save(patientLimitPlans, filename: "patient-limit-plans-v1.json")) } }
+    @Published var candidatePlans: [NextCandidatePlan] { didSet { reportSave(repository.save(candidatePlans, filename: "candidate-plans-v1.json")) } }
+    @Published var dailyGuidance: NextDailyGuidance?
+    @Published var guidanceStatus = "尚未生成今日指导"
     @Published var gridStatus: NextNASGridStatus?
     @Published var gridStatusMessage = "尚未读取 NAS 网格状态"
     @Published var status = "行情尚未刷新 · 缓存可离线查看"
@@ -172,7 +176,8 @@ struct LocalPreferences: Codable {
     var watch: [String] { preferences.watch }
     var monitoredCodes: [String] {
         Array(Set(watch + book.positions.map(\.code) + preferences.notifications.priceRules.filter(\.enabled).map(\.code)
-                  + patientLimitPlans.filter { $0.state == "等待价格提醒" }.map(\.code))).sorted()
+                  + patientLimitPlans.filter { $0.state == "等待价格提醒" }.map(\.code)
+                  + candidatePlans.filter { $0.state.isOpen }.map(\.code))).sorted()
     }
     var theme: GPTheme { preferences.theme }
 
@@ -231,6 +236,7 @@ struct LocalPreferences: Codable {
         self.nasResearch = repository.load([String: NextNASResearch].self, filename: "nas-research-v1.json", fallback: [:])
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
+        self.candidatePlans = repository.load([NextCandidatePlan].self, filename: "candidate-plans-v1.json", fallback: [])
         self.errorMessage = repository.integrityWarning
         // 启动时把「只有代码、没有名字」的标的补一次：账本里的旧数据、旧自选都能认出来。
         Task { await backfillNamesIfNeeded() }
@@ -502,6 +508,133 @@ struct LocalPreferences: Codable {
                            stamp: NextDataStamp(source: "本机计划时钟", observedAt: now, quality: .live, detail: "耐心限价计划到期"))
         }
     }
+    // MARK: - AI 今日指导（真实持仓 → 状态 → 策略 → 具体计划）
+
+    /// 生成今日指导：补齐日 K 与分时后，扫描全部真实持仓。
+    /// 只读真实账本；不创建模拟账户、不生成虚拟订单、不改变持仓与现金。
+    func refreshGuidance() async {
+        guard !book.positions.isEmpty else {
+            dailyGuidance = nil
+            guidanceStatus = "还没有真实持仓：先录入持仓，AI 才能给出基于真实账户的建议"
+            return
+        }
+        guidanceStatus = "正在补齐日 K 与分时数据…"
+        await refreshQuotes(codes: book.positions.map(\.code))
+        for position in book.positions where position.units > 0 {
+            if chartData["\(position.code):day"] == nil { await refreshDaily(position.code) }
+            if chartData[position.code] == nil { await refreshIntraday(position.code) }
+        }
+        guidanceStatus = "正在扫描全部持仓…"
+        let guidance = buildGuidance(now: Date())
+        dailyGuidance = guidance
+        guidanceStatus = guidance.summary
+        evaluateCandidatePlans()
+    }
+
+    private func buildGuidance(now: Date) -> NextDailyGuidance {
+        let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
+        var daily: [String: [NextChartSample]] = [:]
+        var intraday: [String: [NextChartSample]] = [:]
+        for position in book.positions {
+            if let dataset = chartData["\(position.code):day"] { daily[position.code] = dataset.samples }
+            if let dataset = chartData[position.code] { intraday[position.code] = dataset.samples }
+        }
+        return NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
+                                           rules: rules, goal: goal,
+                                           nasAvailable: !preferences.nasBaseURL.isEmpty, now: now)
+    }
+
+    /// 计划状态自动迁移：过期、行情过期、价格突破作废线，都自动标记并留一条提醒。
+    /// 计划永远不能凭旧价格继续挂着。
+    func evaluateCandidatePlans(now: Date = Date()) {
+        var updates: [String] = []
+        for index in candidatePlans.indices {
+            let quote = quotes[candidatePlans[index].code]?.quote
+            if let change = candidatePlans[index].refresh(quote: quote, now: now) { updates.append(change) }
+        }
+        for line in updates {
+            postLocalAlert(level: "AI 候选计划", fingerprint: "candidate-plan-\(UUID().uuidString)", title: line,
+                           detail: "计划只是建议：请在券商自行决定是否挂单；成交后回到 App 点「我已成交」再更新账本。",
+                           stamp: NextDataStamp(source: "候选计划时钟", observedAt: now, quality: .live, detail: "候选计划状态变化"))
+        }
+    }
+
+    /// 从今日指导里保存一条候选计划（只是建议，不占资金、不生成虚拟持仓）。
+    func saveCandidatePlan(from item: NextGuidanceItem) throws {
+        let now = Date()
+        var plan: NextCandidatePlan
+        if let result = item.tPlan, case let .ready(value) = result {
+            let isSell = value.kind == .reverse
+            plan = NextCandidatePlan(kind: isSell ? .reverseT : .forwardT, code: value.code, name: value.name,
+                                     limitPrice: isSell ? value.sellPrice : value.buyPrice, units: value.units,
+                                     createdAt: now, expiresAt: value.validUntil,
+                                     triggerNote: isSell
+                                        ? "现价达到或高于 ¥\(NextMoney.text(value.sellPrice, digits: 3)) 时按计划卖出 \(value.units) 份（券商手工挂单）"
+                                        : "现价达到或低于 ¥\(NextMoney.text(value.buyPrice, digits: 3)) 时按计划买入 \(value.units) 份（券商手工挂单）",
+                                     cancelNote: value.cancelConditions.joined(separator: "；"),
+                                     quoteSource: value.confidence.quoteSource,
+                                     quoteTime: quotes[value.code]?.quote.time,
+                                     dailyBarCount: value.confidence.dailyBarCount,
+                                     minuteSampleCount: value.confidence.minuteSampleCount,
+                                     confidenceLevel: value.confidence.level.rawValue,
+                                     rationale: value.evidence.joined(separator: "；"),
+                                     expectedNetGain: value.netGain, expectedCostReduction: value.costReductionPerUnit,
+                                     riskNote: value.trampleRisk, marketState: item.state.rawValue,
+                                     cancelAbove: isSell ? nil : value.sellPrice,
+                                     cancelBelow: isSell ? value.buyPrice : nil)
+        } else if let result = item.gridPlan, case let .ready(value) = result,
+                  let tier = value.tiers.first(where: { $0.side == "buy" }) {
+            plan = NextCandidatePlan(kind: .gridBuy, code: value.code, name: value.name,
+                                     limitPrice: tier.price, units: tier.units, createdAt: now, expiresAt: value.validUntil,
+                                     triggerNote: "现价回落到 ¥\(NextMoney.text(tier.price, digits: 3)) 时按网格计划买入 \(tier.units) 份（券商手工挂单）",
+                                     cancelNote: value.pauseConditions.joined(separator: "；"),
+                                     quoteSource: value.confidence.quoteSource,
+                                     quoteTime: quotes[value.code]?.quote.time,
+                                     dailyBarCount: value.confidence.dailyBarCount, minuteSampleCount: 0,
+                                     confidenceLevel: value.confidence.level.rawValue,
+                                     rationale: (value.reasons + ["网格 \(value.tiers.count) 档，间距 \(String(format: "%.2f", value.spacingPercent))%"]).joined(separator: "；"),
+                                     expectedNetGain: nil, expectedCostReduction: nil,
+                                     riskNote: value.warnings.joined(separator: "；"), marketState: item.state.rawValue,
+                                     cancelAbove: value.upper, cancelBelow: value.lower)
+        } else {
+            throw NextError.invalid("这只标的当前没有可保存的具体计划；数据不足时只能观察")
+        }
+        try plan.validate()
+        candidatePlans.insert(plan, at: 0)
+        notice = "候选计划已保存：只是价格建议，未成交前不影响持仓与现金。"
+    }
+
+    /// 「我已成交」：把券商实际成交写进真实账本（复用真实成交录入），
+    /// 再标记计划完成并立即重新分析下一步。未成交的候选计划永远不会进入真实流水。
+    func confirmCandidatePlan(_ planID: UUID, price: Decimal, units: Int, fee: Decimal) throws {
+        guard let index = candidatePlans.firstIndex(where: { $0.id == planID }) else {
+            throw NextError.invalid("找不到这条候选计划")
+        }
+        let plan = candidatePlans[index]
+        guard plan.state.isOpen else { throw NextError.invalid("这条计划已结束（\(plan.state.rawValue)），不能再次确认成交") }
+        try recordTrade(code: plan.code, name: plan.name, side: plan.kind.side, units: units, price: price, fee: fee)
+        candidatePlans[index].state = .confirmed
+        candidatePlans[index].confirmedAt = Date()
+        candidatePlans[index].stateChangedAt = Date()
+        notice = "已按真实成交更新账本：份额、成本、现金和已实现收益已重算。"
+        Task { await refreshGuidance() }
+    }
+
+    /// 统一决策上下文：NAS 长期研究 + 手机离线结论汇总成一份，供在线 AI 综合时引用。
+    /// 在线 AI 只能引用候选计划里的价格，不允许自行生成具体挂单价。
+    func makeDecisionContext() -> NextDecisionContext {
+        let guidance = dailyGuidance ?? buildGuidance(now: Date())
+        var researchLines: [String] = []
+        for (code, report) in nasResearch {
+            if let content = report.ai?.content, !content.isEmpty {
+                researchLines.append("\(NextNameBook.resolve(code))：\(content.prefix(160))")
+            }
+        }
+        let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
+        return NextDecisionContextBuilder.build(guidance: guidance, book: book, quotes: quoteMap,
+                                                nasResearchLines: researchLines, newsLines: [], now: Date())
+    }
+
     func removePriceAlert(_ id: UUID) { preferences.notifications.priceRules.removeAll { $0.id == id }; preferences = preferences }
     private func evaluatePriceAlerts(_ values: [NextQuote]) {
         var rules = preferences.notifications.priceRules
@@ -836,6 +969,7 @@ struct LocalPreferences: Codable {
             })
             evaluatePriceAlerts(accepted)
             evaluatePatientLimitPlans(accepted)
+            evaluateCandidatePlans()
             var staleNote = skippedStale > 0 ? " · \(skippedStale) 只保留较新缓存" : ""
             status = "行情已更新 · \(sourceNote) · \(accepted.count)/\(unique.count)\(staleNote) · \(Date.now.formatted(date: .omitted, time: .shortened))"
         } catch {
@@ -1098,6 +1232,7 @@ struct LocalPreferences: Codable {
         nasResearch = incoming.nasResearch
         dividendEvents = incoming.dividendEvents
         patientLimitPlans = incoming.patientLimitPlans
+        candidatePlans = incoming.candidatePlans
     }
     func research(for code: String?) -> NextDecision? {
         do {
@@ -1131,6 +1266,7 @@ struct LocalPreferences: Codable {
         archive.nasResearch = nasResearch
         archive.dividendEvents = dividendEvents
         archive.patientLimitPlans = patientLimitPlans
+        archive.candidatePlans = candidatePlans
         archive.theme = NextTheme(rawValue: theme.rawValue) ?? .light
         return archive
     }

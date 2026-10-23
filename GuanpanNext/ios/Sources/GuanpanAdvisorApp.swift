@@ -61,7 +61,7 @@ private struct GPTabBar: View {
         GPTabItem(tab: .assets, title: "持仓", icon: "square.stack.3d.up.fill"),
         GPTabItem(tab: .laboratory, title: "网格", icon: "square.grid.2x2.fill"),
         GPTabItem(tab: .income, title: "收息", icon: "yensign.circle.fill"),
-        GPTabItem(tab: .decision, title: "AI 引擎", icon: "sparkles"),
+        GPTabItem(tab: .decision, title: "AI 指导", icon: "sparkles"),
         GPTabItem(tab: .mine, title: "我的", icon: "person.crop.circle.fill")
     ]
     var body: some View {
@@ -104,7 +104,13 @@ struct RootView: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.scenePhase) private var scenePhase
-    private var tabSelection: Binding<NextTab> { Binding(get: { model.preferences.navigation.selectedTab }, set: { model.preferences.navigation.selectedTab = $0; model.preferences = model.preferences }) }
+    /// 底栏没有「overview」页签：历史默认值 / 旧版本存档里的 .overview 一律落到今日指导，
+    /// 否则首次启动会整屏空白（所有页面 opacity 都是 0）。
+    private var activeTab: NextTab {
+        let stored = model.preferences.navigation.selectedTab
+        return stored == .overview ? .decision : stored
+    }
+    private var tabSelection: Binding<NextTab> { Binding(get: { activeTab }, set: { model.preferences.navigation.selectedTab = $0; model.preferences = model.preferences }) }
     var body: some View {
         // iOS 的 TabView 最多平铺 5 个位置：6 个 tab 会自动把多余的折叠进「More」，
         // 这就是底栏一直显示 4 个 + More 的根因。六个页签要全部平铺，
@@ -858,7 +864,9 @@ private struct DecisionScreen: View {
                     Text(code.flatMap { model.researchStatus[$0] } ?? (code.flatMap { model.nasResearch[$0]?.ai } == nil ? "本地规则 · AI 待连接" : "显示已保存研究"))
                         .font(.caption2).foregroundStyle(p.muted).lineLimit(2).multilineTextAlignment(.trailing)
                 }.padding(.top, 7)
-                Text(code.map { "围绕 \(knownName($0))，把已知信息整理成下一步" } ?? "先说你想完成什么").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 10)
+                Text(code.map { "围绕 \(knownName($0))，把已知信息整理成下一步" } ?? "你的真实持仓，今天怎么处理").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 10)
+                // 今日指导放在最前面：打开 AI 页第一眼就是「今天有没有值得操作的机会」。
+                AIGuidanceSection().padding(.top, 10)
                 // 选中标的时先给一张大字价格卡（参考设计稿英雄卡）：价格、涨跌、口径一屏可见，后面的 AI 结论才有锚点。
                 if let code { decisionHeroCard(code: code).padding(.top, 12) }
                 EditorialSection(title: "真实持仓 · 分时数据检查", trailing: "只读", accent: p.forest) {
