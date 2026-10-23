@@ -137,7 +137,7 @@ enum AdvisorAccessToken {
         SecItemDelete(query as CFDictionary)
         var item = query
         item[kSecValueData as String] = Data(value.utf8)
-        item[kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         item[kSecAttrSynchronizable as String] = false
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw DeepSeekError.keychain(status) }
