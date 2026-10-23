@@ -127,3 +127,72 @@ jobs:
             GuanpanNext/ios/build-core-tests.log
           if-no-files-found: warn
           retention-days: 14
+
+  screenshots:
+    name: Theme screenshots
+    runs-on: macos-15
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: GuanpanNext/ios
+        run: xcodegen generate
+
+      - name: Build for simulator
+        working-directory: GuanpanNext/ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project GuanpanAdvisor.xcodeproj \
+            -scheme GuanpanAdvisor \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/Sim \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -40
+
+      - name: Capture theme screenshots
+        working-directory: GuanpanNext/ios
+        run: |
+          set -uo pipefail
+          APP="$(find build/Sim/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP" ]; then echo "没有 .app 产物" >&2; exit 1; fi
+          echo "APP=$APP"
+          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((v["udid"] for group in d["devices"].values() for v in group if v.get("isAvailable") and v.get("name", "").startswith("iPhone")), ""))')"
+          if [ -z "$DEVICE_ID" ]; then echo "runner 上没有可用 iPhone 模拟器" >&2; exit 1; fi
+          echo "模拟器: $DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" "$APP"
+          mkdir -p ../shots
+          shoot() {
+            name="$1"; shift
+            xcrun simctl terminate "$DEVICE_ID" com.guanpan.advisor.ios >/dev/null 2>&1 || true
+            sleep 1
+            xcrun simctl launch "$DEVICE_ID" com.guanpan.advisor.ios \
+              -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN "$@" || true
+            sleep 9
+            xcrun simctl io "$DEVICE_ID" screenshot "../shots/$name.png" || true
+          }
+          shoot 1_editorial -theme editorial
+          shoot 2_modern -theme modern
+          shoot 3_dashboard -theme dashboard
+          shoot 4_magazine -theme magazine
+          shoot 5_puzzle -theme puzzle
+          shoot 6_profile -screen profile
+          ls -la ../shots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guanpan-theme-screenshots
+          path: GuanpanNext/shots
+          if-no-files-found: warn
+          retention-days: 14
