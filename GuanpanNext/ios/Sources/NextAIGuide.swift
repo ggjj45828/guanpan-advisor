@@ -29,7 +29,11 @@ struct NextDataConfidence: Equatable {
         level != .blocked && dailyBarCount >= 60 && (quoteAgeSeconds ?? 9_999) <= 120
     }
 
-    static func assess(quote: NextQuote?, now: Date, dailyBarCount: Int, minuteSampleCount: Int) -> NextDataConfidence {
+    /// `intradayRequired` 默认 true（做 T 需要分时点估算价位）。
+    /// 网格按「日 K ≥60 + 新鲜报价 + NAS 长期区间」出价，本地的当日分时点不是它的硬门槛，
+    /// 传 false 时不再因缺分时而判 blocked。
+    static func assess(quote: NextQuote?, now: Date, dailyBarCount: Int, minuteSampleCount: Int,
+                       intradayRequired: Bool = true) -> NextDataConfidence {
         var missing: [String] = []
         let age: Int?
         let source: String
@@ -43,10 +47,10 @@ struct NextDataConfidence: Equatable {
             missing.append("当前没有可用报价")
         }
         if dailyBarCount < 20 { missing.append("日 K 仅 \(dailyBarCount) 根，识别市场状态至少需要 20 根") }
-        if minuteSampleCount < 30 { missing.append("今日分时仅 \(minuteSampleCount) 点，估算做 T 价格至少需要 30 点") }
+        if intradayRequired && minuteSampleCount < 30 { missing.append("今日分时仅 \(minuteSampleCount) 点，估算做 T 价格至少需要 30 点") }
         let completeness = min(1.0, Double(minuteSampleCount) / 240.0) * 100
         let staleQuote = (age ?? 9_999) > 120
-        let blocked = staleQuote || dailyBarCount < 20 || minuteSampleCount < 30
+        let blocked = staleQuote || dailyBarCount < 20 || (intradayRequired && minuteSampleCount < 30)
         let level: Level
         if blocked { level = .blocked }
         else if (age ?? 9_999) <= 60 && dailyBarCount >= 60 && minuteSampleCount >= 120 { level = .high }
@@ -660,7 +664,11 @@ enum NextGridPlanner {
                      rules: NextInstrumentRules?, nasRange: NextNasRange? = nil,
                      caps: NextPlanCaps? = nil, now: Date) -> NextGridPlannerResult {
         let bars = daily.filter { $0.close > 0 }.sorted { $0.timestamp < $1.timestamp }
-        let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count, minuteSampleCount: 0)
+        // 网格不依赖当日分时点：按「日 K ≥60 + 行情 2 分钟内」评估（见 canPriceGridPlan）。
+        // 之前这里把 minuteSampleCount 硬编码成 0，导致 assess 因缺分时而判 blocked，
+        // 网格永远出不了 ready 计划——这是生产 bug，不是测试问题。
+        let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count,
+                                                   minuteSampleCount: 0, intradayRequired: false)
         guard let gridCheck else {
             return .insufficientData(confidence, ["还没有网格适合度评估（需要先读取日 K）"])
         }

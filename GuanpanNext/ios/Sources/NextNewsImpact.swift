@@ -85,9 +85,12 @@ enum NextNewsImpactEngine {
         return (.neutral, [])
     }
 
-    /// 标题是否属于这只持仓：代码在前（最可靠），其次是名称，最后是行业词。
+    /// 标题是否属于这只持仓：代码在前（最可靠），其次是全名，再去掉 ETF/基金 的短名，最后是行业词。
     static func belongs(_ title: String, code: String, name: String, industryWords: [String] = []) -> Bool {
         if title.contains(code) { return true }
+        // 全名直接命中：标题里明写「纳指ETF」就该属于纳指ETF，
+        // 不能因为去掉 ETF 后只剩 2 字（短名门槛）就把全名命中也一起漏掉。
+        if !name.isEmpty, title.contains(name) { return true }
         let short = name.replacingOccurrences(of: "ETF", with: "")
                                 .replacingOccurrences(of: "基金", with: "")
                                 .trimmingCharacters(in: .whitespaces)
@@ -147,8 +150,14 @@ enum NextNewsImpactEngine {
                 tPlan = .notWorthwhile(["重大新闻：" + (impact.hits.first?.title ?? "事件待确认") + "；原做T计划作废"])
                 actionable = false
             }
-            if impact.action == .pauseGrid, gridPlan?.isReady == true {
-                gridPlan = .notRecommended(["重大新闻：" + (impact.hits.first?.title ?? "事件待确认") + "；网格暂停"])
+            if impact.action == .pauseGrid {
+                // 停牌 = 全场暂停成交：做T与网格都收回来，不能只收网格、留下做T继续显示为可执行。
+                if tPlan?.isReady == true {
+                    tPlan = .notWorthwhile(["重大新闻：" + (impact.hits.first?.title ?? "事件待确认") + "；停牌期间无法成交，原做T计划作废"])
+                }
+                if gridPlan?.isReady == true {
+                    gridPlan = .notRecommended(["重大新闻：" + (impact.hits.first?.title ?? "事件待确认") + "；网格暂停"])
+                }
                 actionable = false
             }
             if impact.action == .reanalyze {
