@@ -66,6 +66,7 @@ struct HomeSnapshot {
         return "\(minutes / 60) 小时前"
     }
 
+    @MainActor
     static func make(model: NextAppModel) -> HomeSnapshot {
         let guidance = model.dailyGuidance
         let quotes = Dictionary(uniqueKeysWithValues: model.quotes.map { ($0.key, $0.value.quote) })
@@ -996,55 +997,69 @@ private struct DashboardHome: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 14) {
-                    ForEach(Array(["市场", "持仓", "AI 指导", "新闻"].enumerated()), id: \.offset) { index, title in
-                        Button { tab = index } label: {
-                            VStack(spacing: 3) {
-                                Text(title).font(.system(size: 13, weight: index == tab ? .bold : .medium))
-                                    .foregroundStyle(index == tab ? p.ink : p.muted)
-                                Capsule().fill(index == tab ? p.primary : Color.clear).frame(width: 18, height: 2)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Spacer(minLength: 4)
-                    HomeTopBar()
-                }
+                tabHeader
                 HomeIndexBoard(style: .tiles)
                 aiHero
-                HStack {
-                    Text("重点机会").font(.system(size: 13, weight: .bold)).foregroundStyle(p.ink)
-                    Spacer()
-                    Text("按你的门槛排序").font(.system(size: 9)).foregroundStyle(p.muted)
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(Array((snapshot.guidance?.items ?? []).prefix(4))) { item in
-                            opportunityTile(item)
-                        }
-                        if (snapshot.guidance?.items.isEmpty ?? true) {
-                            Text("今天没有可执行机会").font(.system(size: 10)).foregroundStyle(p.muted)
-                        }
-                    }
-                }
+                opportunityBoard
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: false)
                 otherHoldings
-                HStack(spacing: 8) {
-                    Text("新闻与市场解读").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.ink)
-                    Spacer()
-                    Button { model.requestTab(.decision, route: .decision(nil)) } label: {
-                        Text("进入 AI 对话").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(10)
-                .background(p.paper, in: RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous))
+                newsRow
             }
             .padding(.horizontal, 14)
             .padding(.top, 6)
             .padding(.bottom, 28)
         }
         .scrollIndicators(.hidden)
+    }
+
+    private var tabHeader: some View {
+        HStack(spacing: 14) {
+            ForEach(Array(["市场", "持仓", "AI 指导", "新闻"].enumerated()), id: \.offset) { index, title in
+                Button { tab = index } label: {
+                    VStack(spacing: 3) {
+                        Text(title).font(.system(size: 13, weight: index == tab ? .bold : .medium))
+                            .foregroundStyle(index == tab ? p.ink : p.muted)
+                        Capsule().fill(index == tab ? p.primary : Color.clear).frame(width: 18, height: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 4)
+            HomeTopBar()
+        }
+    }
+
+    private var opportunityBoard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("重点机会").font(.system(size: 13, weight: .bold)).foregroundStyle(p.ink)
+                Spacer()
+                Text("按你的门槛排序").font(.system(size: 9)).foregroundStyle(p.muted)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array((snapshot.guidance?.items ?? []).prefix(4))) { item in
+                        opportunityTile(item)
+                    }
+                    if (snapshot.guidance?.items.isEmpty ?? true) {
+                        Text("今天没有可执行机会").font(.system(size: 10)).foregroundStyle(p.muted)
+                    }
+                }
+            }
+        }
+    }
+
+    private var newsRow: some View {
+        HStack(spacing: 8) {
+            Text("新闻与市场解读").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.ink)
+            Spacer()
+            Button { model.requestTab(.decision, route: .decision(nil)) } label: {
+                Text("进入 AI 对话").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(p.paper, in: RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous))
     }
 
     private var aiHero: some View {
@@ -1128,7 +1143,7 @@ private struct DashboardHome: View {
 
     private var otherHoldings: some View {
         VStack(spacing: 0) {
-            ForEach(snapshot.positions.prefix(4)) { position in
+            ForEach(Array(snapshot.positions.prefix(4))) { position in
                 let quote = snapshot.quotes[position.code]
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)

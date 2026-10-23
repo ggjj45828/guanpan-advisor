@@ -21,7 +21,7 @@ struct LocalPreferences: Codable {
     /// 五套视觉主题：nil = 跟随场景（首页编辑室 / 盘中仪表盘 / AI 日报杂志 / 持仓拼图 / 详情现代卡片）。
     /// 用户手动选一套后写成具体值，手动选择永远优先于场景推断。
     var themeStyle: AppTheme?
-    enum CodingKeys: String, CodingKey { case goal, watch, navigation, theme, appearance, notifications, nasBaseURL, legacyWebBaseURL, nasRevision, nasSyncedFingerprint, nasSyncedAt, nasAutoUpload }
+    enum CodingKeys: String, CodingKey { case goal, watch, navigation, theme, appearance, notifications, nasBaseURL, legacyWebBaseURL, nasRevision, nasSyncedFingerprint, nasSyncedAt, nasAutoUpload, themeStyle }
     init(goal: NextGoal = NextGoal(), watch: [String] = ["159941", "563020", "159545", "159352"], navigation: NextNavigationState = NextNavigationState(), theme: GPTheme = .light, appearance: GPAppearance = GPAppearance(), notifications: NextNotificationCenter = NextNotificationCenter(), nasBaseURL: String = "", legacyWebBaseURL: String = "", nasRevision: Int? = nil, nasSyncedFingerprint: String? = nil, nasSyncedAt: Date? = nil, nasAutoUpload: Bool = true, themeStyle: AppTheme? = nil) {
         self.goal = goal; self.watch = watch; self.navigation = navigation; self.theme = theme; self.appearance = appearance; self.notifications = notifications
         self.nasBaseURL = nasBaseURL; self.legacyWebBaseURL = legacyWebBaseURL; self.nasRevision = nasRevision

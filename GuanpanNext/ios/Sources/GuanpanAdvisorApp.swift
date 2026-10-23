@@ -69,41 +69,51 @@ private struct GPTabBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(items, id: \.tab) { item in
-                let selected = selection == item.tab
-                Button {
-                    selection = item.tab
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: item.icon).font(.system(size: 19, weight: .medium))
-                        Text(item.title).font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(selected ? p.forest : p.muted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-                    .background {
-                        // 编辑室 / 拼图把选中项做成一块色块，仪表盘用顶线，现代卡片保持纯色文字。
-                        if selected {
-                            switch p.theme {
-                            case .editorial, .puzzle, .magazine:
-                                Capsule().fill(p.tint).padding(.horizontal, 12).padding(.vertical, 2)
-                            case .dashboard:
-                                VStack { Capsule().fill(p.primary).frame(width: 16, height: 2); Spacer() }
-                            case .modern:
-                                EmptyView()
-                            }
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(item.title)
-                .accessibilityAddTraits(selected ? [.isSelected] : [])
+                tabButton(item)
             }
         }
         .padding(.top, 5)
         .padding(.bottom, 2)
         .background(p.paper)
         .overlay(alignment: .top) { Rectangle().fill(p.line).frame(height: 0.7) }
+    }
+
+    private func tabButton(_ item: GPTabItem) -> some View {
+        let selected = selection == item.tab
+        return Button {
+            selection = item.tab
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: item.icon).font(.system(size: 19, weight: .medium))
+                Text(item.title).font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(selected ? p.forest : p.muted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 5)
+            .background { selectionMark(selected: selected) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    /// 编辑室 / 拼图 / 杂志把选中项做成一块色块，仪表盘用顶线，现代卡片保持纯色文字。
+    @ViewBuilder
+    private func selectionMark(selected: Bool) -> some View {
+        if selected {
+            switch p.theme {
+            case .editorial, .puzzle, .magazine:
+                Capsule().fill(p.tint).padding(.horizontal, 12).padding(.vertical, 2)
+            case .dashboard:
+                VStack {
+                    Capsule().fill(p.primary).frame(width: 16, height: 2)
+                    Spacer(minLength: 0)
+                }
+            case .modern:
+                Color.clear
+            }
+        }
     }
 }
 

@@ -114,6 +114,11 @@ struct GPPalette {
     var forest: Color { tokens.primary }
     var forestDeep: Color { tokens.primaryDeep }
     var terracotta: Color { tokens.secondary }
+    /// 主题语义别名：新页面用 primary/secondary 表达「主题主色 / 次色」，
+    /// 与 forest/terracotta 指同一份令牌，读的是同一份数据。
+    var primary: Color { tokens.primary }
+    var primaryDeep: Color { tokens.primaryDeep }
+    var secondary: Color { tokens.secondary }
     var jade: Color { tokens.jade }
     var risk: Color { tokens.risk }
     var tint: Color { tokens.tint }
