@@ -38,6 +38,22 @@ SINA_ENDPOINT = "https://hq.sinajs.cn/list="
 # 源时间超过这么久没更新，说明那个市场已经休市/停更，快照不能当成新观测。
 MAX_SOURCE_AGE_SECONDS = 300
 
+# 采样窗口（北京时间）。覆盖日韩全天（东京/首尔 09:00–15:30 = 北京 08:00–14:30）
+# 与港股全天（09:30–16:00 = 北京同时段）。纳指此时是收盘后的最后价，
+# 每天因此只有很少几个点——这是如实记录，不为了凑点数在夜里空转。
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+SAMPLE_WINDOW_START = (8, 0)
+SAMPLE_WINDOW_END = (16, 10)
+
+
+def should_sample(now):
+    """这一刻该不该去采。抽成纯函数是为了能测：
+    周末整天不采、窗口外不采——采了也是把收盘后的旧价反复写进库。"""
+    local = now.astimezone(SHANGHAI)
+    if local.weekday() >= 5:
+        return False
+    return SAMPLE_WINDOW_START <= (local.hour, local.minute) <= SAMPLE_WINDOW_END
+
 
 def _tz(key):
     return ZoneInfo(MARKETS[key]["timeZone"])

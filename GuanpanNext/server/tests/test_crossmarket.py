@@ -176,6 +176,31 @@ class DomainStorageTests(unittest.TestCase):
             self.db.get_cross_samples(market="atlantis")
 
 
+class SampleWindowTests(unittest.TestCase):
+    """采样窗口：采了也是把收盘后的旧价反复写进库，所以窗口边界必须钉住。"""
+
+    def at(self, text):
+        return datetime.fromisoformat(text).replace(tzinfo=SH)
+
+    def test_window_covers_full_japan_korea_hongkong_session(self):
+        self.assertTrue(crossmarket.should_sample(self.at("2026-10-22T08:00:00")))
+        self.assertTrue(crossmarket.should_sample(self.at("2026-10-22T12:50:00")))
+        self.assertTrue(crossmarket.should_sample(self.at("2026-10-22T16:10:00")))
+
+    def test_outside_window_is_not_sampled(self):
+        self.assertFalse(crossmarket.should_sample(self.at("2026-10-22T07:59:00")))
+        self.assertFalse(crossmarket.should_sample(self.at("2026-10-22T16:11:00")))
+        self.assertFalse(crossmarket.should_sample(self.at("2026-10-22T23:30:00")))
+
+    def test_weekend_is_never_sampled(self):
+        self.assertFalse(crossmarket.should_sample(self.at("2026-10-24T10:00:00")))  # 周六
+        self.assertFalse(crossmarket.should_sample(self.at("2026-10-25T10:00:00")))  # 周日
+
+    def test_utc_input_is_converted_to_shanghai_first(self):
+        # 00:30 UTC = 北京 08:30，在窗口内；不能拿 UTC 的 0 点去比窗口
+        self.assertTrue(crossmarket.should_sample(datetime(2026, 10, 22, 0, 30, tzinfo=timezone.utc)))
+
+
 class CrossMarketEndpointTests(unittest.TestCase):
     """HTTP 层：只有原始观测，没有任何「领先关系」结论 —— 结论属于手机端。"""
 

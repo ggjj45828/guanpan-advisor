@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
-from crossmarket import fetch_snapshots, archive_rows
+from crossmarket import fetch_snapshots, archive_rows, should_sample
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 # 演示标的**默认不再常驻采集**。以前这四个代码被无条件并进采集集合，
@@ -166,8 +166,7 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
         update("cross-market", "starting", "worker starting")
         while True:
             local = datetime.now(SHANGHAI)
-            in_window = local.weekday() < 5 and (8, 0) <= (local.hour, local.minute) <= (16, 10)
-            if not in_window:
+            if not should_sample(local):
                 update("cross-market", "idle",
                        "outside 08:00-16:10 Asia/Shanghai sampling window; archived samples remain available")
                 time.sleep(300); continue
