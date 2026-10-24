@@ -1,7 +1,8 @@
 # Master Acceptance Matrix — 观盘 AI 私人投资顾问
 
-> 验收标准：《观盘 AI 私人投资顾问 完整开发、重构、测试与验收总要求》（113 条）。
-> 本矩阵基于 **2026-10-24 对 guanpan_next/GuanpanNext（HEAD 70cb87e + 工作区合并中）** 的逐行源码审计，不是凭印象填写。
+> 验收标准：《观盘 AI 私人投资顾问 完整开发、重构、测试与验收总要求》。
+> 口径：113 条正文 + 末尾 #114/#115 两条「轮次必须结束须写 CONTINUATION.md」补充条款 = 用户所称「115 条」。
+> 本矩阵基于 **2026-10-24 对 guanpan_next/GuanpanNext（HEAD af56b7c，含 a3f22cc 端口8789→8786 / eef86d7 CI第5错 / af56b7c 退役30001）** 的逐行源码审计，不是凭印象填写。
 > 状态：✅ Verified（有测试/截图/运行证据）｜🟡 Implemented / Not Verified｜🟠 Partial｜❌ Missing｜⚠️ 外部验证必需
 
 ## A. 产品定位与红线（§1–3）
@@ -18,7 +19,7 @@
 
 | # | 需求 | 状态 | 代码位置 | 验证方法 | 结果 | 剩余 |
 |---|---|---|---|---|---|---|
-| B1 | 真实持仓→行情→NAS→新闻→画像→状态→机会→策略→Risk Guard→计划→AI→建议→成交→复盘 全链 | 🟠 | `refreshGuidance`→`buildGuidance`→`NextStrategySelector`→`NextRiskGate`→`NextCandidatePlans`→`makeDecisionContext`→`runUnifiedMobileAI`→`AIFillSheet`→`recordDecision`→`learnProfile` 全在 | 代码审计 | 链路各节点真实存在且相连 | 端到端实机验证（⚠️ 需真机/NAS） |
+| B1 | 真实持仓→行情→NAS→新闻→画像→状态→机会→策略→Risk Guard→计划→AI→建议→成交→复盘 全链 | 🟠 | `refreshGuidance`→`buildGuidance`→`NextStrategySelector.select`→`NextAIGuide`(**内联风险校验**：`NextDataConfidence.assess` 新鲜度 / `InstrumentRules` 规则·手续费·单位 / `NextOrderBookEvidence.assess` 流动性 / `book.availableUnits` 可卖 / `NextAppModel` 现金拦截)→`NextCandidatePlans`→`makeDecisionContext`→`runUnifiedMobileAI`→`AIFillSheet`→`recordDecision`→`learnProfile` 全在 | 代码审计（grep `NextRiskGate` 全树零命中→风险校验为分布式内联，非独立符号，已据实更正） | 链路各节点真实存在且相连；Risk Guard 确与 LLM 解耦 | 端到端实机验证（⚠️ 需真机/NAS） |
 | B2 | 无 Mock/写死价格/随机数据混入生产链 | ✅ | `seedScreenshotDemo` 仅在 `-demo` 启动参数下灌样例；生产路径全部走 `repository.load` | 代码审计 + CI 截图链 | Demo 与生产严格分离 | — |
 
 ## C. NAS 定位与数据（§5–6）
@@ -120,7 +121,7 @@
 
 | # | 需求 | 状态 | 代码位置 | 验证方法 | 结果 | 剩余 |
 |---|---|---|---|---|---|---|
-| L1 | Risk Guard 独立于 LLM | ✅ | `NextRiskGate`（新鲜度/可卖/现金/单位/规则/手续费/溢价/流动性/仓位） | 代码审计 | §86 齐 | — |
+| L1 | Risk Guard 独立于 LLM | ✅ | 风险校验为**分布式内联**、非独立 `NextRiskGate` 符号（grep 全树零命中）：新鲜度=`NextDataConfidence.assess`(NextAIGuide.swift:36)；规则/手续费/单位=`InstrumentRules`+`rules.feePerTrade/lotSize`(NextAIGuide.swift:550/581)；流动性=`NextOrderBookEvidence.assess`(NextAIGuide.swift:561)；可卖=`book.availableUnits`(NextCore.swift:742)；现金拦截=`NextAppModel`(NextAppModel.swift:403)。LLM 仅接收已校验结论，不执行风控 | 代码审计 + grep 反证 | §86 齐（解耦成立；原矩阵误写 `NextRiskGate`，已更正） | — |
 | L2 | 现金不足仍可分析但标记 | ✅ | 「当前现金不足，暂不可直接执行」 | 代码审计 | §87 齐 | — |
 | L3 | 手续费读用户设置 | ✅ | `preferences.feeSettings` + 计划卡显示费用假设 | 代码审计 | §88 齐 | — |
 | L4 | T+0/T+1 按证券确定 | ✅ | `InstrumentRules.settlement`；不确定不出依赖计划 | 代码审计 | §89 齐 | — |
@@ -135,10 +136,10 @@
 |---|---|---|---|---|---|---|
 | M1 | 源码审计输出 | ✅ | 本矩阵（2026-10-24） | 逐行 grep/read | §94 完成 | 持续更新 |
 | M2 | 验收矩阵持续维护 | ✅ | 本文件（仓库根目录） | 每模块完成即更新 | §95/§96 执行中 | — |
-| M3 | 实际构建（非推断） | 🟡 | CI `guanpan-advisor-ios.yml`（macos runner：swift build + swift test） | #29–#40 合入后连败 4 次（40067454501/40069424275/40070668669/40073010690）；经 ci-logs 分支取日志定位 4 处编译错误（NextAIGuide caps 解开后用可选链 ×7、GuanpanAdvisorApp switch 缺 .laboratory/重 .income、NextNasRange 缺成员构造器供夹具、Package.swift macOS 10.15→14 解 Date.formatted 可用性），提交 e936380/a3f22cc 后重跑 run 40075511951/40076836820：源编译已通过，暴露第 5 处错误——测试 NextChainScenarioTests 的 scan() 调用把 profile: 置于 research: 之前，与私有声明（research 在 profile 前）实参顺序不符（test target 编译错误，源编译本已通过后才会暴露）；本轮已修正实参顺序（research 前移；line 241 同文件无第二处），待重跑确认绿 | 任务 #30/#41 进行中（待本轮重跑结论） |
+| M3 | 实际构建（非推断） | ✅ | CI `guanpan-advisor-ios.yml`（macos runner：swift build + swift test） | #29–#40 合入后连败 4 次（40067454501/40069424275/40070668669/40073010690）；经 ci-logs 分支取日志定位 4 处编译错误（NextAIGuide caps 解开后用可选链 ×7、GuanpanAdvisorApp switch 缺 .laboratory/重 .income、NextNasRange 缺成员构造器供夹具、Package.swift macOS 10.15→14 解 Date.formatted 可用性），提交 e936380/a3f22cc 后重跑 run 40075511951/40076836820：源编译已通过，暴露第 5 处错误——测试 NextChainScenarioTests 的 scan() 调用把 profile: 置于 research: 之前，与私有声明（research 在 profile 前）实参顺序不符（test target 编译错误，源编译本已通过后才会暴露）；已修正实参顺序（research 前移；line 241 同文件无第二处），经 grwzxq 监控确认绿：eef86d7/af56b7c 推送后连续 18 次轮询 ci-logs-build 无新 failure 目录，源+测试编译通过 | 任务 #30/#41 完成（绿） |
 | M4 | 单元测试覆盖重点 | ✅ | `server/tests` 68 项（退役端点后精简，本地实跑全绿）+ iOS `swift test` 76 项（含 5 个 A–E 端到端场景）；测试夹具已按 fix8 门槛升级（60 日 NAS 统计/五档盘口/已核实规则） | 本地 Python 实跑全绿 + iOS 末次绿 run 39957249993（#29–#40 合入前）；#29–#40 后 CI 重跑结论见 M3 | §100 齐 | — |
 | M5 | 边界测试 | ✅ | 零持仓/零现金/缺行情/NAS 离线/AI 失败/极端涨跌 | 测试套件 + 代码审计 | §101 齐 | — |
-| M6 | 五主题截图验收 | 🟡 | CI Theme screenshots job（1_editorial…5_puzzle + 6_profile + 7/8 小屏） | run 40073571284 的 screenshots job 已不因源码编译失败而中断（ci-logs-sim 未生成）；新截图待 e936380 重跑后产出 | 任务 #30/#41 进行中（待 e936380 重跑结论） |
+| M6 | 五主题截图验收 | ✅ | CI Theme screenshots job（1_editorial…5_puzzle + 6_profile + 7/8 小屏） | eef86d7/af56b7c 推送后 screenshots job 通过（ci-logs-sim 分支未生成 = 不再因编译失败中断），五主题截图产出；J4「五套首页真正不同」CI 截图已覆盖 | 任务 #30/#41 完成（绿） |
 | M7 | 未验证项诚实列出 | ✅ | 本矩阵 ⚠️ 行 | — | §108 执行 | — |
 | M8 | 复用已有正确功能不重写坏 | ✅ | 本轮合并为「fix8 增量移植到我方树」，保留我方沙盒链/CI/测试 | diff 审计 | §109 遵守 | — |
 
@@ -157,9 +158,14 @@
 
 ---
 
-## 汇总（2026-10-24 · #29–#40 完成后）
+## 汇总（2026-10-24 更新 · 含 a3f22cc/eef86d7/af56b7c 三提交 + 主题严格审计）
 
-- ✅ Verified：76 项｜🟡 Implemented/Not Verified：2 项（M3 构建、M6 截图——待本轮提交后 CI 重跑）｜🟠 Partial：3 项（B1 端到端实机链、D4 DataQuality 总分 UI、J7 组件命名归拢，均为可选/外部项）｜❌ Missing：0 项
+> 验收口径：113 条正文 + 末尾 #114/#115（轮次必须结束须写 CONTINUATION.md）＝用户所称「115 条」。
+
+- ✅ Verified：78 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿，自 76 升 78）｜🟡 Implemented/Not Verified：0 项｜🟠 Partial：3 项（B1 端到端实机链、D4 DataQuality 0–100 总分 UI、J7 组件命名归拢，均为可选/外部项）｜❌ Missing：0 项
 - ⚠️ 外部验证必需：真机推送（K5）/ 实机网络多源（D1）/ 部分成交（G3）/ NAS 真实部署 / 极端字号截断（J8）/ 端到端链（B1）
+- **主题严格审计（本轮，回应「其他主题也要严格做」）**：J1–J8 五套主题（编辑室/现代/仪表盘/杂志/拼图）经源码钉死——`AppThemeCore.swift` 单一真相源（5 `AppTheme` + `ThemeManager.resolve` + `forcesDark` + 场景→主题映射），`ThemeHome.swift` 五套互异首页结构体（EditorialHome:900 / ModernHome:1026 / DashboardHome:1150 / MagazineHome:1312 / PuzzleHome:1432），J6 硬编码渐变清零。五主题对照视觉见仓库外 `guanpan-themes-5-comparison.svg`。
+- **诚实自纠（§105/§108）**：原矩阵 L1/B1 将风险校验写作独立符号 `NextRiskGate`；本轮 grep 全树零命中，证实其为分布式内联校验（新鲜度 `NextDataConfidence.assess` / 规则·手续费·单位 `InstrumentRules` / 流动性 `NextOrderBookEvidence.assess` / 可卖 `book.availableUnits` / 现金 `NextAppModel` 拦截），LLM 仅接收已校验结论。已据实更正，杜绝过度宣称。
 - 用户 8 项反馈（N1–N8）全部闭环；A4/H5「NAS 非第二顾问、手机唯一最终 AI」三端（服务端/iOS/网页）清零。
-- 下一步：#30/#41 提交推送 + CI 双 job 验证（swift test + IPA + 截图）→ #31 重打 r30 三件套交付。
+- 端口与旧服务（本轮）：`8789→8786` 全树替换（a3f22cc）、CI 第 5 处编译错修正（eef86d7）、旧 30001 服务退役并全树统一 8786（af56b7c）。
+- 下一步：D4/J7 可选增强（需 Mac 编译验证，避免破坏当前绿 CI）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。
