@@ -505,6 +505,39 @@ enum NextTKind: String, Equatable {
     case forward = "正T · 先买后卖"
 }
 
+/// 做T不利情形的金额口径。
+///
+/// 基准是「相对不做这笔T的净差额」，只有两项：
+///   不利波动幅度 × 份额 + 两笔手续费
+///
+/// **不包含**计划本来要赚的那段价差。旧口径把
+/// `(卖出后价格 - 买回价) × 份额` 当成踏空成本，等于把计划净收益又算了一遍：
+/// 越是好计划，算出来的「风险」越大，数字被系统性放大。
+/// 抽成纯函数是为了能被测试钉住，而不是靠读代码相信它。
+enum NextTRiskMath {
+    static func adverseMove(referencePrice: Decimal, amplitudePercent: Double) -> Decimal {
+        guard referencePrice > 0, amplitudePercent > 0 else { return 0 }
+        return referencePrice * Decimal(string: "\(amplitudePercent / 100)")!
+    }
+
+    /// 不利方向会走到哪个价：反T 往上（踏空），正T 往下（被套）。
+    static func adversePrice(referencePrice: Decimal, amplitudePercent: Double, kind: NextTKind) -> Decimal {
+        let move = adverseMove(referencePrice: referencePrice, amplitudePercent: amplitudePercent)
+        switch kind {
+        case .reverse: return referencePrice + move
+        case .forward: return referencePrice - move
+        }
+    }
+
+    /// 不利情形的净差额（正数，表示损失或机会成本的绝对值）。
+    static func adverseCost(referencePrice: Decimal, amplitudePercent: Double,
+                            units: Int, feeTotal: Decimal) -> Decimal {
+        guard units > 0 else { return 0 }
+        let move = adverseMove(referencePrice: referencePrice, amplitudePercent: amplitudePercent)
+        return move * Decimal(units) + feeTotal
+    }
+}
+
 struct NextTPlan: Equatable {
     let kind: NextTKind
     let code: String
@@ -517,6 +550,11 @@ struct NextTPlan: Equatable {
     let netGain: Decimal
     let costReductionPerUnit: Decimal
     let trampleRisk: String
+    /// 正T（先买后卖）的相反风险：买入后继续下跌、卖不出去。
+    /// 与 `trampleRisk` 互斥：反T 时为空，正T 时填这里。
+    /// 两个字段分开，是因为它们不是同一件事的对立面——
+    /// 踏空是少赚，被套是真亏，混在一句话里必然有一边被说轻。
+    let downsideRisk: String
     let volumeSupport: String
     let validUntil: Date
     let cancelConditions: [String]
@@ -657,23 +695,49 @@ enum NextTradeTPlanner {
         }
         let costReduction = netGain / Decimal(position.units)
 
-        // 踏空风险：以 1× 今日振幅的继续上涨为参考，量化「卖飞」的代价。
-        let referenceRise = sellPrice * Decimal(string: "\(amplitude / 100)")!
-        let missCost = (sellPrice + referenceRise - buyPrice) * Decimal(units) - feeTotal
-        var trample = "若卖出后价格继续上涨超过 \(String(format: "%.2f", amplitude))%（约 ¥\(NextMoney.text(sellPrice + referenceRise, digits: 3))）且当日不回落至买回价，本次做T踏空，约少赚 ¥\(NextMoney.text(max(0, missCost)))"
+        // 做T的双向风险。先卖还是先买，风险方向完全不同：
+        //   反T（先卖后买）怕的是卖出后继续涨 → 踏空；
+        //   正T（先买后卖）怕的是买入后继续跌 → 被套。
+        // 旧文案只写了前一种，正T 等于没有风险提示。
+        //
+        // 金额口径也重算了。旧公式 (卖出后价格 - 买回价) × 份额 - 手续费，
+        // 把计划本身那一段价差又算进去了一次，等于把「本来能赚的」也当成踏空损失，
+        // 数字被系统性夸大。正确基准是「相对不做这笔T」的净差额：
+        //   不利波动幅度 × 份额 + 两笔手续费。
+        // 也就是说：踏空是少赚 + 白付手续费，被套是真亏 + 白付手续费，
+        // 两者都不该包含计划本来要赚的那部分。
+        let adversePrice: Decimal
+        let riskLabel: String
+        let holding: String
+        switch kind {
+        case .reverse:
+            adversePrice = NextTRiskMath.adversePrice(referencePrice: sellPrice, amplitudePercent: amplitude, kind: kind)
+            riskLabel = "踏空"
+            holding = "卖出后价格继续上涨超过 \(String(format: "%.2f", amplitude))%（约 ¥\(NextMoney.text(adversePrice, digits: 3))）且当日不回落至买回价 ¥\(NextMoney.text(buyPrice, digits: 3))"
+        case .forward:
+            adversePrice = NextTRiskMath.adversePrice(referencePrice: buyPrice, amplitudePercent: amplitude, kind: kind)
+            riskLabel = "被套"
+            holding = "买入后价格继续下跌超过 \(String(format: "%.2f", amplitude))%（约 ¥\(NextMoney.text(adversePrice, digits: 3))）且当日不反弹至卖出价 ¥\(NextMoney.text(sellPrice, digits: 3))"
+        }
+        let adverseCost = NextTRiskMath.adverseCost(
+            referencePrice: kind == .reverse ? sellPrice : buyPrice,
+            amplitudePercent: amplitude, units: units, feeTotal: feeTotal)
+        var riskText = "若\(holding)，本次做T\(riskLabel)：相对不做这笔T，净差额约 -¥\(NextMoney.text(adverseCost))（\(String(format: "%.2f", amplitude))% 的不利波动 × \(units) 份，另加两笔手续费 ¥\(NextMoney.text(feeTotal))）"
         if let historyMissRate {
-            trample += "；长期分时统计中卖出后未回落比例约 \(Int((historyMissRate * 100).rounded()))%"
+            riskText += "；长期分时统计中同向未回头比例约 \(Int((historyMissRate * 100).rounded()))%"
         } else if let medianAmplitude = caps.nasAmplitude60 {
             // 用 NAS 60 日振幅中位数与本次所需价差做比值：只是「历史上这种波动够不够」，
-            // 不是预测，也不能反过来证明今天一定会回落。
+            // 不是预测，也不能反过来证明今天一定会回头。
             let needed = NextNum.double(grossSpread / buyPrice * 100)
             let reach = needed > 0 ? min(1.0, medianAmplitude / needed) : 0
-            let trips = caps.nasRoundTrips60
-            trample += "；NAS 60 日日内振幅中位数 \(String(format: "%.2f", medianAmplitude))%，本次所需价差 \(String(format: "%.2f", needed))%，历史覆盖度约 \(Int((reach * 100).rounded()))%"
-            if let trips { trample += "（同期日均往返 \(String(format: "%.1f", trips)) 次）" }
+            riskText += "；NAS 60 日日内振幅中位数 \(String(format: "%.2f", medianAmplitude))%，本次所需价差 \(String(format: "%.2f", needed))%，历史覆盖度约 \(Int((reach * 100).rounded()))%"
+            if let trips = caps.nasRoundTrips60 { riskText += "（同期日均往返 \(String(format: "%.1f", trips)) 次）" }
         } else {
-            trample += "；长期分时统计未接入，暂不给历史未回落比例"
+            riskText += "；长期分时统计未接入，暂不给历史未回头比例"
         }
+        // 只填当前方向真正存在的那一侧。另一侧留空，界面就不会在正T 里显示踏空。
+        let trample = kind == .reverse ? riskText : ""
+        let downside = kind == .forward ? riskText : ""
 
         // 成交量支持：本计划份额占当日成交量的比例。
         var volumeSupport = "当日无成交量统计，无法评估冲击成本"
@@ -702,7 +766,8 @@ enum NextTradeTPlanner {
 
         let plan = NextTPlan(kind: kind, code: quote.code, name: quote.name, sellPrice: sellPrice, buyPrice: buyPrice,
                              units: units, grossSpread: grossSpread, feeTotal: feeTotal, netGain: netGain,
-                             costReductionPerUnit: costReduction, trampleRisk: trample, volumeSupport: volumeSupport,
+                             costReductionPerUnit: costReduction, trampleRisk: trample, downsideRisk: downside,
+                             volumeSupport: volumeSupport,
                              validUntil: NextPlanClock.sessionEnd(after: now),
                              cancelConditions: [
                                 "现价偏离 VWAP 超过 1.5× 今日振幅（做T前提消失）",

@@ -138,7 +138,7 @@ final class NextSignalStatisticsTests: XCTestCase {
 
     func test_suspendedReplicationBlocksEvenWithManyConfirmations() {
         let confirmed = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"]
-        let refuted = ["2026-10-05", "2026-10-06", "2026-10-07"]
+        let refuted = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11"]
         let record = replication(registered: confirmed + refuted,
                                  confirmed: confirmed, refuted: refuted)
         XCTAssertTrue(record.isSuspended)

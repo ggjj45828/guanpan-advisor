@@ -265,7 +265,7 @@ final class NextDecisionMemoryTests: XCTestCase {
         NextTPlan(kind: .reverse, code: "159941", name: "纳指ETF", sellPrice: Decimal(string: "1.42")!,
                   buyPrice: Decimal(string: "1.38")!, units: 3000, grossSpread: Decimal(string: "0.04")!,
                   feeTotal: Decimal(string: "0.20")!, netGain: Decimal(string: "119.80")!,
-                  costReductionPerUnit: Decimal(string: "0.012")!, trampleRisk: "踏空风险",
+                  costReductionPerUnit: Decimal(string: "0.012")!, trampleRisk: "踏空风险", downsideRisk: "",
                   volumeSupport: "成交充足", validUntil: now.addingTimeInterval(3600),
                   cancelConditions: ["跌破 VWAP"], evidence: ["VWAP 1.398"],
                   confidence: NextDataConfidence.assess(quote: nil, now: now, dailyBarCount: 120,

@@ -158,7 +158,7 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     func test_chainBreaksWhenRollingValidityDegraded() {
         let degraded = NextRollingValidityEngine.aggregate(
             lead: .japan, followCode: "510300",
-            studies: [20: weakStudy(), 60: usableStudy(), 120: usableStudy()])
+            studies: [30: weakStudy(), 60: usableStudy(), 120: usableStudy()])
         let chain = NextReasoningChainBuilder.build(
             code: "510300", pulse: pulse(usable: true, days: 40),
             studies: [usableStudy()], rollings: [degraded], hypothesis: nil)
@@ -170,7 +170,7 @@ final class NextCrossMarketReasoningTests: XCTestCase {
         // 海外与统计全绿，但没有本地确认 —— 必须断在 ⑤，不能因为海外涨了就放行
         let rolling = NextRollingValidityEngine.aggregate(
             lead: .japan, followCode: "510300",
-            studies: [20: usableStudy(), 60: usableStudy(), 120: usableStudy()])
+            studies: [30: usableStudy(), 60: usableStudy(), 120: usableStudy()])
         let chain = NextReasoningChainBuilder.build(
             code: "510300", pulse: pulse(usable: true, days: 40),
             studies: [usableStudy()], rollings: [rolling], hypothesis: nil)
@@ -181,7 +181,7 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     func test_chainPassesOnlyWithConfirmedHypothesis() {
         let rolling = NextRollingValidityEngine.aggregate(
             lead: .japan, followCode: "510300",
-            studies: [20: usableStudy(), 60: usableStudy(), 120: usableStudy()])
+            studies: [30: usableStudy(), 60: usableStudy(), 120: usableStudy()])
         let hypothesis = NextCrossHypothesis(
             code: "510300", createdAt: stamp.addingTimeInterval(-600),
             confirmDeadline: stamp.addingTimeInterval(600),
@@ -198,7 +198,7 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     func test_chainPendingHypothesisStillBlocks() {
         let rolling = NextRollingValidityEngine.aggregate(
             lead: .japan, followCode: "510300",
-            studies: [20: usableStudy(), 60: usableStudy(), 120: usableStudy()])
+            studies: [30: usableStudy(), 60: usableStudy(), 120: usableStudy()])
         let hypothesis = NextCrossHypothesis(
             code: "510300", createdAt: stamp.addingTimeInterval(-600),
             confirmDeadline: stamp.addingTimeInterval(600),

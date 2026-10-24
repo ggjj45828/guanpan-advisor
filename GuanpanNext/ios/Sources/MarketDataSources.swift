@@ -2,17 +2,10 @@ import Foundation
 
 /// 行情多源链：按顺序尝试每个源，第一个成功的结果立即返回，并带上实际生效的源名。
 /// 只有全部失败才抛错，且错误里列出每个源的失败原因——「数据来自哪里」必须可追溯。
-enum NextMarketChain {
-    static func first<T>(_ attempts: [(source: String, run: () async throws -> T)]) async throws -> (value: T, source: String) {
-        var failures: [(source: String, reason: String)] = []
-        for attempt in attempts {
-            do { return (try await attempt.run(), attempt.source) }
-            catch { failures.append((attempt.source, error.localizedDescription)) }
-        }
-        let trail = failures.map { "\($0.source)（\($0.reason)）" }.joined(separator: " → ")
-        throw NextError.invalid("行情源全部不可用：\(trail)")
-    }
-}
+// 源链选择规则（first / best）已移到 MarketSourceChain.swift：
+// 那是纯逻辑，放进 Core target 才能被单元测试覆盖。
+
+
 
 /// 东财证券代码（secid）：沪市(5/6/9)→1.xxxxxx；深市与北交所(0/1/2/3/4/8)→0.xxxxxx。
 /// 与 NAS 服务端 server/market.py 的 em_secid 完全一致，避免两端映射分叉。

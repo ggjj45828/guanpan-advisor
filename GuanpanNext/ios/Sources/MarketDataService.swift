@@ -18,21 +18,28 @@ enum NextMarketDataService {
         return try await NextMarketChain.first(attempts)
     }
 
-    static func fetchIntraday(code: String, session: URLSession = .shared) async throws -> (value: NextChartDataset, source: String) {
+    /// 日 K 与分时的最低样本门槛定义在 `NextMarketChain`（Core），
+    /// 这样「选源规则」本身能被单元测试覆盖，不需要真的发网络请求。
+    static var minimumDailyBars: Int { NextMarketChain.minimumDailyBars }
+    static var minimumIntradayPoints: Int { NextMarketChain.minimumIntradayPoints }
+
+    static func fetchIntraday(code: String, session: URLSession = .shared) async throws -> NextChainResult<NextChartDataset> {
         let attempts: [(source: String, run: () async throws -> NextChartDataset)] = [
             ("腾讯分时", { try await tencentMinute(code: code, session: session) }),
             ("东财分时", { try await eastMoneyMinute(code: code, session: session) })
         ]
-        return try await NextMarketChain.first(attempts)
+        return try await NextMarketChain.best(attempts, minimum: minimumIntradayPoints,
+                                              sampleCount: { $0.samples.count })
     }
 
-    static func fetchDaily(code: String, session: URLSession = .shared) async throws -> (value: NextChartDataset, source: String) {
+    static func fetchDaily(code: String, session: URLSession = .shared) async throws -> NextChainResult<NextChartDataset> {
         let attempts: [(source: String, run: () async throws -> NextChartDataset)] = [
             ("腾讯日K", { try await tencentDaily(code: code, session: session) }),
             ("东财日K", { try await eastMoneyDaily(code: code, session: session) }),
             ("新浪日K", { try await sinaDaily(code: code, session: session) })
         ]
-        return try await NextMarketChain.first(attempts)
+        return try await NextMarketChain.best(attempts, minimum: minimumDailyBars,
+                                              sampleCount: { $0.samples.count })
     }
 
     // MARK: - 报价

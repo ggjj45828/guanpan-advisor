@@ -278,7 +278,9 @@ enum NextOpportunityScanner {
                 tPlan = result
                 if case let .ready(plan) = result {
                     headline = plan.kind.rawValue
-                    riskNotes.append(plan.trampleRisk)
+                    // 反T 是踏空、正T 是被套，两个字段只有一个非空。
+                    if !plan.trampleRisk.isEmpty { riskNotes.append(plan.trampleRisk) }
+                    if !plan.downsideRisk.isEmpty { riskNotes.append(plan.downsideRisk) }
                     if portfolioNote != nil {
                         riskNotes.append("组合仓位已超上限：正T的买入腿不建议执行")
                     }

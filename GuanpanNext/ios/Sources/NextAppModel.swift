@@ -184,6 +184,10 @@ struct LocalPreferences: Codable {
     @Published var decisionMemory: [NextDecisionRecord] { didSet { reportSave(repository.save(decisionMemory, filename: "decision-memory-v1.json")) } }
     /// 预注册前瞻复现。落盘是必须的：这些计数跨天累加，丢了就等于把验证历史清零。
     @Published var signalReplications: [NextSignalReplication] { didSet { reportSave(repository.save(signalReplications, filename: "signal-replication-v1.json")) } }
+    /// 分时样本时效。判定只看**样本时间**，不看接收时间——
+    /// 上游完全可能返回「接收时间很新、样本却是昨天」的分时。
+    /// 这个值供界面与下游分析读取，不落盘：每次刷新重算即可。
+    @Published private(set) var intradayFreshness: [String: NextSampleFreshness] = [:]
     /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
     @Published var nasNews: [String: [NextNewsInput]] { didSet { reportSave(repository.save(nasNews, filename: "nas-news-v1.json")) } }
     @Published var newsStatus: [String: String] = [:]
@@ -718,7 +722,12 @@ struct LocalPreferences: Codable {
         var intraday: [String: [NextChartSample]] = [:]
         for position in book.positions {
             if let dataset = chartData["\(position.code):day"] { daily[position.code] = dataset.samples }
-            if let dataset = chartData[position.code] { intraday[position.code] = dataset.samples }
+            // 149：下游分析只能吃「今天的分时」。隔夜缓存里存的是昨天的序列，
+            // 直接喂进去会让闭环、做T与背离判断全部基于昨天的价格。
+            if let dataset = chartData[position.code],
+               Self.intradayIsCurrent(dataset, now: now) {
+                intraday[position.code] = dataset.samples
+            }
         }
         // 「可用」必须是真的有归档统计，不能只看填了 NAS 地址：填了地址但 NAS 没连上
         // 或归档还没攒够时，dataState 说「可用」就是骗人。
@@ -778,7 +787,8 @@ struct LocalPreferences: Codable {
                                      confidenceLevel: value.confidence.level.rawValue,
                                      rationale: value.evidence.joined(separator: "；"),
                                      expectedNetGain: value.netGain, expectedCostReduction: value.costReductionPerUnit,
-                                     riskNote: value.trampleRisk, marketState: item.state.rawValue,
+                                     riskNote: value.trampleRisk.isEmpty ? value.downsideRisk : value.trampleRisk,
+                                     marketState: item.state.rawValue,
                                      cancelAbove: isSell ? nil : value.sellPrice,
                                      cancelBelow: isSell ? value.buyPrice : nil)
         } else if let result = item.gridPlan, case let .ready(value) = result,
@@ -1692,8 +1702,39 @@ struct LocalPreferences: Codable {
             let result = try await NextMarketDataService.fetchIntraday(code: code)
             let dataset = quotes[code].map { result.value.attachingVerifiedIOPV($0.quote) } ?? result.value
             try dataset.validate()
-            chartData[code] = dataset
+            acceptIntraday(dataset, code: code)
         } catch { }
+    }
+
+    /// 缓存里的分时还能不能当「今天的」用。
+    /// 盘前隔夜时它必然是上一个交易日的 —— 这不是数据坏了，是时间不对，必须排除。
+    static func intradayIsCurrent(_ dataset: NextChartDataset, now: Date) -> Bool {
+        let status = NextMarketCalendar().status(.china, at: now)
+        let open = status == .open || status == .lunchBreak
+        return NextSampleAudit.freshness(samples: dataset.samples, now: now, marketOpen: open)
+            .usableForIntraday
+    }
+
+    /// 接受一份分时数据。两条规则，缺一不可：
+    /// 1. **样本必须是今天的**。上游在盘前或降级时会返回上一个交易日的分时，
+    ///    接收时间却是刚才 —— 只看接收时间就会把昨天的曲线当成今天的。
+    /// 2. **覆盖必须单调前进**。相同交易日样本条数变少说明被截断，宁可留旧曲线。
+    /// 这里刻意不弹窗：自动刷新打断人比数据晚一点更烦。异常写进 `intradayFreshness` 让界面去说。
+    @discardableResult
+    private func acceptIntraday(_ dataset: NextChartDataset, code: String) -> NextSampleFreshness {
+        let calendar = NextMarketCalendar()
+        let now = Date()
+        let status = calendar.status(.china, at: now)
+        let open = status == .open || status == .lunchBreak
+        let freshness = NextSampleAudit.freshness(samples: dataset.samples, now: now, marketOpen: open)
+        intradayFreshness[code] = freshness
+        guard freshness.usableForIntraday else { return freshness }
+        if let cached = chartData[code],
+           !NextSampleAudit.shouldReplace(existing: cached, incoming: dataset) {
+            return freshness
+        }
+        chartData[code] = dataset
+        return freshness
     }
 
     func refreshInstrument(_ code: String) async {
@@ -1705,8 +1746,9 @@ struct LocalPreferences: Codable {
             let result = try await NextMarketDataService.fetchIntraday(code: code)
             let dataset = quotes[code].map { result.value.attachingVerifiedIOPV($0.quote) } ?? result.value
             try dataset.validate()
-            chartData[code] = dataset
-            status = "行情与分时已更新 · \(result.source) · \(dataset.samples.count) 点 · \(dataset.observedAt.formatted(date: .omitted, time: .shortened))"
+            let freshness = acceptIntraday(dataset, code: code)
+            let tail = freshness.usableForIntraday ? "" : " · \(freshness.note)"
+            status = "行情与分时已更新 · \(result.source) · \(dataset.samples.count) 点 · \(freshness.label)\(tail)"
         } catch {
             if !preferences.nasBaseURL.isEmpty {
                 await loadNASMinute(code: code, day: Date())
@@ -1886,6 +1928,8 @@ struct LocalPreferences: Codable {
         do {
             let direct = try await NextMarketDataService.fetchDaily(code: code)
             dailyErrors.removeValue(forKey: code)
+            // 「拿到了但历史不足」是要说出来的事实：接口成功不代表数据够用。
+            if !direct.metMinimum { dailyErrors[code] = direct.shortfallNote }
             if shouldReplaceDayDataset(chartData["\(code):day"], with: direct.value) { chartData["\(code):day"] = direct.value }
             return
         } catch let directFailure {
