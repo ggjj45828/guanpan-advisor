@@ -336,9 +336,9 @@ if __name__ == "__main__":
     root = Path(os.environ.get("GUANPAN_NEXT_DATA", "/data")); root.mkdir(parents=True, exist_ok=True)
     database = NextDatabase(root / "guanpan-advisor.sqlite3")
     start_workers(database)
-    # 容器内监听端口 = 宿主机端口（并行顾问副本默认 8789）：
+    # 容器内监听端口 = 宿主机端口（并行顾问副本默认 8786）：
     # 少一层映射就少一处"改了外面没改里面"的坑。要换端口用 GUANPAN_ADVISOR_PORT，
     # compose 的映射也跟着同一个变量走。
-    try: port = int(os.environ.get("GUANPAN_ADVISOR_PORT", "8789"))
-    except ValueError: port = 8789
+    try: port = int(os.environ.get("GUANPAN_ADVISOR_PORT", "8786"))
+    except ValueError: port = 8786
     ThreadingHTTPServer(("0.0.0.0", port), make_handler(database)).serve_forever()

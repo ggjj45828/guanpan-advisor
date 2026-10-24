@@ -18,5 +18,5 @@ RUN useradd --uid 10001 --create-home guanpan \
     && chmod +x /app/start.sh \
     && chown -R guanpan:guanpan /app /data
 USER guanpan
-EXPOSE 8789
+EXPOSE 8786
 ENTRYPOINT ["/app/start.sh"]

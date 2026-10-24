@@ -50,7 +50,7 @@ enum NextNASService {
               let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
               (scheme == "https" || (scheme == "http" && isTrustedLocalHost(host))),
               url.path.isEmpty || url.path == "/", url.query == nil, url.user == nil, url.password == nil else {
-            throw NextError.invalid("请输入 NAS 的 HTTPS 地址；家庭局域网可用 http://NAS内网地址:8789")
+            throw NextError.invalid("请输入 NAS 的 HTTPS 地址；家庭局域网可用 http://NAS内网地址:8786")
         }
         return url
     }
@@ -60,7 +60,7 @@ enum NextNASService {
               let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
               (scheme == "https" || (scheme == "http" && isTrustedLocalHost(host))),
               url.path.isEmpty || url.path == "/", url.query == nil, url.user == nil, url.password == nil else {
-            throw NextError.invalid("请输入旧网页根地址；家庭网络可用 http://NAS内网地址:8789，外网请用 HTTPS")
+            throw NextError.invalid("请输入旧网页根地址；家庭网络可用 http://NAS内网地址:8786，外网请用 HTTPS")
         }
         return url
     }
@@ -112,7 +112,7 @@ enum NextNASService {
     }
 
     /// Permit cleartext only for loopback/private LAN NAS endpoints. Public hosts
-    /// must use HTTPS; this is needed for the documented direct 8789 home-LAN URL.
+    /// must use HTTPS; this is needed for the documented direct 8786 home-LAN URL.
     private static func isTrustedLocalHost(_ host: String) -> Bool {
         if ["localhost", "127.0.0.1", "::1"].contains(host) || host.hasSuffix(".local") || host.hasSuffix(".lan") || host.hasSuffix(".home.arpa") { return true }
         if (host.hasPrefix("fc") || host.hasPrefix("fd")) && host.contains(":") { return true } // IPv6 unique-local

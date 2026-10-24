@@ -2013,12 +2013,12 @@ private struct SettingsScreen: View {
                 }
                 EditorialSection(title: "新 NAS 连接") {
                     GPCard {
-                    TextField("NAS 地址，例如 http://192.168.1.10:8789", text: $nasURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).accessibilityIdentifier("settings.nas.address")
+                    TextField("NAS 地址，例如 http://192.168.1.10:8786", text: $nasURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).accessibilityIdentifier("settings.nas.address")
                     HStack { Button("保存并测试") { do { try model.configureNAS(baseURL: nasURL); Task { await model.probeNAS() } } catch { model.errorMessage = error.localizedDescription } }.font(.caption.weight(.semibold)).accessibilityIdentifier("settings.nas.save-test"); Spacer(); Button("重新检查") { Task { await model.probeNAS() } }.font(.caption).accessibilityIdentifier("settings.nas.recheck") }.tint(p.forest)
                     GPActionButton(title: "从 NAS 下载账本", secondary: true, systemImage: "arrow.down.doc") { confirmDownload = true }
                     GPActionButton(title: "上传本机账本到 NAS", secondary: true, systemImage: "arrow.up.doc") { confirmSync = true }
                     Divider().padding(.vertical, 4)
-                    Text("此并行顾问服务默认地址为 http://NAS内网地址:8789；原服务仍为 30001。公网连接必须使用 HTTPS。新服务使用独立数据库，账本同步采用修订号保护。")
+                    Text("此并行顾问服务默认地址为 http://NAS内网地址:8786；原服务仍为 30001。公网连接必须使用 HTTPS。新服务使用独立数据库，账本同步采用修订号保护。")
                         .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     }
                 }

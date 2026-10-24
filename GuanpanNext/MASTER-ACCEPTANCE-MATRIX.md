@@ -135,10 +135,10 @@
 |---|---|---|---|---|---|---|
 | M1 | 源码审计输出 | ✅ | 本矩阵（2026-10-24） | 逐行 grep/read | §94 完成 | 持续更新 |
 | M2 | 验收矩阵持续维护 | ✅ | 本文件（仓库根目录） | 每模块完成即更新 | §95/§96 执行中 | — |
-| M3 | 实际构建（非推断） | 🟡 | CI `guanpan-advisor-ios.yml`（macos runner：swift build + swift test） | 上次 run 39965181015 双 job 绿（76 测试） | #29–#40 合并后必须重跑 | 任务 #30/#41 进行中 |
+| M3 | 实际构建（非推断） | 🟡 | CI `guanpan-advisor-ios.yml`（macos runner：swift build + swift test） | #29–#40 合入后连败 4 次（40067454501/40069424275/40070668669/40073010690）；经 ci-logs 分支取日志定位 4 处编译错误（NextAIGuide caps 解开后用可选链 ×7、GuanpanAdvisorApp switch 缺 .laboratory/重 .income、NextNasRange 缺成员构造器供夹具、Package.swift macOS 10.15→14 解 Date.formatted 可用性），提交 e936380 后重跑中 | 任务 #30/#41 进行中（待 e936380 重跑结论） |
 | M4 | 单元测试覆盖重点 | ✅ | `server/tests` 68 项（退役端点后精简，本地实跑全绿）+ iOS `swift test` 76 项（含 5 个 A–E 端到端场景）；测试夹具已按 fix8 门槛升级（60 日 NAS 统计/五档盘口/已核实规则） | 本地 Python 实跑全绿 + iOS 末次绿 run 39957249993（#29–#40 合入前）；#29–#40 后 CI 重跑结论见 M3 | §100 齐 | — |
 | M5 | 边界测试 | ✅ | 零持仓/零现金/缺行情/NAS 离线/AI 失败/极端涨跌 | 测试套件 + 代码审计 | §101 齐 | — |
-| M6 | 五主题截图验收 | 🟡 | CI Theme screenshots job（1_editorial…5_puzzle + 6_profile + 7/8 小屏） | run 39965181015 产物 `9_assets.png` 等 | 旧截图有效，#29–#40 后需新截图 | 任务 #30/#41 进行中 |
+| M6 | 五主题截图验收 | 🟡 | CI Theme screenshots job（1_editorial…5_puzzle + 6_profile + 7/8 小屏） | run 40073571284 的 screenshots job 已不因源码编译失败而中断（ci-logs-sim 未生成）；新截图待 e936380 重跑后产出 | 任务 #30/#41 进行中（待 e936380 重跑结论） |
 | M7 | 未验证项诚实列出 | ✅ | 本矩阵 ⚠️ 行 | — | §108 执行 | — |
 | M8 | 复用已有正确功能不重写坏 | ✅ | 本轮合并为「fix8 增量移植到我方树」，保留我方沙盒链/CI/测试 | diff 审计 | §109 遵守 | — |
 

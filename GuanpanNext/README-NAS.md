@@ -1,11 +1,11 @@
 # 观盘 Next 私人顾问并行版本
 
-此包用于与现有观盘服务并行部署。新 Compose 项目名为 `guanpan-advisor`，容器监听和 NAS 映射端口均为 `8789`，数据卷为 `guanpan_advisor_data`。旧服务 `30001`、旧项目和旧卷不受影响。
+此包用于与现有观盘服务并行部署。新 Compose 项目名为 `guanpan-advisor`，容器监听和 NAS 映射端口均为 `8786`，数据卷为 `guanpan_advisor_data`。旧服务 `30001`、旧项目和旧卷不受影响。
 
 ## 部署
 
 1. 在 NAS 上新建独立目录，把完整源码包解压进去。不要覆盖旧版目录。
-2. 确认端口 `8789` 可用，在 `.env` 中设置 NAS 上已经配置的 DeepSeek 参数。保持 `.env` 权限私有，不把密钥填入 iOS 或网页。新服务端口变量名为 `GUANPAN_ADVISOR_PORT`，默认 8789，与旧服务的 `GUANPAN_PORT` 独立。
+2. 确认端口 `8786` 可用，在 `.env` 中设置 NAS 上已经配置的 DeepSeek 参数。保持 `.env` 权限私有，不把密钥填入 iOS 或网页。新服务端口变量名为 `GUANPAN_ADVISOR_PORT`，默认 8786，与旧服务的 `GUANPAN_PORT` 独立。
 3. 在新目录运行（服务代码构建进独立镜像，不挂载旧版宿主机源码目录）：
 
    ```sh
@@ -14,8 +14,8 @@
    docker compose -p guanpan-advisor logs --tail=100
    ```
 
-4. 打开 `http://NAS内网地址:8789/health`，确认 `codeVersion` 为本包版本。网页是 `http://NAS内网地址:8789/`。
-5. 新库是空库。iOS 设置只保存一个 NAS 地址；要使用新库，将地址改到 8789，然后由用户主动下载/上传并核对账本。切回旧库时改回 30001。不要将两个库当成自动同步或自动合并的副本。
+4. 打开 `http://NAS内网地址:8786/health`，确认 `codeVersion` 为本包版本。网页是 `http://NAS内网地址:8786/`。
+5. 新库是空库。iOS 设置只保存一个 NAS 地址；要使用新库，将地址改到 8786，然后由用户主动下载/上传并核对账本。切回旧库时改回 30001。不要将两个库当成自动同步或自动合并的副本。
 
 `update.sh` 只会重建当前目录内名字严格为 `guanpan-advisor` 的 Compose 项目，不会搜索、停止或覆盖其它 Guanpan 容器。升级请先备份 `guanpan_advisor_data`。
 
