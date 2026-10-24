@@ -36,6 +36,35 @@ final class NextLeadValidationTests: XCTestCase {
         return (lead, follow)
     }
 
+    /// 造一天 `points` 个点、**每分钟**一个（9:30 起）。
+    /// 5 分钟窗口下每天产出 `points - 11` 个当日窗口——用来制造
+    /// 「分钟观测很多、独立交易日只有 1 天」的场景。
+    private func makeDenseDay(offset: Int, points: Int, leadStep: Double, followStep: Double)
+        -> (lead: [NextMarketPoint], follow: [NextMarketPoint]) {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        for index in 0..<points {
+            let time = stamp(dayOffset: offset, minute: 9 * 60 + 30 + index)
+            lead.append(NextMarketPoint(timestamp: time, value: 100 * (1 + leadStep * Double(index))))
+            follow.append(NextMarketPoint(timestamp: time, value: 50 * (1 + followStep * Double(index))))
+        }
+        return (lead, follow)
+    }
+
+    /// 造一天 11 个点（9:30–9:40），只产出 **1 个**当日窗口：
+    /// 9:35 的领先窗口配 9:35→9:40 的跟随段，其余点的跟随段都落到次日。
+    private func makeSparseDay(offset: Int, leadStep: Double, followStep: Double)
+        -> (lead: [NextMarketPoint], follow: [NextMarketPoint]) {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        for index in 0..<11 {
+            let time = stamp(dayOffset: offset, minute: 9 * 60 + 30 + index)
+            lead.append(NextMarketPoint(timestamp: time, value: 100 * (1 + leadStep * Double(index))))
+            follow.append(NextMarketPoint(timestamp: time, value: 50 * (1 + followStep * Double(index))))
+        }
+        return (lead, follow)
+    }
+
     // MARK: Wilson
 
     func testWilsonIntervalNarrowsWithSampleSize() throws {
@@ -318,6 +347,179 @@ final class NextLeadValidationTests: XCTestCase {
         XCTAssertEqual(decoded.entries.count, 1)
         XCTAssertEqual(decoded.entries[0].code, "159866")
         XCTAssertEqual(decoded.entries[0].sessions, 120)
+    }
+
+    // MARK: 独立交易日是唯一样本单位（分钟数据很多 ≠ 独立证据很多）
+
+    /// 同一天 69 个分钟点、59 个领先窗口：观测条数很多，
+    /// 但独立交易日只有 1 —— 样本量不许被窗口数量灌水。
+    func testDenseSingleDayCountsAsOneSession() {
+        let day = makeDenseDay(offset: 0, points: 69, leadStep: 0.001, followStep: 0.0005)
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: day.lead, followSeries: day.follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 1, minute: 9 * 60))
+        XCTAssertEqual(validation.sessions, 1, "59 个窗口也只算 1 个独立交易日")
+        XCTAssertEqual(validation.directionalDays, 1, "同一天多个窗口仍只贡献 1 个方向性交易日")
+        XCTAssertEqual(validation.tier, .insufficient)
+        XCTAssertEqual(validation.holdout.state, .insufficient)
+        XCTAssertFalse(validation.allowsForwardReplication)
+        XCTAssertTrue(validation.tierBlockNote.contains("1 个独立交易日"), validation.tierBlockNote)
+    }
+
+    /// 10 天 × 每天 59 个窗口 = 590 条记录，但独立交易日只有 10：
+    /// 记录数不许冒充样本量——引擎如实判「样本不足」，而不是拿 590 条记录说事。
+    func testManyRecordsFewDaysCannotPoseAsManySessions() {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        for offset in 0..<10 {
+            let day = makeDenseDay(offset: offset, points: 69, leadStep: 0.001, followStep: 0.0005)
+            lead.append(contentsOf: day.lead)
+            follow.append(contentsOf: day.follow)
+        }
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: lead, followSeries: follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 20, minute: 15 * 60))
+        XCTAssertEqual(validation.sessions, 10, "590 条记录也只算 10 个独立交易日")
+        XCTAssertEqual(validation.directionalDays, 10)
+        XCTAssertEqual(validation.tier, .insufficient, "10 个交易日：样本不足，不是拒绝也不是候选")
+        XCTAssertFalse(validation.allowsForwardReplication)
+        XCTAssertTrue(validation.tierBlockNote.contains("10 个独立交易日"), validation.tierBlockNote)
+    }
+
+    /// 单日集中度**恰好 50%**：不否定，但绝不晋升——踩线不算过关。
+    /// 构造口径：1 天 59 个窗口 + 59 天各 1 个窗口 → 观测集中度 59/118 = 0.5。
+    func testConcentrationExactlyAtBarStaysProvisional() {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        let dense = makeDenseDay(offset: 0, points: 69, leadStep: 0.001, followStep: 0.0005)
+        lead.append(contentsOf: dense.lead)
+        follow.append(contentsOf: dense.follow)
+        for offset in 1..<60 {
+            let day = makeSparseDay(offset: offset, leadStep: 0.001, followStep: 0.0005)
+            lead.append(contentsOf: day.lead)
+            follow.append(contentsOf: day.follow)
+        }
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: lead, followSeries: follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 70, minute: 15 * 60))
+        XCTAssertEqual(validation.sessions, 60)
+        XCTAssertEqual(validation.concentrationShare, 0.5, accuracy: 0.0001,
+                       "59 个窗口 + 59 个单窗口日 → 集中度恰好踩线")
+        XCTAssertEqual(validation.tier, .provisional, "恰好 50%：不否定也不晋升")
+        XCTAssertFalse(validation.allowsForwardReplication)
+        XCTAssertTrue(validation.tierBlockNote.contains("踩在门槛线"), validation.tierBlockNote)
+    }
+
+    /// 集中度 49.x%（低于门槛）也不够：其他门槛不过，照样不得晋升。
+    /// 集中度过关只是必要条件，从来不是充分条件。
+    func testConcentrationBelowBarStillBlockedByOtherGates() {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        let dense = makeDenseDay(offset: 0, points: 69, leadStep: 0.001, followStep: 0.0005)
+        lead.append(contentsOf: dense.lead)
+        follow.append(contentsOf: dense.follow)
+        for offset in 1..<61 {
+            let day = makeSparseDay(offset: offset, leadStep: 0.001, followStep: 0.0005)
+            lead.append(contentsOf: day.lead)
+            follow.append(contentsOf: day.follow)
+        }
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: lead, followSeries: follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 70, minute: 15 * 60))
+        XCTAssertEqual(validation.sessions, 61)
+        XCTAssertLessThan(validation.concentrationShare, NextLeadValidationEngine.maximumSingleDayShare)
+        XCTAssertGreaterThan(validation.concentrationShare, 0.45, "集中度应略低于 50%")
+        XCTAssertEqual(validation.tier, .provisional, "集中度过关 ≠ 能晋升：61 天未到长期门槛")
+        XCTAssertFalse(validation.allowsForwardReplication)
+        XCTAssertTrue(validation.tierBlockNote.contains("未到长期门槛"), validation.tierBlockNote)
+    }
+
+    // MARK: 留出段硬门槛：不足时连验证性置信区间都不给
+
+    /// 边界值：200 行（留出段触发/对照恰好各 30）→ 才给区间；
+    /// 199 行（对照 29 < 30）→ 状态与区间都不给。
+    /// 样本不足不许被包装成具有验证意义的置信区间。
+    func testHoldoutGivesIntervalOnlyAtBoundary() {
+        var enough: [NextEvidenceRow] = []
+        for day in 0..<200 {
+            let triggered = day % 2 == 0
+            enough.append(NextEvidenceRow(day: dayKey(day), dataComplete: true,
+                                          triggered: triggered, confirmed: triggered))
+        }
+        let pass = NextEvidenceEngine.holdout(enough)
+        XCTAssertEqual(pass.eligibleSessions, 200)
+        XCTAssertEqual(pass.holdoutSessions, 60)
+        XCTAssertEqual(pass.triggerCount, 30)
+        XCTAssertEqual(pass.controlCount, 30)
+        XCTAssertNotNil(pass.edgeInterval, "踩满门槛就必须给区间")
+        XCTAssertEqual(pass.state, .candidateRequiresReplication)
+
+        var justShort: [NextEvidenceRow] = []
+        for day in 0..<199 {
+            let triggered = day % 2 == 0
+            justShort.append(NextEvidenceRow(day: dayKey(day), dataComplete: true,
+                                             triggered: triggered, confirmed: triggered))
+        }
+        let fail = NextEvidenceEngine.holdout(justShort)
+        XCTAssertEqual(fail.state, .insufficient)
+        XCTAssertNil(fail.edgeInterval, "差一天也不给验证性置信区间")
+        XCTAssertTrue(fail.note.contains("样本不足"))
+    }
+
+    // MARK: 去掉极值日后关系消失 → 不得晋升
+
+    /// 200 天全部「有方向」、集中度也只有三成，但相关性是 3 个极端日撑起来的：
+    /// 去掉它们之后关系消失 —— 这是否定，不是「再攒攒」。
+    /// 注意 `makeDay` 是 5 分钟间距、5 分钟窗口只回退 1 个点，
+    /// 所以窗口涨跌 ≈ `leadStep` 本身：0.005 → 0.5%，够过 0.30% 触发阈值。
+    func testRelationshipVanishingWithoutTopDaysCannotPromote() {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        for offset in 0..<200 {
+            let day: (lead: [NextMarketPoint], follow: [NextMarketPoint])
+            if offset < 3 {
+                // 3 个极端日：两边都大幅同向，权重盖过其余日子。
+                day = makeDay(offset: offset, leadStep: 0.05, followStep: 0.05)
+            } else if offset % 2 == 0 {
+                day = makeDay(offset: offset, leadStep: 0.005, followStep: 0.005)
+            } else {
+                // 奇数日跟随反向：去掉极端日后，剩下的日子并没有关系。
+                day = makeDay(offset: offset, leadStep: 0.005, followStep: -0.005)
+            }
+            lead.append(contentsOf: day.lead)
+            follow.append(contentsOf: day.follow)
+        }
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: lead, followSeries: follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 210, minute: 15 * 60))
+        XCTAssertGreaterThanOrEqual(validation.directionalDays, NextLeadValidationEngine.minimumDirectionalDays)
+        XCTAssertLessThan(validation.concentrationShare, NextLeadValidationEngine.maximumSingleDayShare)
+        XCTAssertLessThan(validation.correlationWithoutTopDays ?? 1,
+                          NextLeadValidationEngine.minimumCorrelationWithoutTopDays,
+                          "去掉贡献最大的 3 天后关系必须消失")
+        XCTAssertEqual(validation.tier, .rejected)
+        XCTAssertFalse(validation.allowsForwardReplication)
+        XCTAssertTrue(validation.tierBlockNote.contains("去掉贡献最大的"), validation.tierBlockNote)
+    }
+
+    // MARK: 未来数据不得进入样本统计
+
+    /// cutoff 之后的交易日一天都不进统计：60 天的序列、cutoff 卡在第 30 天开盘前
+    /// → 只有 30 个独立交易日。把 cutoff 之后的数据算进来等于用未来作弊。
+    func testFutureDaysNeverEnterSessionStats() {
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        for offset in 0..<60 {
+            let day = makeDay(offset: offset, leadStep: 0.005, followStep: 0.0025)
+            lead.append(contentsOf: day.lead)
+            follow.append(contentsOf: day.follow)
+        }
+        let validation = NextLeadValidationEngine.validate(
+            code: "513520", lead: .japan, leadSeries: lead, followSeries: follow,
+            windowMinutes: 5, cutoff: stamp(dayOffset: 30, minute: 9 * 60))
+        XCTAssertEqual(validation.sessions, 30, "cutoff 之后的日子一天都不算")
+        XCTAssertEqual(validation.tier, .insufficient)
+        XCTAssertTrue(validation.tierBlockNote.contains("30 个独立交易日"), validation.tierBlockNote)
     }
 
     private func dayKey(_ offset: Int) -> String {
