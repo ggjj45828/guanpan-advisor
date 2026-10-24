@@ -196,7 +196,7 @@
 | # | 需求 | Status | Implementation | Test | Remaining |
 |---|---|---|---|---|---|
 | 116 | 跨市场引擎骨架 | ✅ | `CrossMarket.swift`（枚举/时段/对齐/结论结构）+ **数据底座已通**：`server/crossmarket.py` 每分钟采日经/KOSPI/恒生科技/纳指快照入库（`cross_market_samples`），`/v1/cross/series`、`/v1/cross/availability` 出数；手机 `CrossMarketFeed.swift` 解析 + `NextReplayAssembler` 装配逐日回放素材 | `NextCrossMarketTests` 时区/时段 15 项；`tests/test_crossmarket.py` 17 项（解析/丢弃过期源/按市场时区切日/库读写/2 个 HTTP 端点）；`NextCrossMarketFeedTests` 归档解析 4 项 | — |
-| 117 | Lead-Lag 统计（多窗口、胜率、中位、最大不利、稳定度） | 🟡 | `NextLeadLagEngine`：0/5/10/15/30/45/60/90 分钟窗口，相关系数+同向率+中位+最大不利+前后半段稳定度；**真实数据入口已就绪**（`NextReplayAssembler` 产出「前收取上一交易日、海外点只取 A股 收盘前」的逐日素材） | 构造真实滞后关系→识别；无关序列→拒绝；样本不足→拒绝；装配器 3 项（前收、未来数据排除、缺前收跳过） | 真要出统计还得等归档攒够 30 个交易日；当前 `/v1/cross/availability` 会如实报「不足 30 天 → 暂无稳定领先关系」 |
+| 117 | Lead-Lag 统计（多窗口、胜率、中位、最大不利、稳定度） | 🟡 | `NextLeadLagEngine`：0/5/10/15/30/45/60/90 分钟窗口，相关系数+同向率+中位+最大不利+前后半段稳定度；**批量出数入口已通**：`NextAppModel.refreshCrossMarketStudies` 对每只持仓取 NAS 120 日分钟线，与 4 个海外市场逐一配对算 study（6 小时节流、只算持仓、算不出来就保持空） | 构造真实滞后关系→识别；无关序列→拒绝；样本不足→拒绝；装配器 3 项（前收、未来数据排除、缺前收跳过） | 要真出统计必须 NAS 上同时存在「海外快照 ≥30 交易日」与「该标的分钟归档」，缺任一侧就保持「暂无稳定领先关系」 |
 | 118 | 每只持仓的外部指标篮子 | 🟠 | 结构未落地 | — | 按标的维护 lead profile，权重来源于 117 的统计 |
 | 119 | A股午休信息差 | ✅ | `NextLunchBreakEngine`：11:30 快照与 12:50 快照的差；12:50 之后数据禁止进入。**采样已自动落库**：cross-market 线程 08:00–16:10 北京时间每分钟一采，11:30 与 12:50 两个检查点必然覆盖 | 只用检查点前数据、shock=+0.7、晚于 12:50 的点不参与；服务端「源时间过期即丢弃」用例保证收盘后不会伪造横盘 | — |
 | 120 | 午后反应统计（13:00→13:05/15/30/14:00/收盘） | 🟡 | `NextAfternoonReactionEngine`：5 个检查点，逐点算上涨比例/中位/均值/最大不利；<20 天或偏离 50% 不足 10 个百分点一律判「暂无稳定规律」 | `NextCrossMarketFeedTests`：5 天样本→暂无规律；25 天一致上涨→识别；24 天涨跌各半→明确判为「与随机无异」 | 接真实会话批次（需 ≥20 天午后分时）并接到界面 |
@@ -213,7 +213,7 @@
 | 130 | 跨市场进入统一 DecisionContext | 🟡 | `NextDecisionContext` 新增 `crossMarketLines` + 提示词新增「【跨市场（日韩/港股/美股）】」段与硬约束第 8 条（无稳定领先关系时禁止据此推荐）；`makeDecisionContext` 从 `refreshCrossMarket()` 的 NAS 归档生成说明行；`NextNASService.readCrossMarketSeries` 走 `/v1/cross/series` | `NextCrossMarketFeedTests`：日韩不足 30 天必须输出「暂无稳定领先关系 + 不得据此产生午后假设」；两端都够 30 天时不再出现该禁止语 | 实时信号对象（`NextCrossHypothesis`/背离/执行过滤）还没进上下文——那属于 128/129 的实时循环 |
 | 131 | 每只 ETF 的领先来源排名 | 🟠 | 未实现 | — | 由 117 的窗口统计聚合排序 |
 | 132 | 时间段画像 | 🟠 | 未实现 | — | 按时段切分 117 |
-| 133 | 滚动有效性（20/60/120 日） | 🟠 | 未实现 | — | 分段统计 + 失效降权 |
+| 133 | 滚动有效性（20/60/120 日） | 🟡 | `CrossMarketReasoning.swift`：`NextRollingValidityEngine` 同时算三个窗口（`tail` 按天数截尾，不互相借样本），`aggregate` 分三态：都成立给权重 1.0/0.8/0.6；**近 20 日失效而长窗口成立 → 判 `degraded`、权重 0.35、`allowsAction=false`**，长窗口的好看数字不许盖掉短窗口的坏消息 | `NextCrossMarketReasoningTests` 6 项：窗口固定 20/60/120、全不足→权重 0 且明说暂无、全成立→1.0、近 20 日失效→降级且 note 写「近 20 日」、只有短窗口成立→降权但允许、`tail` 切片 21/61/121 点 | 权重目前只进 141 文案与 145 链条，尚未回灌到 129 的做T/网格仓位系数 |
 | 134 | 防伪相关 | 🟡 | 门槛：样本≥30、|相关|≥0.20、稳定度≥0.6、相邻窗口不得孤峰 | 无关序列必须输出「暂无稳定领先关系」 | 多重比较校正可继续加强 |
 | 135 | 禁止未来数据 | ✅ | `NextCrossMarketAlignment`：领先 t 只能配 t 之后的跟随观测；午休用 12:50 截止 | 12:55 的数据不影响 shock | — |
 | 136 | 跨市场时间统一 | ✅ | 内部 UTC、时区交给 `TimeZone`，展示用北京时间 | 冬令时 14:31 UTC / 夏令时 13:31 UTC 开盘判定 | — |
@@ -221,11 +221,11 @@
 | 138 | 数据新鲜度 | 🟡 | `NextCrossMarketFreshness`：来源/时间/年龄/市场状态，过期或休市权重归零 | 45 分钟 → usable=false、weight=0；休市 → 提示 | 接真实数据源时间戳 |
 | 139 | AI 最终表达 | 🟠 | 文案片段已在各结构 note 中 | — | 接入手机 AI 输出层 |
 | 140 | 首页「跨市场脉搏」 | 🟡 | `CrossMarketPulse.swift`（Core）：每市场算开闭状态/最新观测时刻/相对昨日的源涨跌幅/是否可用（休市或 >30 分钟一律 usable=false）；A股午休时附「午休期间日韩·港股各动多少 pp」。`GPCrossMarketPulseCard` 一张卡复用到五套首页（插在 `HomeIndexBoard` 之后，五处同源同文案） | `NextCrossMarketPulseTests` 7 项：无归档不编价、收盘不可用且说「最后 HH:mm」、盘中新鲜可用、过期转 warn、副标题只数够 30 天的市场、午休提示只在午休出现 | 需要真机/截图确认五套主题下的排版与字号（CI 已出截图，待逐张核对） |
-| 141 | 持仓详情「外部市场影响」 | 🟡 | `GPAbroadImpactSection` 接在标的详情「行情图表」之后：只显示**已验证**的领先关系（来自 117 的 study），没有就写「暂无稳定领先关系」+ 归档天数原因 | `NextCrossMarketPulseTests` 3 项：无 study 时承认没有关系、有 usable study 时报「领先约 15 分钟」、别的标的的 study 不算数 | 等 117 在真实 30 日数据上产出 study；截图确认排版 |
+| 141 | 持仓详情「外部市场影响」 | 🟡 | `GPAbroadImpactSection` 接在标的详情「行情图表」之后：只显示**已验证**的领先关系（来自 117 的 study），没有就写「暂无稳定领先关系」+ 归档天数原因；**已接 133 的滚动结论**——长窗口成立但近 20 日衰减时，额外写一行「已衰减，按暂无处理」并把徽章置为「暂无稳定关系」 | `NextCrossMarketPulseTests` 3 项：无 study 时承认没有关系、有 usable study 时报「领先约 15 分钟」、别的标的的 study 不算数 | 等 117 在真实 30 日数据上产出 study；截图确认排版 |
 | 142 | 与画像结合（打扰门槛） | 🟠 | 未实现 | — | 依赖 131 |
 | 143 | 与决策记忆结合 | 🟠 | 未实现 | — | 记录假设→确认→执行→结果 |
 | 144 | 信号结果复盘 | 🟠 | 未实现 | — | 正确取消也要记成功 |
-| 145 | 完整推理链 | 🟠 | 各环节零件已分散具备 | — | 需在 scan/DecisionContext 串起来 |
+| 145 | 完整推理链 | 🟡 | `NextReasoningChainBuilder`（Core）：固定六步「① 海外数据新鲜度 → ② 归档深度 → ③ 领先关系 → ④ 滚动有效性 → ⑤ 本地确认 → ⑥ 执行层」，每步给「通过 / 仅背景 / 断开」；`allowsAction` 要求**一步都不断**，断点处给出中文原因。界面 `GPReasoningChainCard` 接在标的详情「外部市场影响」下方，与 141 同屏 | `NextCrossMarketReasoningTests` 8 项：无实时数据断在①、归档不足断在②、无领先关系断在③、滚动降级断在④、**海外全绿但无本地确认必须断在⑤**、confirmed 才放行、pending 仍拦、`plainText` 行数=步数+结论 | 「② 归档深度」目前只看日韩港最大天数；⑥ 执行层因为缺溢折价数据恒为「仅背景」，等盘口接入后才会参与判定 |
 | 146 | 历史回放验证器（研究工具，非模拟账户） | 🟡 | `CrossMarketReplay.swift`：12:50 结构性知识截断（`NextReplayCutoffView` 在类型上就拿不到之后的数据）→ 生成午后假设 → 放出 13:00 后真实行情 → confirmed / failed / rejected；**数据与界面已接**：服务端 `/v1/market/minutes/{code}?days=N` 一次取回多日原始分时，`NASService.readMinuteSeries` → `NextReplayAssembler` → `NextReplayEngine`；`GPReplayLabView` 可从标的详情页打开，跑 30/60/120 日，显示结论与逐日四种结果。样本 <30 或确认率 <50% 或确认后上涨 <50% 一律输出「没有稳定领先关系」 | `NextCrossMarketReplayTests` 7 项（含新增的中文标签用例：四种结论都必须有中文名，「未产生假设」不得写成失败）；装配器 3 项（前收取上一交易日、A股收盘后海外点排除、缺前收跳过） | 真实回放要等 NAS 分钟归档与海外快照同时攒够 30 个交易日；页面截图待核对 |
 
 **本轮小结（r33）**：116–145 共 30 项，✅ 4 项（116/119/135/136）、🟡 11 项、🟠 16 项；另加 146 历史回放验证器（🟡：引擎 + 装配器 + 9 条测试已完成，缺研究工具界面与 30 日真实样本）。全表合计 113 行：✅ 84 / 🟡 11 / 🟠 18（🟠 里 16 项属 116–145，另 2 项是旧条目 B1、J7）。

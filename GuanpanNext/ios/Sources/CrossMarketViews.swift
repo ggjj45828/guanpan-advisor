@@ -135,6 +135,76 @@ struct GPAbroadImpactSection: View {
     }
 }
 
+// MARK: - 145 完整推理链
+//
+// 这一块不产生任何新数字，只把「结论是怎么一步步走到这里的」摊开：
+// 每一步给出「通过 / 仅背景 / 断开」，断在哪一步就停在哪一步。
+// 排序即优先级：前面断了，后面的好看数据都不作数。
+
+struct GPReasoningChainCard: View {
+    @Environment(\.gp) private var p
+    let chain: NextReasoningChain
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("推理链")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+                Spacer(minLength: 4)
+                Text(chain.allowsAction ? "链条完整" : "链条断开")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(chain.allowsAction ? p.risk : p.muted)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background((chain.allowsAction ? p.risk : p.muted).opacity(0.12), in: Capsule())
+            }
+            ForEach(Array(chain.steps.enumerated()), id: \.offset) { _, step in
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: Self.symbol(step.gate))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Self.color(step.gate, p))
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(step.stage)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Self.color(step.gate, p))
+                        Text(step.detail)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(p.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Text(chain.verdict)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(chain.allowsAction ? p.risk : p.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous)
+            .stroke(p.line.opacity(0.5), lineWidth: 0.8))
+        .accessibilityIdentifier("crossmarket.reasoningchain")
+    }
+
+    static func symbol(_ gate: NextReasoningStep.Gate) -> String {
+        switch gate {
+        case .pass: return "checkmark.circle"
+        case .background: return "circle.dashed"
+        case .blocked: return "xmark.circle"
+        }
+    }
+
+    static func color(_ gate: NextReasoningStep.Gate, _ p: GPPalette) -> Color {
+        switch gate {
+        case .pass: return p.jade
+        case .background: return p.muted
+        case .blocked: return p.terracotta
+        }
+    }
+}
+
 // MARK: - 146 历史回放验证器（研究工具，不是模拟账户）
 //
 // 这个页面只说一件事：把某一天 12:50 之前能看到的证据交给规则，等 13:00 之后的真实行情出来，

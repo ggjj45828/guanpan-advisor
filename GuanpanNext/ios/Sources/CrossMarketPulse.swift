@@ -199,13 +199,19 @@ struct NextHoldingAbroadImpact: Equatable {
 }
 
 enum NextHoldingAbroadImpactBuilder {
+    /// `rollings` 是 133 的滚动有效性结论。有就多一行「最近还灵不灵」，
+    /// 没有就不写——但绝不能因为「长窗口好看」把已经衰减的关系说成有效。
     static func impact(code: String, studies: [NextLeadLagStudy],
-                       pulse: NextCrossMarketPulse) -> NextHoldingAbroadImpact {
+                       pulse: NextCrossMarketPulse,
+                       rollings: [NextRollingValidity] = []) -> NextHoldingAbroadImpact {
         let usable = studies.filter { $0.followCode == code && $0.best != nil }
         var lines: [String] = []
         for study in usable.prefix(2) {
             guard let best = study.best else { continue }
             lines.append("\(study.lead.displayName) 领先约 \(best.minutes) 分钟（样本 \(best.sampleCount)，相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2))）")
+        }
+        for rolling in rollings where rolling.weight > 0 {
+            lines.append(rolling.note)
         }
         lines.append(contentsOf: pulse.rows.compactMap { row -> String? in
             guard row.price != nil else { return nil }
@@ -213,6 +219,11 @@ enum NextHoldingAbroadImpactBuilder {
         })
         if usable.isEmpty {
             lines.append("暂无稳定领先关系：\(pulse.subtitle)")
+            return NextHoldingAbroadImpact(code: code, hasStableLead: false, lines: lines)
+        }
+        // 历史上成立但最近已衰减：仍然算「没有」稳定关系，摘要必须是否定的。
+        if rollings.contains(where: { !$0.allowsAction }) {
+            lines.append("领先关系在最近窗口已衰减，按暂无稳定领先关系处理")
             return NextHoldingAbroadImpact(code: code, hasStableLead: false, lines: lines)
         }
         return NextHoldingAbroadImpact(code: code, hasStableLead: true, lines: lines)

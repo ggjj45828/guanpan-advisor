@@ -1112,6 +1112,9 @@ struct LocalPreferences: Codable {
     /// 每只标的分市场算出来的领先关系。117 的批量统计跑完后写这里；
     /// 没跑过就是空——界面因此显示「暂无稳定领先关系」，而不是编一个来源。
     private var ledLagStudies: [String: [NextLeadLagStudy]] = [:]
+    /// 每只标的的 20/60/120 日滚动有效性（133）。与 `ledLagStudies` 同批算出。
+    private var ledLagRollings: [String: [NextRollingValidity]] = [:]
+    private var studiesFetchedAt: Date?
 
     /// 拉 NAS 归档的跨市场快照。节流 15 分钟：这份数据是分钟级攒出来的，
     /// 每分钟去问一次只会白白走隧道，结论也不会变。
@@ -1158,7 +1161,64 @@ struct LocalPreferences: Codable {
     /// 持仓/标的详情里的「外部市场影响」。
     func abroadImpact(for code: String) -> NextHoldingAbroadImpact {
         NextHoldingAbroadImpactBuilder.impact(code: code, studies: crossMarketStudies[code] ?? [],
-                                              pulse: crossMarketPulse)
+                                              pulse: crossMarketPulse,
+                                              rollings: ledLagRollings[code] ?? [])
+    }
+
+    /// 145 完整推理链：把「海外数据 → 归档深度 → 领先关系 → 滚动有效性 → 本地确认 → 执行层」
+    /// 六步串成一条可核查的链。断在哪一步就写到哪一步，绝不跳步。
+    func reasoningChain(for code: String) -> NextReasoningChain {
+        NextReasoningChainBuilder.build(
+            code: code,
+            name: NextNameBook.resolve(code),
+            pulse: crossMarketPulse,
+            studies: crossMarketStudies[code] ?? [],
+            rollings: ledLagRollings[code] ?? [],
+            hypothesis: nil)
+    }
+
+    /// 117 + 133 的批量计算：拿每只标的的 NAS 多日分钟线，与海外归档按市场逐一配对。
+    ///
+    /// 只在 NAS 在线、归档有数据时才跑；一只标的 N 个市场各算一次，代价是
+    /// 「每只标的 1 次分钟线请求 + 纯本地统计」。算不出来就保持空——
+    /// 界面因此显示「暂无稳定领先关系」，这比给一个假来源有用得多。
+    func refreshCrossMarketStudies(for codes: [String], force: Bool = false) async {
+        let base = preferences.nasBaseURL
+        guard !base.isEmpty, nasLinkState.isOnline,
+              let archive = crossMarketArchive, archive.totalPoints > 0 else { return }
+        let targets = Array(Set(codes.filter { !$0.isEmpty })).sorted()
+        guard !targets.isEmpty else { return }
+        let missing = targets.contains { ledLagStudies[$0] == nil }
+        if !force, !missing, let last = studiesFetchedAt, Date().timeIntervalSince(last) < 6 * 3600 {
+            return
+        }
+        var studies: [String: [NextLeadLagStudy]] = [:]
+        var rollings: [String: [NextRollingValidity]] = [:]
+        for code in targets {
+            guard let local = try? await NextNASService.readMinuteSeries(baseURL: base, code: code, days: 120),
+                  local.count > 1 else { continue }
+            var perMarket: [NextLeadLagStudy] = []
+            var perRolling: [NextRollingValidity] = []
+            for market in NextCrossMarketPulseBuilder.overseas {
+                let overseas = archive.points(market)
+                guard overseas.count > 1 else { continue }
+                perMarket.append(NextLeadLagEngine.study(
+                    lead: market, leadSeries: overseas, followCode: code,
+                    followSeries: local, lastValidated: Date()))
+                let windows = NextRollingValidityEngine.studies(
+                    lead: market, leadSeries: overseas, followCode: code,
+                    followSeries: local, lastValidated: Date())
+                perRolling.append(NextRollingValidityEngine.aggregate(
+                    lead: market, followCode: code, studies: windows))
+            }
+            guard !perMarket.isEmpty else { continue }
+            studies[code] = perMarket
+            rollings[code] = perRolling
+        }
+        guard preferences.nasBaseURL == base else { return }
+        ledLagStudies = studies
+        ledLagRollings = rollings
+        studiesFetchedAt = Date()
     }
 
     // MARK: - 146 历史回放验证器
