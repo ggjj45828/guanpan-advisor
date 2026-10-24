@@ -126,7 +126,9 @@ final class NextCrossMarketLoopTests: XCTestCase {
             pulse: openPulse(base: base))
         XCTAssertEqual(outcome.signal?.kind, .lunchRepair, "午休修复信号应当被识别出来")
         // 边界：未通过逐 ETF 长期验证 + 预注册前瞻复现的信号，既不能变成 doT，也不能变成拦截。
-        XCTAssertEqual(outcome.gate, .clear, "海外证据不能替代 A股 确认，这里必须是不参与（clear）")
+        guard case .clear = outcome.gate else {
+            return XCTFail("海外证据不能替代 A股 确认，这里必须是不参与（clear），实际：\(outcome.gate.label)")
+        }
         XCTAssertFalse(outcome.gate.isInterceptor, "未验证的海外信号不能变成风险拦截")
         XCTAssertEqual(outcome.hypothesis?.state, .pending, "同一时刻提出的假设只能等确认，不能自己变成 confirmed")
         XCTAssertTrue(outcome.explanation.contains { $0.contains("不算错过") })
@@ -141,7 +143,9 @@ final class NextCrossMarketLoopTests: XCTestCase {
             pulse: openPulse(base: base), existing: expiredHypothesis(base: base))
         XCTAssertEqual(outcome.hypothesis?.state, .rejected, "确认窗口已过且没有价格/量能确认 → 失效")
         // 失效的假设不能变成任何动作（拦截或下单）：跨市场不参与。
-        XCTAssertEqual(outcome.gate, .clear, "失效的假设不能变成动作")
+        guard case .clear = outcome.gate else {
+            return XCTFail("失效的假设不能变成动作（应为跨市场不参与），实际：\(outcome.gate.label)")
+        }
     }
 
     // MARK: Risk Guard（边界：研究不能直接指挥交易）
