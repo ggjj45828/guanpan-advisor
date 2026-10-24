@@ -144,3 +144,44 @@
 - 风险校验分布：`NextAIGuide.swift`(36/550/561/581) / `NextCore.swift`(662/742) / `NextAppModel.swift`(403)
 - 五主题对照图：`/c/Users/Administrator/WorkBuddy/2026-10-15-21-10-40/guanpan-themes-5-comparison.svg`
 - 五屏布局目标图（前轮）：`/c/Users/Administrator/WorkBuddy/2026-10-15-21-10-40/page-layout-5tab-target.svg`
+
+## 9. r33 本轮记录：跨市场先行信号的数据链真的通了（2026-10-24 18:40）
+
+上一轮交付的是「引擎 + 合成夹具」：规则写得再漂亮，只要没有真实数据，就永远回答不了
+「这个规律是真的还是我们主观感觉」。本轮补的是**数据底座**，并且把「数据不够时敢说不」写进代码。
+
+### 9.1 做了什么
+
+| 层 | 文件 | 关键点 |
+|---|---|---|
+| 采集 | `server/crossmarket.py`（新） | 新浪 4 市场（日经/KOSPI/恒生科技/纳指）快照解析；**源时间过期即丢弃**（`MAX_SOURCE_AGE_SECONDS=300`），收盘后那串不再变化的价不会被当成新观测；按各市场自己的时区切日（用上海时区切美股会把一个交易日劈成两天） |
+| 存储 | `server/domain.py` | 新表 `cross_market_samples(market, stamp, price, change_percent, source, observed_at)`，主键 `(market, stamp)` 天然去重；`put_cross_samples` 逐行校验、坏行只丢自己不影响其他市场 |
+| 采集线程 | `server/workers.py` | `cross-market` 线程：08:00–16:10（北京时间）每分钟一次，一次请求覆盖 4 个符号；窗口外 `idle` 不空转 |
+| 出数 | `server/app.py` | `/v1/cross/series`（只给原始观测）、`/v1/cross/availability`（够不够 30 天）；**任何统计与结论都不在 NAS 生成** |
+| 手机接入 | `ios/Sources/CrossMarketFeed.swift`（新） | `/v1/cross/series` 解析；`NextReplayAssembler` 把「ETF 分钟线 + 海外归档」装成 `[NextReplayDay]`：前收取上一交易日、海外点只取「本地日 00:00 前 18h → 当日 15:00」，**A股收盘之后的海外走势一律不进当天回放** |
+| 统计 | `ios/Sources/CrossMarket.swift` | 新增 120 午后反应统计（13:05/13:15/13:30/14:00/收盘 五个检查点；<20 天或偏离 50% 不足 10pp 一律「暂无稳定规律」） |
+| 上下文 | `NextCandidatePlans.swift` / `NextAppModel.swift` / `NASService.swift` | `NextDecisionContext` 增加 `crossMarketLines`；提示词新增「【跨市场（日韩/港股/美股）】」段与**硬约束第 8 条**：上下文写明「暂无稳定领先关系」时，禁止据此推荐任何交易 |
+
+### 9.2 验证（这是本轮唯一可复现的证据）
+
+- 服务端：`python -m unittest discover -s tests` → **86 项全绿**（含新增 `tests/test_crossmarket.py` 17 项：解析 4 市场真实响应、过期源丢弃、缺源时间丢弃、按市场时区切日、库读写与去重、`/v1/cross/series` 与 `/v1/cross/availability` 两个 HTTP 端点）。
+- 手机端：12 项新用例（装配器 3 项：前收取上一交易日、A股收盘后海外点必须排除、缺前收跳过当日；归档解析 4 项；决策上下文 2 项；午后统计 3 项）。**本机无 Swift 工具链**，编译与执行为 CI 结果：run `40087006052` 的 `Core logic tests` **success**（第一轮 run `40086360145` 亦 success，那轮已验证 `CrossMarket.swift`/`CrossMarketReplay.swift` 的 21 项）。
+- 实地跑过采集：`fetch_snapshots()` 返回 4 个市场，源时间分别解析为 `2026-10-23T16:08:30+08:00`（恒生科技）、`14:12:00+09:00`（日经，取「报价时间」而非 18 分钟后的「更新时间」）、`14:27:00+09:00`（KOSPI）、`2026-10-24T05:30:00-04:00`（纳指）。因当前已收盘，`archive_rows` 把 4 个样本全部判为 `staleSource` 丢弃——**这正是设计要的行为**，不是失败。
+
+### 9.3 矩阵状态变化
+
+- ✅ 新增：116（骨架 + 数据底座 + 解析/装配 + 测试）、119（午休信息差，加上自动落库）
+- 🟡 新增：130（跨市场进入统一 DecisionContext，含硬约束第 8 条与「不够 30 天必须说没有」测试）
+- 🟡 保留并补强说明：117（真实数据入口已就绪，等归档攒够 30 天）、120（引擎 + 测试完成，待接真实会话与界面）、146（引擎 + 装配器 + 9 条测试，缺研究工具界面）
+- 全表合计 113 行：✅ 84 / 🟡 11 / 🟠 18（🟠 中 16 项属 116–145，另 2 项为旧条目 B1、J7）
+
+### 9.4 当前构建 / 测试 / 阻塞
+
+- 构建：CI run `40087006052`（sha `2b55b2ef`）：`Core logic tests` ✅、`Build unsigned device app` 通过后继续 UI 测试与截图；首个 run `40086360145`（sha `859191ff`）在 Core tests / device build / IPA 打包均 ✅，为省队列已主动取消（其结论已被新 run 覆盖）。
+- 测试：服务端 86 项全绿（本机可复现）；手机端 33 项跨市场相关用例（15 + 6 + 12）依赖 CI。
+- 阻塞：①iOS 编译验证只能靠 CI（本机 Windows 无 Swift）；②**真实回放要等数据**：日韩/港股/纳指都只有快照源、没有分钟线历史，NAS 从今天起每分钟攒，30 个交易日后才有资格谈「稳定领先关系」；③回放结果页面（研究工具入口）未做。
+
+### 9.5 下一轮第一项
+
+**做 140 / 141（首页「跨市场脉搏」与持仓「外部市场影响」）**：数据已经在库里，先把「谁在开、几点、多久没更新、今天修没修复」如实显示出来，比继续堆统计更有用；顺手把 146 的研究工具入口（选日期 → 12:50 冻结 → 放出行情）接上，等数据攒够就能直接跑。
+
