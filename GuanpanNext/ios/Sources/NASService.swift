@@ -353,7 +353,7 @@ enum NextNASService {
             guard let date, date <= Date().addingTimeInterval(60) else { throw NextError.invalid("NAS 行情源时间无效或超前") }
             let parsedIOPV = iopv.flatMap { Decimal(string: $0, locale: Locale(identifier: "en_US_POSIX")) }
             guard parsedIOPV.map({ $0 > 0 && providerInstrumentType == "ETF" }) ?? true else { throw NextError.invalid("NAS IOPV 与证券类别校验失败") }
-            return NextQuote(code: code, name: name, price: price, previousClose: previous, time: date, source: source, timeQuality: timeQuality, iopv: parsedIOPV, providerInstrumentType: providerInstrumentType)
+            return NextQuote(code: code, name: name, price: price, previousClose: previous, time: date, source: source, iopv: parsedIOPV, providerInstrumentType: providerInstrumentType, timeQuality: timeQuality)
         }
     }
     private static func endpoint(_ baseURL: String) throws -> URL {

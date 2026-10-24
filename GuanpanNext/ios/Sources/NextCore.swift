@@ -298,7 +298,7 @@ enum NextTencentQuoteParser {
               timestamp <= receivedAt.addingTimeInterval(60) else { return nil }
         let providerType = fields.count > 61 ? fields[61].trimmingCharacters(in: .whitespacesAndNewlines).uppercased() : nil
         let rawIopv = providerType == "ETF" && fields.count > 78 ? Decimal(string: fields[78], locale: Locale(identifier: "en_US_POSIX")) : nil
-        return NextQuote(code: code, name: fields[1], price: price, previousClose: previous, time: timestamp, source: "Tencent qt.gtimg.cn", timeQuality: "exchange_time", iopv: rawIopv.flatMap { $0 > 0 ? $0 : nil }, providerInstrumentType: providerType)
+        return NextQuote(code: code, name: fields[1], price: price, previousClose: previous, time: timestamp, source: "Tencent qt.gtimg.cn", iopv: rawIopv.flatMap { $0 > 0 ? $0 : nil }, providerInstrumentType: providerType, timeQuality: "exchange_time")
     }
 
     private static func parseTimestamp(_ raw: String, fallback: Date) -> Date? {

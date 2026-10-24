@@ -205,10 +205,10 @@ final class NextDecisionMemoryTests: XCTestCase {
                                             intraday: oscillatingMinutes(), rules: rules(),
                                             orderBook: orderBook(),
                                             caps: NextPlanCaps(maxTUnits: 2000, tUnitsNote: "测试上限",
-                                                               nasDays: 60, nasVolumeCoverage60: 0.92,
+                                                               nasRoundTrips60: 2.4, nasDays: 60,
+                                                               nasVolumeCoverage60: 0.92,
                                                                nasVwapHighDeviation60: 0.008,
-                                                               nasVwapLowDeviation60: -0.007,
-                                                               nasRoundTrips60: 2.4),
+                                                               nasVwapLowDeviation60: -0.007),
                                             now: now)
         guard case let .ready(plan) = result else {
             return XCTFail("反T 应能出价：\(result)")
