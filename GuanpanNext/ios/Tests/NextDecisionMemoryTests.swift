@@ -168,7 +168,8 @@ final class NextDecisionMemoryTests: XCTestCase {
         XCTAssertEqual(record.code, "513520")
         XCTAssertEqual(record.snapshot.state, "风险拦截 · 暂停并需重算")
         XCTAssertEqual(record.snapshot.headline, outcome.headline)
-        XCTAssertEqual(record.snapshot.price, "1.400", "当时本地价必须原样留下，供事后核对")
+        XCTAssertEqual(record.snapshot.price, "1.4",
+                       "当时本地价必须原样留下，供事后核对。注意 Decimal 插值会去掉尾零（1.400 → 1.4）：指导路径与闭环路径共用同一格式 \"\\(quote.price)\"，两边必须一致")
         XCTAssertEqual(record.snapshot.quoteSource, "test")
         XCTAssertEqual(record.snapshot.units, 10_000)
         XCTAssertEqual(record.snapshot.evidence, outcome.explanation, "逐行解释必须全文保留")
