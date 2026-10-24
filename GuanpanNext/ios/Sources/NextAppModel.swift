@@ -1252,21 +1252,22 @@ struct LocalPreferences: Codable {
         do {
             var sourceNote = ""
             var skippedStale = 0
-            let fetched: [NextQuote]
-            if !preferences.nasBaseURL.isEmpty {
-                do {
-                    fetched = try await NextNASService.fetchQuotes(codes: unique, baseURL: preferences.nasBaseURL)
-                    sourceNote = "NAS 代理"
-                } catch {
-                    // NAS 不可用不等于没有行情：直连链 腾讯 → 东财 → 新浪 依次兜底。
-                    let direct = try await NextMarketDataService.fetchQuotes(codes: unique)
-                    fetched = direct.value
-                    sourceNote = "NAS 离线 · \(direct.source) 直连"
-                }
-            } else {
+            var fetched: [NextQuote] = []
+            // 平衡原则（2026-10-24）：实时行情一律手机直连，绝不走 NAS 隧道——
+            // NAS 拉的数据再同步给手机会消耗「穿透流量」。手机直连腾讯自带 IOPV
+            //（NextCore 的 NextTencentQuoteParser 解析第 78 字段），IOPV 同样无需经 NAS。
+            // 仅当直连全部失败且配置了 NAS 时，才回退 NAS 兜底（低频、异常路径）。
+            do {
                 let direct = try await NextMarketDataService.fetchQuotes(codes: unique)
                 fetched = direct.value
                 sourceNote = "\(direct.source) 直连"
+            } catch {
+                if !preferences.nasBaseURL.isEmpty {
+                    fetched = try await NextNASService.fetchQuotes(codes: unique, baseURL: preferences.nasBaseURL)
+                    sourceNote = "直连失败 · NAS 兜底"
+                } else {
+                    throw error
+                }
             }
             var updated = quotes
             var updatedRules = rules

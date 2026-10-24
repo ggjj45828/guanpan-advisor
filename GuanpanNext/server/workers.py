@@ -7,7 +7,7 @@ from decimal import Decimal
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
-from market import symbol_for, fetch_tencent_daily, fetch_tencent_quotes, fetch_dividend_events
+from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 DEFAULT_CODES = ("159941", "563020", "159545", "159352")
@@ -49,7 +49,11 @@ def fetch_minute(code):
 
 
 def attach_quote_iopv(rows, quote):
-    """Attach only a same-session, near-time ETF IOPV to the latest sample."""
+    """Attach only a same-session, near-time ETF IOPV to the latest sample.
+
+    保留为纯工具函数（test_domain 直接测试），但后台 minute_loop 已不再调用：
+    实时 IOPV 由手机端直连行情自取，NAS 不再为此额外拉实时行情。
+    """
     if not rows or not quote or not quote.get("iopv") or quote.get("providerInstrumentType") != "ETF":
         return rows
     quote_time = datetime.fromisoformat(quote["time"])
@@ -73,7 +77,7 @@ def research_factors(code, bars):
         "source": "NAS archived Tencent qfqday", "type": "local-factor-research", "realOrder": False}
 
 
-def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute, quote_fetcher=fetch_tencent_quotes):
+def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute):
     """Each loop owns its own timer and failure handling; sync APIs never stop them."""
     def tracked():
         with database.connect() as connection:
@@ -124,9 +128,10 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                 codes = tracked(); failures = []
                 for code in codes:
                     try:
+                        # 分时归档是研究工作的重要数据（用户 2026-10-24 明确要求保留）。
+                        # 但「额外实时行情」不再由 NAS 拉取：IOPV 由手机端直连行情自取，
+                        # NAS 只归档分时，把实时行情的带宽全部留给手机直连。
                         rows = minute_fetcher(code)
-                        quote = next(iter(quote_fetcher([code])), None)
-                        attach_quote_iopv(rows, quote)
                         database.put_minute(code, rows, datetime.now(timezone.utc).isoformat())
                     except Exception as error: failures.append(f"{code}:{type(error).__name__}")
                 update("minute-archive", "ok" if not failures else "degraded",

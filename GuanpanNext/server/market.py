@@ -145,7 +145,9 @@ def fetch_tencent_daily(code, adjustment="qfq"):
         raise ValueError("unsupported adjustment")
     symbol = symbol_for(code)
     adjust_code = "qfq" if adjustment == "qfq" else ""
-    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?" + urlencode({"param": f"{symbol},day,,,640,{adjust_code}"})
+    # 上游单次最多约 640 日，请求 1000 让腾讯尽量多给（超限会自动截断，不报错）；
+    # NAS 侧 put_daily 按日期合并且从不裁剪，配合日更累积可把归档做到 1000+ 天。
+    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?" + urlencode({"param": f"{symbol},day,,,1000,{adjust_code}"})
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "GuanpanProNext/3", "Referer": "https://gu.qq.com/"})
     with urlopen(request, timeout=12) as response:
         if response.status != 200: raise OSError("daily source unavailable")
@@ -203,7 +205,7 @@ def fetch_eastmoney_daily(code, adjustment="qfq"):
     query = urlencode({"secid": secid, "fields1": "f1,f2,f3,f4,f5,f6",
                       "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
                       "klt": "101", "fqt": ("1" if adjustment == "qfq" else "0"),
-                      "end": "20500101", "lmt": "640"})
+                      "end": "20500101", "lmt": "1000"})  # 东财支持更长历史；配合 put_daily 合并累积到 1000+ 天
     request = Request("https://push2his.eastmoney.com/api/qt/stock/kline/get?" + query,
                       headers={"Referer": "https://quote.eastmoney.com/",
                                "User-Agent": "Mozilla/5.0 (compatible; GuanpanAdvisor/3)"})
