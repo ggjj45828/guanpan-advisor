@@ -990,10 +990,8 @@ private struct EditorialHome: View {
 
     private var footerRow: some View {
         HStack(spacing: 8) {
-            Button { model.requestTab(.decision, route: .decision(nil)) } label: {
-                footerChip("sparkles", "AI 指导")
-            }
-            .buttonStyle(.plain)
+            // 「AI 指导」chip 已删：上面的 aiCard 自带「查看详情」且更醒目，
+            // 同一屏对同一个落点摆两个入口只会让人犹豫点哪个。
             // 新闻是独立路由：以前和 AI 指导混在一个 chip 里，点进去只会到决策页，看不到新闻列表。
             Button { model.requestTab(.decision, route: .news) } label: {
                 footerChip("newspaper", "新闻")
@@ -1373,10 +1371,8 @@ private struct MagazineHome: View {
                 }
                 Text("今日市场观察").font(.system(size: 15, weight: .bold, design: .serif)).foregroundStyle(p.ink)
                 Spacer(minLength: 4)
-                Button { model.requestTab(.decision, route: .decision(nil)) } label: {
-                    Text("更多").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
-                }
-                .buttonStyle(.plain)
+                // 「更多」已删：这一节本来就把市场状态与要点写全了，点了只是跳到 AI 页，
+                // 和上面「今日重点机会 · 查看全部」是同一个落点，留着反而让人以为还有下文。
             }
             Text(snapshot.marketStateText + "：" + snapshot.marketStateDetail)
                 .font(.system(size: 12)).foregroundStyle(p.ink)
