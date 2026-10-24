@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import domain
 import market
 import research
-import advisor
+import news
 from workers import fetch_minute
 
 CODE = "600519"  # 贵州茅台（上交所）
@@ -71,14 +71,14 @@ def main():
         print("  [无分钟数据] 跳过 stats 计算")
 
     # 4) 一句话新闻真实拉取
-    section("4) 真实新闻拉取 (advisor.fetch_headlines)")
+    section("4) 真实新闻拉取 (news.fetch_headlines)")
     try:
-        news = advisor.fetch_headlines(CODE, NAME)
-        items = news.get("items", [])
-        print(f"  状态: {news.get('state')}  标题数: {len(items)}")
+        headlines = news.fetch_headlines(CODE, NAME)
+        items = headlines.get("items", [])
+        print(f"  状态: {headlines.get('state')}  标题数: {len(items)}")
         for it in items[:5]:
             print(f"    - {it.get('title')}")
-        if news.get("state") == "unavailable":
+        if headlines.get("state") == "unavailable":
             print(f"  [说明] Google News RSS 在沙箱网络不可达：优雅降级为 unavailable，"
                   f"不伪造标题（无 Mock）。生产 NAS 可正常拉取。")
     except Exception as e:

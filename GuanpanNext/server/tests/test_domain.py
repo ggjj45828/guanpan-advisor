@@ -9,9 +9,8 @@ from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-import advisor
+import news
 from app import make_handler
-from ai import analyze_user_context, AIProviderError
 from domain import Conflict, InvalidData, NextDatabase, convert_legacy_web_book, validate_book_json
 from market import DIVIDEND_RULES_VERSION, parse_quotes, symbol_for
 from datetime import datetime, timezone
@@ -268,36 +267,6 @@ class IndependentWorkersTests(unittest.TestCase):
         late = {"time": "2026-10-16T09:40:01+08:00", "providerInstrumentType": "ETF", "iopv": "1.19"}
         self.assertIsNone(attach_quote_iopv(rows, late)[0]["iopv"])
 
-    def test_deepseek_profiles_and_missing_key_do_not_fake_ai(self):
-        from ai import PROFILES, generate_research, provider_status, verify_provider, AIProviderError
-        self.assertEqual(PROFILES["flash"]["model"], "deepseek-v4-flash")
-        self.assertEqual(PROFILES["pro"]["model"], "deepseek-v4-pro")
-        factors = {"code": "159941", "asOf": "2026-10-16", "source": "source",
-            "close": "1.2", "ma20": "1.1", "ma250": "1.0", "momentum20": "0.1", "drawdown20": "-0.02"}
-        self.assertIsNone(generate_research(factors, api_key=""))
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False):
-            self.assertEqual(provider_status()["state"], "missing_key")
-            with self.assertRaises(AIProviderError): verify_provider(opener=lambda *_args, **_kwargs: self.fail("must not make a request without a key"))
-
-    def test_deepseek_probe_uses_key_only_in_auth_and_returns_safe_result(self):
-        from ai import verify_provider
-        captured = {}
-        class Response:
-            status = 200
-            def __enter__(self): return self
-            def __exit__(self, *_args): return False
-            def read(self, _limit): return json.dumps({"choices": [{"message": {"content": "OK"}}]}).encode()
-        def opener(request, timeout):
-            captured["request"] = request; captured["timeout"] = timeout
-            return Response()
-        secret = "never-return-this-secret"
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": secret, "GUANPAN_AI_PROFILE": "flash"}):
-            result = verify_provider(opener=opener)
-        self.assertEqual(captured["request"].get_header("Authorization"), "Bearer " + secret)
-        self.assertEqual(captured["timeout"], 20)
-        self.assertEqual(result["state"], "verified")
-        self.assertNotIn(secret, json.dumps(result))
-
     def test_research_is_replaced_for_new_completed_day(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
             db = NextDatabase(Path(folder) / "research.sqlite3")
@@ -356,44 +325,6 @@ class IndependentWorkersTests(unittest.TestCase):
             self.assertTrue(by_name["factor-research"]["stale"])
 
 
-class AIAnalysisTests(unittest.TestCase):
-    class Response:
-        status = 200
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-        def read(self, _limit):
-            return json.dumps({"choices": [{"message": {"content": "结论：等待；依据：提供的数据；风险：行情可能变化。"}}]}).encode()
-
-    def context(self):
-        return {"security": {"code": "159941", "name": "纳指ETF", "price": "1.2", "previousClose": "1.1",
-                "iopv": None, "quoteTime": "2026-10-20T02:00:00Z", "source": "test", "technical": {"MA20": "1.15"}, "targetWeight": None},
-            "dailyBars": [{"date": "2026-10-19", "open": "1.1", "high": "1.3", "low": "1.0", "close": "1.2", "volume": "1000"}], "position": None, "allPositions": [], "cash": "1000",
-            "recentFills": [], "goal": {"years": 10, "monthlyBudget": "1000", "concentrationLimit": "40", "targetWeights": {}}, "dividends": []}
-
-    def test_on_demand_ai_uses_nas_secret_and_only_returns_model_text(self):
-        captured = {}
-        def opener(request, timeout):
-            captured["request"] = request; captured["timeout"] = timeout
-            return self.Response()
-        with patch.dict("os.environ", {"GUANPAN_AI_PROFILE": "flash"}):
-            result = analyze_user_context(self.context(), api_key="nas-secret", opener=opener)
-        self.assertEqual(result["code"], "159941")
-        self.assertFalse(result["realOrder"])
-        self.assertEqual(result["model"], "deepseek-v4-flash")
-        self.assertEqual(captured["request"].get_header("Authorization"), "Bearer nas-secret")
-        sent = json.loads(captured["request"].data)
-        self.assertIn("dailyBars", json.loads(sent["messages"][1]["content"]))
-        self.assertNotIn("nas-secret", json.dumps(result))
-        self.assertEqual(captured["timeout"], 45)
-
-    def test_on_demand_ai_rejects_credentials_and_malformed_context(self):
-        context = self.context(); context["apiKey"] = "should-not-pass"
-        with self.assertRaises(ValueError): analyze_user_context(context, api_key="secret")
-        context = self.context(); context["dailyBars"] = [{"date": "2026-10-19", "open": "1.1", "high": "1.3", "low": "1.0", "close": "1.2", "volume": "1000", "order": "buy"}]
-        with self.assertRaises(ValueError): analyze_user_context(context, api_key="secret")
-        with self.assertRaises(AIProviderError): analyze_user_context(self.context(), api_key="")
-
-
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -411,14 +342,14 @@ class HTTPTests(unittest.TestCase):
         response = connection.getresponse(); value = json.loads(response.read()); status = response.status
         connection.close(); return status, value
 
-    def test_advisor_inventory_is_additive_and_read_only(self):
+    def test_advisor_inventory_route_is_retired(self):
+        """NAS 顾问清单入口已停用：恒 410，且绝不触碰真实账本。
+        NAS 只提供长期数据研究；最终 AI 指导由手机端统一生成。"""
         self.db.put_real("main", 0, json.dumps(book()))
         before = self.db.get_real("main")
-        status, value = self.request("GET", "/v1/advisor/inventory")
-        self.assertEqual(status, 200)
-        self.assertEqual(value["bookRevision"], 1)
-        self.assertEqual(value["positions"][0]["code"], "159941")
-        self.assertFalse(value["realOrder"])
+        status, result = self.request("GET", "/v1/advisor/inventory")
+        self.assertEqual(status, 410)
+        self.assertEqual(result["code"], "nas_advisor_retired")
         self.assertEqual(self.db.get_real("main"), before)
 
     def test_research_endpoint_returns_long_term_minute_stats(self):
@@ -445,7 +376,7 @@ class HTTPTests(unittest.TestCase):
         payload = {"state": "ok", "provider": "Google News RSS",
                    "items": [{"title": "159941 公告：基金份额持有人大会决议停牌", "url": "https://example.com/a",
                               "publishedAt": "Fri, 23 Oct 2026 02:00:00 GMT", "source": "测试源"}]}
-        with mock.patch.object(advisor, "fetch_headlines", return_value=payload) as fetch:
+        with mock.patch.object(news, "fetch_headlines", return_value=payload) as fetch:
             status, first = self.request("GET", "/v1/news/159941")
             self.assertEqual(status, 200)
             self.assertFalse(first["cached"])
@@ -488,26 +419,22 @@ class HTTPTests(unittest.TestCase):
         status, value = self.request("POST", "/v1/simulations/g", {"action": "start"})
         self.assertEqual(status, 410)
 
-    def test_advisor_analysis_requires_confirmation_and_never_writes_book(self):
+    def test_advisor_analysis_route_is_retired(self):
+        """NAS 不再生成第二套交易建议：入口恒 410，且绝不触碰真实账本。
+        最终 AI 指导由手机端统一生成，NAS 只提供数据与研究证据。"""
         self.db.put_real("main", 0, json.dumps(book()))
         before = self.db.get_real("main")
-        status, denied = self.request("POST", "/v1/advisor/analyze", {"userConfirmed": False})
-        self.assertEqual(status, 400)
-        self.assertEqual(self.db.get_real("main"), before)
-        with patch("advisor.fetch_headlines", return_value={"state": "empty", "provider": "Google News RSS", "items": []}), \
-             patch("advisor.online_synthesis", return_value={"state": "unavailable", "provider": "DeepSeek", "message": "not configured"}):
-            status, result = self.request("POST", "/v1/advisor/analyze", {"userConfirmed": True, "rules": {}})
-        self.assertEqual(status, 200)
-        self.assertFalse(result["realOrder"])
-        self.assertEqual(result["positions"][0]["decision"], "暂不交易")
-        self.assertEqual(result["positions"][0]["plan"], None)
+        for payload in ({"userConfirmed": False}, {"userConfirmed": True, "rules": {}}):
+            status, result = self.request("POST", "/v1/advisor/analyze", payload)
+            self.assertEqual(status, 410)
+            self.assertEqual(result["code"], "nas_advisor_retired")
         self.assertEqual(self.db.get_real("main"), before)
 
     def test_health_has_no_private_records(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False):
             status, value = self.request("GET", "/health")
         self.assertEqual(status, 200); self.assertEqual(value["service"], "guanpan-advisor"); self.assertEqual(value["authentication"], "none"); self.assertEqual(value["workers"], [])
-        self.assertEqual(value["aiProvider"]["state"], "missing_key")
+        self.assertNotIn("aiProvider", value, "NAS 不再代理大模型，health 不应按钮状态")
         # codeVersion / codeSource 是"部署到底有没有生效"的唯一可信判据，必须一直暴露；
         # 测试环境没有 start.sh 写的 .code-source 标记，所以这里应是 unknown。
         self.assertTrue(value["codeVersion"] and value["codeVersion"] != "unknown")
@@ -519,32 +446,24 @@ class HTTPTests(unittest.TestCase):
         self.assertFalse(value["workers"][0]["stale"])
         self.assertNotIn("bookJSON", json.dumps(value))
 
-    def test_on_demand_ai_route_requires_configured_nas_key(self):
-        context = {"security": {"code": "159941", "name": "纳指ETF", "price": None, "previousClose": None, "iopv": None, "quoteTime": None, "source": "无缓存", "technical": {}, "targetWeight": None},
-            "dailyBars": [], "position": None, "allPositions": [], "cash": "0", "recentFills": [],
-            "goal": {"years": 10, "monthlyBudget": "1000", "concentrationLimit": "40", "targetWeights": {}}, "dividends": []}
-        payload = {"userConfirmed": True, "context": context}
+    def test_on_demand_ai_route_is_retired(self):
+        """NAS AI 顾问入口已停用：无论 key 是否配置、context 是否完整，恒 410。
+        在线大模型只在手机端解释本地规则结论，不在此生成第二套建议。"""
+        context = {"security": {"code": "159941", "name": "纳指ETF"}, "dailyBars": [], "position": None}
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "", "GUANPAN_AI_PROFILE": "flash"}):
-            status, result = self.request("POST", "/v1/ai/analyze", payload)
-        self.assertEqual(status, 503)
-        self.assertIn("未配置", result["error"])
+            status, result = self.request("POST", "/v1/ai/analyze", {"userConfirmed": True, "context": context})
+        self.assertEqual(status, 410)
+        self.assertEqual(result["code"], "nas_ai_advisor_retired")
 
-    def test_on_demand_ai_route_returns_research_without_real_order(self):
-        expected = {"code": "159941", "provider": "DeepSeek", "model": "deepseek-v4-flash", "content": "等待", "realOrder": False}
-        with patch("app.analyze_user_context", return_value=expected) as call:
-            status, result = self.request("POST", "/v1/ai/analyze", {"userConfirmed": True, "context": {"security": {"code": "159941"}}})
-        self.assertEqual(status, 200)
-        self.assertEqual(result["content"], "等待")
-        self.assertFalse(result["realOrder"])
-        call.assert_called_once()
-
-    def test_research_reports_key_state_without_disclosing_secret(self):
+    def test_research_has_no_ai_provider_state(self):
+        """NAS 研究只回因子与分钟统计：不再回任何 AI provider 状态，也不得泄露 key。
+        在线 AI 的唯一入口在手机端。"""
         secret = "never-return-this-secret"
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": secret, "GUANPAN_AI_PROFILE": "flash"}):
             status, value = self.request("GET", "/v1/research/159941")
         self.assertEqual(status, 200)
-        self.assertEqual(value["providerStatus"]["state"], "configured_unverified")
-        self.assertEqual(value["providerStatus"]["model"], "deepseek-v4-flash")
+        self.assertNotIn("providerStatus", value)
+        self.assertNotIn("providerConfigured", value)
         self.assertNotIn(secret, json.dumps(value))
 
     def test_real_records_are_available_without_app_passphrase(self):
@@ -574,25 +493,16 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(payload["bars"], rows)
         self.assertEqual(payload["source"], "Tencent newfqkline qfqday")
 
-    def test_backtest_endpoint_uses_archived_daily_bars_and_persists_run(self):
-        for code, start in (("159941", "1.00"), ("563020", "1.10")):
-            values = [Decimal(start), Decimal(start) + Decimal("0.02"), Decimal(start) + Decimal("0.04")]
-            rows = []
-            for index, close in enumerate(values):
-                opened = values[max(0, index - 1)]
-                rows.append({"date": f"2026-10-{19 + index}", "open": str(opened), "close": str(close),
-                             "high": str(max(opened, close) + Decimal("0.01")),
-                             "low": str(min(opened, close) - Decimal("0.01")), "volume": "1000"})
-            self.db.put_daily(code, rows, "2026-10-20T00:00:00+00:00")
-        request = {"strategy": "B", "codes": ["159941", "563020"], "initialCash": "10020",
-                   "weights": {"159941": "0.5", "563020": "0.5"}, "lotSizes": {"159941": 100, "563020": 100}}
+    def test_backtest_endpoint_is_retired(self):
+        """模拟回测入口已停用：POST/GET 均恒 410，且不写任何运行记录。
+        产品只保留真实持仓顾问，不做模拟回测。"""
+        request = {"strategy": "B", "codes": ["159941"], "initialCash": "1000"}
         status, result = self.request("POST", "/v1/backtests/B", request)
-        self.assertEqual(status, 200, result)
-        self.assertEqual(result["sessions"], 3)
-        self.assertFalse(result["realOrder"])
-        self.assertTrue(result["runId"])
-        self.assertEqual(self.request("GET", "/v1/backtests/runs/" + result["runId"]), (200, result))
-        self.assertEqual(self.request("POST", "/v1/backtests/A", request)[0], 400)
+        self.assertEqual(status, 410)
+        self.assertEqual(result["code"], "backtest_removed")
+        status, result = self.request("GET", "/v1/backtests/runs/whatever")
+        self.assertEqual(status, 410)
+        self.assertEqual(result["code"], "backtest_removed")
 
     def test_daily_refresh_appends_history_and_updates_overlapping_days(self):
         old = [

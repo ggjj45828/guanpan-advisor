@@ -40,6 +40,8 @@ struct NextDataConfidence: Equatable {
         if let quote {
             age = max(0, Int(now.timeIntervalSince(quote.time)))
             source = quote.source
+            if !quote.hasReliableMarketTime { missing.append("该行情源没有可核验的供应商时间戳，仅记录接收时间；不能据此生成具体挂单价") }
+            if quote.time > now.addingTimeInterval(60) { missing.append("行情时间戳超前超过 60 秒，数据时钟异常") }
             if let age, age > 120 { missing.append("行情时间已过 \(age / 60) 分钟，超过 2 分钟新鲜度门槛") }
         } else {
             age = nil
@@ -50,7 +52,8 @@ struct NextDataConfidence: Equatable {
         if intradayRequired && minuteSampleCount < 30 { missing.append("今日分时仅 \(minuteSampleCount) 点，估算做 T 价格至少需要 30 点") }
         let completeness = min(1.0, Double(minuteSampleCount) / 240.0) * 100
         let staleQuote = (age ?? 9_999) > 120
-        let blocked = staleQuote || dailyBarCount < 20 || (intradayRequired && minuteSampleCount < 30)
+        let futureQuote = quote.map { $0.time > now.addingTimeInterval(60) } ?? false
+        let blocked = staleQuote || futureQuote || quote?.hasReliableMarketTime != true || dailyBarCount < 20 || (intradayRequired && minuteSampleCount < 30)
         let level: Level
         if blocked { level = .blocked }
         else if (age ?? 9_999) <= 60 && dailyBarCount >= 60 && minuteSampleCount >= 120 { level = .high }
@@ -94,10 +97,15 @@ struct NextNasRange: Equatable {
     let source: String
     var isValid: Bool { low > 0 && high > low }
 
-    init?(stats: NextNASMinuteStats?, prefer: [Int] = [60, 20, 5]) {
-        guard let stats, stats.quality.days >= 3 else { return nil }
+    init?(stats: NextNASMinuteStats?, prefer: [Int] = [60]) {
+        guard let stats, stats.quality.enoughForLongTerm, stats.days >= 60,
+              stats.quality.minuteCoverage >= 0.8,
+              (stats.quality.volumeCoverage ?? 0) >= 0.8,
+              !stats.freshness.stale else { return nil }
         for count in prefer {
             guard let window = stats.window(count) else { continue }
+            guard window.daysUsed >= 60, window.dayCoverage >= 0.8,
+                  (window.volumeCoverage ?? 0) >= 0.8 else { continue }
             let lowText = window.supportP10 ?? window.support
             let highText = window.resistanceP90 ?? window.resistance
             guard let lowText, let highText,
@@ -420,6 +428,9 @@ struct NextPlanCaps: Equatable {
     var nasAmplitude60: Double? = nil
     var nasRoundTrips60: Double? = nil
     var nasDays: Int? = nil
+    var nasVolumeCoverage60: Double? = nil
+    var nasVwapHighDeviation60: Double? = nil
+    var nasVwapLowDeviation60: Double? = nil
 
     static let none = NextPlanCaps()
 
@@ -448,6 +459,9 @@ struct NextPlanCaps: Equatable {
             if let w60 = stats.window(60) {
                 caps.nasAmplitude60 = w60.amplitudeMedianPercent
                 caps.nasRoundTrips60 = w60.roundTripsMedian
+                caps.nasVolumeCoverage60 = w60.volumeCoverage ?? stats.quality.volumeCoverage
+                caps.nasVwapHighDeviation60 = w60.vwapHighDeviationMedian
+                caps.nasVwapLowDeviation60 = w60.vwapLowDeviationMedian
             }
         }
         return caps
@@ -487,12 +501,35 @@ enum NextTPlannerResult: Equatable {
     case insufficientData(NextDataConfidence, [String])
 }
 
+struct NextOrderBookLiquidity: Equatable {
+    let spreadPercent: Double
+    let bidDepthLots: Double
+    let askDepthLots: Double
+}
+
+enum NextOrderBookEvidence {
+    static func assess(_ snapshot: NextOrderBookSnapshot, lotSize: Int, now: Date) -> NextOrderBookLiquidity? {
+        guard lotSize > 0, (try? snapshot.validate()) != nil,
+              now.timeIntervalSince(snapshot.observedAt) >= 0,
+              now.timeIntervalSince(snapshot.observedAt) <= 30,
+              snapshot.bids.count == 5, snapshot.asks.count == 5,
+              let bid = snapshot.bids.first?.price, let ask = snapshot.asks.first?.price,
+              bid > 0, ask >= bid else { return nil }
+        let mid = (bid + ask) / 2
+        guard mid > 0 else { return nil }
+        let spread = NextNum.double((ask - bid) / mid * 100)
+        let bidLots = NextNum.double(snapshot.bids.reduce(Decimal.zero) { $0 + Decimal($1.units) } / Decimal(lotSize))
+        let askLots = NextNum.double(snapshot.asks.reduce(Decimal.zero) { $0 + Decimal($1.units) } / Decimal(lotSize))
+        return NextOrderBookLiquidity(spreadPercent: spread, bidDepthLots: bidLots, askDepthLots: askLots)
+    }
+}
+
 /// 做 T 计划生成器。**只根据真实持仓与行情计算可手工挂出的价格和份额**；
 /// 未成交前不改变持仓、现金，不产生任何收益。价格全部来自当日分时统计
 ///（VWAP、日内高低、振幅）与日 K 结构，禁止由大模型直接生成。
 enum NextTradeTPlanner {
     static func plan(kind: NextTKind, book: NextBook, quote: NextQuote?, daily: [NextChartSample], intraday: [NextChartSample],
-                     rules: NextInstrumentRules?, caps: NextPlanCaps? = nil,
+                     rules: NextInstrumentRules?, orderBook: NextOrderBookSnapshot? = nil, caps: NextPlanCaps? = nil,
                      now: Date, historyMissRate: Double? = nil) -> NextTPlannerResult {
         let bars = daily.filter { $0.close > 0 }
         let confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count, minuteSampleCount: intraday.filter { $0.close > 0 }.count)
@@ -500,14 +537,28 @@ enum NextTradeTPlanner {
             return .insufficientData(confidence, confidence.missing.isEmpty ? ["当前无法评估做T机会"] : confidence.missing)
         }
         // 交易规则必须已核实：场内 ETF、100 份一手、每笔 ¥0.10。规则不确定就拒绝出价。
-        guard let rules, rules.assetClass == .etf, let lotSize = rules.lotSize, lotSize > 0,
+        guard let rules, rules.isVerified, rules.assetClass == .etf, rules.settlement != .unknown,
+              let lotSize = rules.lotSize, lotSize > 0,
               let feePerTrade = rules.feePerTrade, feePerTrade >= 0 else {
             return .insufficientData(confidence, ["该证券的交易规则未核实（份额单位/手续费），为避免错误委托拒绝生成价格"])
         }
+        guard let caps, (caps.nasDays ?? 0) >= 60,
+              (caps.nasVolumeCoverage60 ?? 0) >= 0.8,
+              let historicalHighDeviation = caps.nasVwapHighDeviation60, historicalHighDeviation > 0,
+              let historicalLowDeviation = caps.nasVwapLowDeviation60, historicalLowDeviation < 0,
+              let roundTrips = caps.nasRoundTrips60, roundTrips >= 1 else {
+            return .insufficientData(confidence, ["NAS 60 日成交量覆盖、VWAP 偏离或往返统计不完整；不给具体做T价格"])
+        }
+        guard let orderBook, orderBook.code == quote.code,
+              let liquidity = NextOrderBookEvidence.assess(orderBook, lotSize: lotSize, now: now),
+              liquidity.spreadPercent <= 0.3, liquidity.bidDepthLots >= 10, liquidity.askDepthLots >= 10 else {
+            return .insufficientData(confidence, ["缺少 30 秒内有效五档盘口、价差或深度不足；不给具体做T挂单价"])
+        }
         let stats = NextIntradayStatsEngine.compute(samples: intraday, previousClose: quote.previousClose)
         guard let vwap = stats.vwap, let dayHigh = stats.dayHigh, let dayLow = stats.dayLow,
-              let amplitude = stats.amplitudePercent, stats.sampleCount >= 30 else {
-            return .insufficientData(confidence, ["今日分时样本不足或没有有效价格，无法计算 VWAP 与日内高低"])
+              let amplitude = stats.amplitudePercent, stats.sampleCount >= 30,
+              stats.vwapIsWeighted, stats.volumeLots != nil else {
+            return .insufficientData(confidence, ["今日分时不足、缺少成交量或无法计算成交量加权 VWAP；拒绝用简单均价代替"])
         }
         guard let position = book.positions.first(where: { $0.code == quote.code }), position.units > 0 else {
             return .insufficientData(confidence, ["没有该证券的真实持仓，做T只对已持有份额适用"])
@@ -542,21 +593,28 @@ enum NextTradeTPlanner {
         }
 
         // 目标价：以 VWAP 为锚，偏离幅度取「0.5×今日已实现振幅」与 0.4% 的较大值。
-        let deviation = max(0.004, amplitude / 100 / 2)
+        // 目标偏离同时受 60 日 VWAP 偏离中位数与今日实际振幅约束，
+        // 避免单凭一个最低 0.4% 固定阈值生成看起来精确的挂单价。
+        let todayHalfRange = amplitude / 100 / 2
+        let upDeviation = min(historicalHighDeviation, todayHalfRange)
+        let downDeviation = min(abs(historicalLowDeviation), todayHalfRange)
+        guard upDeviation > 0, downDeviation > 0 else {
+            return .insufficientData(confidence, ["今日振幅没有覆盖 NAS 长期 VWAP 偏离，无法形成有历史依据的双边价格"])
+        }
         let sellPrice: Decimal
         let buyPrice: Decimal
         switch kind {
         case .reverse:
-            let ceiling = vwap * Decimal(string: "\(1 + deviation)")!
+            let ceiling = vwap * Decimal(string: "\(1 + upDeviation)")!
             let anchored = min(dayHigh, ceiling)
             // 现价已达偏离上限时按现价挂，否则挂锚定价与日内高点的较低者。
             sellPrice = quote.price >= ceiling ? quote.price : NextPriceRounding.tick(anchored)
-            buyPrice = NextPriceRounding.tick(max(dayLow, vwap * Decimal(string: "\(1 - deviation)")!))
+            buyPrice = NextPriceRounding.tick(max(dayLow, vwap * Decimal(string: "\(1 - downDeviation)")!))
         case .forward:
-            let floorPrice = vwap * Decimal(string: "\(1 - deviation)")!
+            let floorPrice = vwap * Decimal(string: "\(1 - downDeviation)")!
             let anchored = max(dayLow, floorPrice)
             buyPrice = quote.price <= floorPrice ? quote.price : NextPriceRounding.tick(anchored)
-            sellPrice = NextPriceRounding.tick(min(dayHigh, vwap * Decimal(string: "\(1 + deviation)")!))
+            sellPrice = NextPriceRounding.tick(min(dayHigh, vwap * Decimal(string: "\(1 + upDeviation)")!))
         }
         guard buyPrice < sellPrice else {
             return .notWorthwhile(["当前 VWAP 偏离与日内高低点算不出正价差：卖出 ¥\(NextMoney.text(sellPrice, digits: 3)) / 买回 ¥\(NextMoney.text(buyPrice, digits: 3))，今天不做这笔 T"])
@@ -601,6 +659,8 @@ enum NextTradeTPlanner {
         evidence.append("VWAP ¥\(NextMoney.text(vwap, digits: 3))（今日 \(stats.sampleCount) 点\(stats.vwapIsWeighted ? "，成交量加权" : "，简单均值——缺成交量数据")）")
         evidence.append("今日高低 ¥\(NextMoney.text(dayLow, digits: 3))–¥\(NextMoney.text(dayHigh, digits: 3))，振幅 \(String(format: "%.2f", amplitude))%")
         evidence.append("价格穿越 VWAP \(stats.vwapCrossings) 次（日内往返，做T空间来源）")
+        evidence.append("NAS 60 日成交量覆盖 \(Int(((caps?.nasVolumeCoverage60 ?? 0) * 100).rounded()))%；VWAP 上/下偏离中位数 \(String(format: "%.2f", historicalHighDeviation * 100))% / \(String(format: "%.2f", historicalLowDeviation * 100))%")
+        evidence.append("实时盘口价差 \(String(format: "%.3f", liquidity.spreadPercent))%；五档深度买 \(String(format: "%.0f", liquidity.bidDepthLots)) 手 / 卖 \(String(format: "%.0f", liquidity.askDepthLots)) 手（\(orderBook.source)）")
         if let rsi = NextSignalEngine.evaluate(bars)?.rsi {
             evidence.append("RSI14 \(String(format: "%.1f", rsi))")
         }
@@ -662,6 +722,7 @@ enum NextGridPlannerResult: Equatable {
 enum NextGridPlanner {
     static func plan(book: NextBook, quote: NextQuote?, daily: [NextChartSample], gridCheck: NextGridCheck?,
                      rules: NextInstrumentRules?, nasRange: NextNasRange? = nil,
+                     orderBook: NextOrderBookSnapshot? = nil,
                      caps: NextPlanCaps? = nil, now: Date) -> NextGridPlannerResult {
         let bars = daily.filter { $0.close > 0 }.sorted { $0.timestamp < $1.timestamp }
         // 网格不依赖当日分时点：按「日 K ≥60 + 行情 2 分钟内」评估（见 canPriceGridPlan）。
@@ -678,9 +739,15 @@ enum NextGridPlanner {
         guard confidence.canPriceGridPlan, let quote else {
             return .insufficientData(confidence, confidence.missing)
         }
-        guard let rules, rules.assetClass == .etf, let lotSize = rules.lotSize, lotSize > 0,
+        guard let rules, rules.isVerified, rules.assetClass == .etf, rules.settlement != .unknown,
+              let lotSize = rules.lotSize, lotSize > 0,
               let feePerTrade = rules.feePerTrade else {
             return .insufficientData(confidence, ["该证券的交易规则未核实（份额单位/手续费），拒绝生成网格档位"])
+        }
+        guard let orderBook, orderBook.code == quote.code,
+              let liquidity = NextOrderBookEvidence.assess(orderBook, lotSize: lotSize, now: now),
+              liquidity.spreadPercent <= 0.3, liquidity.bidDepthLots >= 10, liquidity.askDepthLots >= 10 else {
+            return .insufficientData(confidence, ["缺少 30 秒内有效五档盘口、价差或深度不足；不生成具体网格档位"])
         }
         guard bars.count >= 60 else {
             return .insufficientData(confidence, ["日 K 仅 \(bars.count) 根，网格至少需要 60 根"])
@@ -695,19 +762,19 @@ enum NextGridPlanner {
         var upper = rawUpper
         var lower = rawLower
         var boundNotes: [String] = []
-        if let nasRange, nasRange.isValid {
-            let clampedHigh = min(upper, nasRange.high)
-            let clampedLow = max(lower, nasRange.low)
-            if clampedHigh > clampedLow {
-                if clampedHigh != upper || clampedLow != lower {
-                    boundNotes.append("区间按 NAS 长期价格带收敛为 ¥\(NextMoney.text(clampedLow, digits: 3))–¥\(NextMoney.text(clampedHigh, digits: 3))（\(nasRange.source)，\(nasRange.days) 天）")
-                }
-                upper = clampedHigh
-                lower = clampedLow
-            } else {
-                boundNotes.append("NAS 长期价格带 ¥\(NextMoney.text(nasRange.low, digits: 3))–¥\(NextMoney.text(nasRange.high, digits: 3)) 与本地 60 日区间重叠不足，网格仍按本地区间，但需要人工复核")
-            }
+        guard let nasRange, nasRange.isValid else {
+            return .insufficientData(confidence, ["缺少新鲜且完整的 NAS 60 日分时区间；不以本机日K替代长期网格证据"])
         }
+        let clampedHigh = min(upper, nasRange.high)
+        let clampedLow = max(lower, nasRange.low)
+        guard clampedHigh > clampedLow else {
+            return .notRecommended(["NAS 长期价格带与本机近 60 日区间没有有效重叠，暂停网格并重新检查行情口径"])
+        }
+        if clampedHigh != upper || clampedLow != lower {
+            boundNotes.append("区间按 NAS 长期价格带收敛为 ¥\(NextMoney.text(clampedLow, digits: 3))–¥\(NextMoney.text(clampedHigh, digits: 3))（\(nasRange.source)，\(nasRange.days) 天）")
+        }
+        upper = clampedHigh
+        lower = clampedLow
         let amplitude = gridCheck.avgAmplitudePercent ?? 1.0
         // 间距：不低于 0.4%，取「半倍日均振幅」；保证每档往返扣费后仍为正。
         let spacingPercent = max(0.4, amplitude / 2)

@@ -11,3 +11,11 @@ __pycache__/
 # secrets / local env
 .secrets/
 .env
+# one-shot patch / tool scripts (repo root only)
+/_patch_task*.py
+/_api_push.py
+/_ci_advisor.py
+# local build / deliverable artifacts
+/deliverable/
+/nas_check/
+/pro_check/

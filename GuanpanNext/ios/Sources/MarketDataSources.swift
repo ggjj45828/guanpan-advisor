@@ -94,7 +94,7 @@ enum NextEastMoneyQuoteParser {
                   let price = NextMarketWire.decimal(row["f2"]), price > 0,
                   let previous = NextMarketWire.decimal(row["f60"]), previous > 0 else { continue }
             found[code] = NextQuote(code: code, name: name, price: price, previousClose: previous, time: receivedAt,
-                                    source: "EastMoney push2.eastmoney.com", iopv: nil, providerInstrumentType: nil)
+                                    source: "EastMoney push2.eastmoney.com", timeQuality: "receipt_only", iopv: nil, providerInstrumentType: nil)
         }
         return codes.compactMap { found[$0] }
     }
@@ -123,7 +123,7 @@ enum NextSinaQuoteParser {
                   let previous = Decimal(string: fields[2], locale: Locale(identifier: "en_US_POSIX")), previous > 0,
                   let stamp = stamp(fields[30], fields[31], receivedAt: receivedAt) else { continue }
             found[code] = NextQuote(code: code, name: fields[0], price: price, previousClose: previous, time: stamp,
-                                    source: "Sina hq.sinajs.cn", iopv: nil, providerInstrumentType: nil)
+                                    source: "Sina hq.sinajs.cn", timeQuality: "exchange_time", iopv: nil, providerInstrumentType: nil)
         }
         return codes.compactMap { found[$0] }
     }

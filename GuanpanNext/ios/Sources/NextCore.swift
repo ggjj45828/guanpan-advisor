@@ -246,8 +246,14 @@ struct NextQuote: Codable, Identifiable, Equatable {
     let source: String
     var iopv: Decimal? = nil
     var providerInstrumentType: String? = nil
+    /// exchange_time = 供应商提供的行情时间；receipt_only = 仅知道服务器收到响应的时间。
+    var timeQuality: String? = nil
     var changePercent: Decimal? { previousClose > 0 ? (price / previousClose - 1) * 100 : nil }
     func isFresh(at now: Date) -> Bool { time <= now && now.timeIntervalSince(time) <= 120 && price > 0 }
+    var hasReliableMarketTime: Bool {
+        timeQuality != "receipt_only" && !source.localizedCaseInsensitiveContains("eastmoney")
+    }
+    func isFreshForPricePlan(at now: Date) -> Bool { hasReliableMarketTime && isFresh(at: now) }
 }
 
 /// Strict parser for the reviewed Tencent quote payload. It only accepts facts
@@ -292,7 +298,7 @@ enum NextTencentQuoteParser {
               timestamp <= receivedAt.addingTimeInterval(60) else { return nil }
         let providerType = fields.count > 61 ? fields[61].trimmingCharacters(in: .whitespacesAndNewlines).uppercased() : nil
         let rawIopv = providerType == "ETF" && fields.count > 78 ? Decimal(string: fields[78], locale: Locale(identifier: "en_US_POSIX")) : nil
-        return NextQuote(code: code, name: fields[1], price: price, previousClose: previous, time: timestamp, source: "Tencent qt.gtimg.cn", iopv: rawIopv.flatMap { $0 > 0 ? $0 : nil }, providerInstrumentType: providerType)
+        return NextQuote(code: code, name: fields[1], price: price, previousClose: previous, time: timestamp, source: "Tencent qt.gtimg.cn", timeQuality: "exchange_time", iopv: rawIopv.flatMap { $0 > 0 ? $0 : nil }, providerInstrumentType: providerType)
     }
 
     private static func parseTimestamp(_ raw: String, fallback: Date) -> Date? {
@@ -616,6 +622,9 @@ enum NextResearch {
 
 // Persisted navigation lets deep links, search and scene restoration return to
 // the same user context instead of rebuilding a flow from an internal menu.
+// `laboratory`（网格实验室）已于 2026-10-24 删除：NAS 网格引擎是「第二顾问」产物，
+// 网格计划已并入 AI 今日指导。case 保留只为解码旧存档（RootView.activeTab 会把它迁到 .decision）。
+// `overview` 同理由 RootView 迁移。两者都不再有对应页签。
 enum NextTab: String, Codable, CaseIterable { case overview, market, decision, laboratory, assets, income, mine }
 enum NextRoute: Codable, Equatable {
     case instrument(String), intent(String, String), chart(String), portfolio(String), replay(String)
@@ -680,7 +689,7 @@ struct NextCachedQuote: Codable, Equatable {
     let quote: NextQuote
     let stamp: NextDataStamp
     func usableForDisplay(at now: Date) -> Bool { quote.time <= now }
-    func usableForPricePlan(at now: Date) -> Bool { usableForDisplay(at: now) && stamp.canSupportPricePlan && quote.isFresh(at: now) }
+    func usableForPricePlan(at now: Date) -> Bool { usableForDisplay(at: now) && stamp.canSupportPricePlan && quote.isFreshForPricePlan(at: now) }
 }
 struct NextAssetValuation: Equatable {
     let total: Decimal?
@@ -1044,18 +1053,118 @@ struct NextAuditedBook: Codable, Equatable {
 
 enum NextTheme: String, Codable, CaseIterable { case system, light, dark, comfort }
 
+/// A 股交易日历与交易时段（沪深北同一套休市安排，时区 Asia/Shanghai）。
+///
+/// 节假日数据来自上海证券交易所每年 12 月发布的《关于××年部分节假日休市安排的通知》
+/// （2026 年安排见上证公告〔2025〕45号，沪深北三所一致）。
+/// 2027 年安排尚未发布（通常当年 12 月公布），发布后请把 holidayDates 补上；
+/// 在那之前 isRegularSession 只按周末与既有年份判断，不会把交易日误判成休市。
 enum NextMarketClock {
-    /// Lightweight foreground polling window. It intentionally does not claim
-    /// an exchange holiday calendar; stale/closed-session quotes never trigger
-    /// a plan and the user can always refresh manually.
-    static func isRegularSession(_ date: Date = Date()) -> Bool {
+    /// 休市日期（"YYYY-MM-DD"，Asia/Shanghai）→ 节日名。
+    /// 调休上班的周末本就不交易，无需单列；同一天只归一个节日。
+    static let holidayDates: [String: String] = {
+        var dates: [String: String] = [:]
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let calendar = Calendar(identifier: .gregorian)
+        func fill(_ from: String, _ to: String, _ name: String) {
+            guard var day = formatter.date(from: from), let end = formatter.date(from: to) else { return }
+            while day <= end {
+                dates[formatter.string(from: day)] = name
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
+        // 2024（国务院办公厅关于2024年部分节假日安排）
+        fill("2024-01-01", "2024-01-01", "元旦")
+        fill("2024-02-10", "2024-02-17", "春节")
+        fill("2024-04-04", "2024-04-06", "清明节")
+        fill("2024-05-01", "2024-05-05", "劳动节")
+        fill("2024-06-08", "2024-06-10", "端午节")
+        fill("2024-09-15", "2024-09-17", "中秋节")
+        fill("2024-10-01", "2024-10-07", "国庆节")
+        // 2025（国务院办公厅关于2025年部分节假日安排）
+        fill("2025-01-01", "2025-01-01", "元旦")
+        fill("2025-01-28", "2025-02-04", "春节")
+        fill("2025-04-04", "2025-04-06", "清明节")
+        fill("2025-05-01", "2025-05-05", "劳动节")
+        fill("2025-05-31", "2025-06-02", "端午节")
+        fill("2025-10-01", "2025-10-08", "国庆节·中秋节")
+        // 2026（上证公告〔2025〕45号）
+        fill("2026-01-01", "2026-01-03", "元旦")
+        fill("2026-02-15", "2026-02-23", "春节")
+        fill("2026-04-04", "2026-04-06", "清明节")
+        fill("2026-05-01", "2026-05-05", "劳动节")
+        fill("2026-06-19", "2026-06-21", "端午节")
+        fill("2026-09-25", "2026-09-27", "中秋节")
+        fill("2026-10-01", "2026-10-07", "国庆节")
+        return dates
+    }()
+
+    private static let keyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M月d日 EEEE"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter
+    }()
+    private static var shanghai: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
-        let parts = calendar.dateComponents([.weekday, .hour, .minute], from: date)
+        return calendar
+    }
+
+    /// 这一天是不是交易所节假日休市（周末不算，周末由时段判断处理）。
+    static func holidayName(_ date: Date) -> String? {
+        holidayDates[keyFormatter.string(from: date)]
+    }
+
+    /// 盘中轮询窗口：交易日 09:30–11:30 与 13:00–15:00。
+    /// 过期/收盘行情永远不会触发计划，用户也随时可以手动刷新。
+    static func isRegularSession(_ date: Date = Date()) -> Bool {
+        let parts = shanghai.dateComponents([.weekday, .hour, .minute], from: date)
         guard let weekday = parts.weekday, (2...6).contains(weekday),
               let hour = parts.hour, let minute = parts.minute else { return false }
+        guard holidayName(date) == nil else { return false }
         let current = hour * 60 + minute
         return (570...690).contains(current) || (780...900).contains(current)
+    }
+
+    /// 下一个交易日（从 date 次日起找，跳过周末与休市日；最多向后看 20 天）。
+    static func nextTradingDay(after date: Date) -> Date {
+        var day = shanghai.startOfDay(for: date)
+        for _ in 0..<20 {
+            guard let next = shanghai.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+            let weekday = shanghai.component(.weekday, from: day)
+            if (2...6).contains(weekday), holidayName(day) == nil { return day }
+        }
+        return day
+    }
+
+    /// 市场状态文本（UI 与 AI 上下文共用）：开不开、为什么、下一交易日何时。
+    static func marketStatusText(_ date: Date = Date()) -> String {
+        let parts = shanghai.dateComponents([.weekday, .hour, .minute], from: date)
+        let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        let nextText = "下一交易日 \(dayFormatter.string(from: nextTradingDay(after: date))) 09:30 开盘"
+        if let name = holidayName(date) { return "今日休市（\(name)）· \(nextText)" }
+        let weekday = parts.weekday ?? 0
+        if weekday == 1 || weekday == 7 { return "周末休市 · \(nextText)" }
+        if isRegularSession(date) {
+            return minute < 690 ? "A 股盘中 · 上午场（11:30 午休）" : "A 股盘中 · 下午场（15:00 收盘）"
+        }
+        if minute < 570 { return "盘前 · 今日 09:30 开盘" }
+        if minute < 780 { return "午间休市 · 13:00 复盘" }
+        return "今日已收盘 · \(nextText)"
     }
 }
 
@@ -1078,12 +1187,18 @@ struct NextNASMinuteStats: Codable, Equatable {
         let supportP10: String?
         let resistanceP90: String?
         let volatilityPercent: Double?
+        /// Historical intraday excursions relative to each session VWAP, stored as ratios (0.01 = 1%).
+        var vwapHighDeviationMedian: Double? = nil
+        var vwapLowDeviationMedian: Double? = nil
+        /// Share of minute rows with observed volume; a missing volume must not silently count as zero.
+        var volumeCoverage: Double? = nil
     }
     struct Quality: Codable, Equatable {
         let days: Int
         let minuteCoverage: Double
         let hasVolume: Bool
         let enoughForLongTerm: Bool
+        var volumeCoverage: Double? = nil
     }
     struct Freshness: Codable, Equatable {
         let lastDay: String?
@@ -1098,6 +1213,21 @@ struct NextNASMinuteStats: Codable, Equatable {
     let quality: Quality
     let freshness: Freshness
     let windows: [String: Window]
+    /// NAS-computed ordered limit touches across complete 1-minute paths. These are historical observations,
+    /// not a promise that a future order will fill.
+    var roundTripEvidence: RoundTripEvidence? = nil
+
+    struct RoundTripEvidence: Codable, Equatable {
+        struct Direction: Codable, Equatable {
+            let firstTouched: Int
+            let orderedRoundTrips: Int
+            let meanWaitMinutes: Double?
+        }
+        let days: Int
+        let completeDays: Int
+        let reverse: Direction
+        let forward: Direction
+    }
 
     func window(_ count: Int) -> Window? { windows[String(count)] }
 }
@@ -1108,7 +1238,9 @@ struct NextNASResearch: Codable, Equatable {
     struct ProviderStatus: Codable, Equatable { let state: String; let configured: Bool; let profile: String; let model: String?; let message: String }
     let factors: Factor?
     let ai: AI?
-    let providerConfigured: Bool
+    /// NAS 已停用大模型（2026-10-24）：研究记录只剩本机可复算的因子与分钟统计，
+    /// `ai`/`providerConfigured`/`providerStatus` 只为解码旧缓存而保留，新记录恒为空。
+    var providerConfigured: Bool? = nil
     var providerStatus: ProviderStatus? = nil
     /// 长期分时统计。没有就是没有（NAS 上还没攒够分钟归档），界面要如实说。
     var minuteStats: NextNASMinuteStats? = nil

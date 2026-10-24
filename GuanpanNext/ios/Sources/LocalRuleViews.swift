@@ -155,106 +155,6 @@ private struct WorthBuyBreakdown: View {
     }
 }
 
-// MARK: - 标的体检
-
-struct GridCheckPanel: View {
-    @EnvironmentObject private var model: NextAppModel
-    @Environment(\.gp) private var p
-    @State private var checks: [NextGridCheck] = []
-    @State private var expanded: String?
-
-    private var codes: [String] {
-        var seen = Set<String>()
-        let ordered = model.book.positions.map(\.code) + model.watch
-        return ordered.filter { seen.insert($0).inserted && NextGridCheckEngine.isTradableCode($0) }.prefix(10).map { $0 }
-    }
-
-    var body: some View {
-        EditorialSection(title: "标的体检 · 网格适合度", trailing: "\(checks.count) 只", accent: p.chartViolet) {
-            Text("按流动性、年化波动率、日均振幅、震荡性四条公开口径打分；只评价「价格结构适不适合网格/波段」，不判断涨跌方向。")
-                .font(.caption2).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
-            if checks.isEmpty {
-                GPStatus(title: "还没有可体检的标的", detail: "自选或持仓里的场内证券会自动出现在这里；需要本机至少 60 根日 K 才能给结论。", symbol: "stethoscope")
-            }
-            ForEach(checks) { check in
-                GridCheckRow(check: check, isExpanded: expanded == check.code,
-                             name: displayName(check.code)) {
-                    expanded = expanded == check.code ? nil : check.code
-                }
-            }
-            Button { recompute() } label: { Label("重新体检", systemImage: "arrow.triangle.2.circlepath").font(.caption.weight(.semibold)) }
-                .tint(p.forest)
-        }
-        .onAppear { recompute() }
-        .onChange(of: model.chartData.count) { _, _ in recompute() }
-        .onChange(of: model.book.positions.count) { _, _ in recompute() }
-    }
-
-    private func displayName(_ code: String) -> String {
-        model.book.positions.first(where: { $0.code == code })?.name
-            ?? model.quotes[code]?.quote.name ?? code
-    }
-
-    private func recompute() {
-        checks = codes.compactMap { code in
-            guard let dataset = model.chartData["\(code):day"] else { return nil }
-            return NextGridCheckEngine.evaluate(code: code, name: displayName(code),
-                                               samples: dataset.orderedSamples, isOnExchange: true)
-        }
-        .sorted { lhs, rhs in lhs.score == rhs.score ? lhs.code < rhs.code : lhs.score > rhs.score }
-    }
-}
-
-private struct GridCheckRow: View {
-    @Environment(\.gp) private var p
-    let check: NextGridCheck
-    let isExpanded: Bool
-    let name: String
-    let toggle: () -> Void
-    private var tone: Color {
-        switch check.grade {
-        case .suitable: return p.risk
-        case .consider: return p.terracotta
-        case .avoid: return p.jade
-        }
-    }
-    var body: some View {
-        Button(action: toggle) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(name).font(.subheadline.weight(.medium)).foregroundStyle(p.ink).lineLimit(1)
-                    Text(check.code).font(.system(size: 9, design: .monospaced)).foregroundStyle(p.muted)
-                    Spacer(minLength: 4)
-                    Text("\(check.score)").font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(tone)
-                    Text(check.grade.rawValue).font(.system(size: 9, weight: .semibold)).foregroundStyle(tone)
-                        .padding(.horizontal, 5).padding(.vertical, 2).background(tone.opacity(0.12), in: Capsule())
-                }
-                Text(metricLine).font(.system(size: 9.5, design: .monospaced)).foregroundStyle(p.muted).lineLimit(1)
-                if isExpanded {
-                    ForEach(check.reasons, id: \.self) { reason in
-                        Label(reason, systemImage: "checkmark.circle").font(.caption2).foregroundStyle(p.jade)
-                    }
-                    ForEach(check.warnings, id: \.self) { warning in
-                        Label(warning, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(p.terracotta)
-                    }
-                    Text("数据：本机 \(check.barCount) 根日 K · 成交额按「量×100×收盘价」估算").font(.caption2).foregroundStyle(p.muted.opacity(0.8))
-                }
-            }
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .bottom) { Rectangle().fill(p.line.opacity(0.7)).frame(height: 0.5) }
-        .accessibilityLabel("\(name) 网格适合度 \(check.score) 分，\(check.grade.rawValue)")
-    }
-    private var metricLine: String {
-        let volatility = check.annualVolatilityPercent.map { String(format: "波动 %.3f%%", $0) } ?? "波动 —"
-        let amplitude = check.avgAmplitudePercent.map { String(format: "振幅 %.3f%%", $0) } ?? "振幅 —"
-        let turnover = check.avgTurnoverYi.map { String(format: "成交 %.3f亿", $0) } ?? "成交 —"
-        let range = check.rangeBoundRatio.map { String(format: "震荡 %.3f%%", $0 * 100) } ?? "震荡 —"
-        return "\(volatility) · \(amplitude) · \(turnover) · \(range)"
-    }
-}
 
 // MARK: - 账户诊断
 
@@ -404,10 +304,13 @@ private struct GlobalIndexCard: View {
                 Text(GlobalIndexFeed.shortName(quote.symbol)).font(.system(size: 10, weight: .medium)).foregroundStyle(p.ink).lineLimit(1)
                 if quote.isStale { Text("旧").font(.system(size: 7, weight: .bold)).foregroundStyle(p.terracotta) }
             }
+            // 价格与涨跌幅都锁一行：日经225 这类五位指数（39,456.780）一旦折行，卡片就被撑高，横向条里立刻显得大小不一。
             Text(quote.price > 0 ? NextNum.text(quote.price) : "—")
                 .font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(quote.price > 0 ? p.ink : p.muted)
+                .lineLimit(1).minimumScaleFactor(0.7)
             Text(quote.price > 0 ? "\(NextNum.signed(quote.changePercent))%" : "无报价")
                 .font(.system(size: 9.5, weight: .medium, design: .monospaced)).foregroundStyle(tone)
+                .lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(width: 78, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 7)

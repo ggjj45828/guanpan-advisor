@@ -59,7 +59,7 @@ a{color:var(--forest)}
 <div class="wrap">
   <header style="padding:10px 2px 4px">
     <h1>观盘 Next · NAS 账本</h1>
-    <div class="sub">网页、iPhone、NAS 共用同一份真实账本 · 写入一律修订号保护，冲突不覆盖</div>
+    <div class="sub">网页、iPhone、NAS 共用同一份真实账本 · 写入一律修订号保护，冲突不覆盖 · AI 综合指导请在手机端生成</div>
   </header>
 
   <section class="card">
@@ -77,15 +77,6 @@ a{color:var(--forest)}
     <h2><span class="dot"></span>持仓<span class="tag" id="posTag"></span></h2>
     <div class="scroll" id="positions"><div class="note">读取中…</div></div>
     <div id="contrib"></div>
-  </section>
-
-  <section class="card">
-    <h2><span class="dot"></span>私人顾问 · 数据检查</h2>
-    <div class="note">只读取 NAS 真实账本和已归档分时。该检查尚不生成做 T、网格或限价方案，不会下单。</div>
-    <button class="small" onclick="loadAdvisorInventory()">检查真实持仓分时</button>
-    <button class="primary small" onclick="runAdvisorAnalysis()">授权 NAS AI 综合分析</button>
-    <div class="stat" id="advisorInventory">尚未检查</div>
-    <div class="stat" id="advisorAnalysis" hidden></div>
   </section>
 
   <section class="card">
@@ -129,15 +120,8 @@ a{color:var(--forest)}
 
   <section class="card">
     <h2><span class="dot"></span>NAS 运行状态</h2>
+    <div class="note">NAS 是后台研究员：只负责数据采集、行情/研究归档与新闻存档；AI 综合指导只在手机端生成，NAS 不做第二建议，也不会自动下单。</div>
     <div class="stat" id="workers">读取中…</div>
-  </section>
-
-  <section class="card">
-    <h2><span class="dot"></span>DeepSeek 连接<span class="tag" id="aiTag">—</span></h2>
-    <div class="note">这里测的是 <b>NAS 通道</b>，请求路径是「手机 → NAS → DeepSeek」，用的是 NAS 上 <code>.env</code> 里的 key。手机端<b>另有一条直连 DeepSeek 的通道</b>（key 存在手机本地钥匙串，在手机设置里单独存、单独测），没有 NAS 也能分析；两条路 key 分开管理、互不影响。本卡只测 NAS 这条路：点按钮向 DeepSeek 发一句 "OK" 探针（<b>不含任何持仓</b>）。验证失败会显示真实原因：密钥未配置 / 模型 400 / 网络不可达。</div>
-    <div class="row"><button class="primary small" onclick="testAI()">测试 DeepSeek 连接</button>
-      <span class="hint">手机端详情页「授权并通过 NAS 分析」走的就是这条路</span></div>
-    <div class="stat" id="aiState" hidden></div>
   </section>
 
   <section class="card">
@@ -161,40 +145,6 @@ var state = { revision: 0, book: null, quotes: {}, version: [] };
 var COCOA = 978307200;
 
 function $(id){ return document.getElementById(id); }
-async function loadAdvisorInventory(){
-  var el = $('advisorInventory'); el.textContent = '正在检查…';
-  try {
-    var response = await fetch('/v1/advisor/inventory', {cache:'no-store'});
-    var data = await response.json();
-    if (!response.ok) throw new Error(data.error || '读取失败');
-    var lines = [data.notice, '账本修订：' + data.bookRevision];
-    if (!data.positions.length) lines.push('NAS 真实账本没有持仓。');
-    data.positions.forEach(function(p){
-      lines.push(p.name + ' ' + p.code + ' · ' + p.units + ' 份：' + p.decision + '\n分时 ' + p.days + ' 天，满足最低点数 ' + p.completeDays + ' 天；范围 ' + (p.firstDay || '—') + ' 至 ' + (p.lastDay || '—') + '\n' + p.reasons.join('；'));
-    });
-    el.textContent = lines.join('\n\n');
-  } catch (e) { el.textContent = '检查失败：' + e.message; }
-}
-async function runAdvisorAnalysis(){
-  if (!window.confirm('本次分析将把真实持仓、现金、行情和分时发送给 NAS DeepSeek；证券代码和名称会用于 Google News RSS 搜索并发送给 Google。继续吗？')) return;
-  var el = $('advisorAnalysis'); el.hidden = false; el.textContent = '正在读取数据并分析…';
-  try {
-    var response = await fetch('/v1/advisor/analyze', {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({userConfirmed:true,rules:{}})});
-    var data = await response.json();
-    if (!response.ok) throw new Error(data.error || '分析失败');
-    var lines = [data.notice, '账本修订：' + data.bookRevision];
-    data.positions.forEach(function(p){
-      lines.push(p.name + ' ' + p.code + '：' + p.decision + '；有效分时 ' + p.qualifiedDays + ' 天。' +
-        (p.plan ? '\n手工限价参考：' + JSON.stringify(p.plan) : '\n暂不提供具体交易数值：' + p.risks.join('；')));
-    });
-    data.news.forEach(function(n){
-      lines.push(n.name + ' 新闻标题（' + n.provider + '）：' + (n.items.length ? n.items.map(function(i){return i.title + ' · ' + i.source + ' · ' + i.publishedAt + ' · ' + i.url;}).join('\n') : '无可用结果'));
-    });
-    lines.push('在线 AI：' + (data.ai.content || data.ai.message || data.ai.state));
-    el.textContent = lines.join('\n\n');
-  } catch (e) { el.textContent = '分析失败：' + e.message; }
-}
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function money(n, digits){
   var d = digits == null ? 2 : digits;
@@ -466,28 +416,13 @@ async function pruneHistory(){
 async function loadWorkers(){
   try {
     var j = await call('/health');
-    var ai = j.aiProvider || {}, ws = j.workers || [];
+    var ws = j.workers || [];
     var lines = (Array.isArray(ws) ? ws : []).map(function(w){
       return '· ' + w.name + ' — ' + (w.health || w.state || '') + (w.detail ? '：' + w.detail : '');
     });
     $('workers').textContent = '服务版本 ' + (j.codeVersion || '未知') +
-      '\nAI 提供方 ' + (ai.state || '未知') + (ai.model ? '（' + ai.model + '）' : '') +
       (lines.length ? '\n' + lines.join('\n') : '\n（没有后台线程状态）');
-    if ($('aiTag')) $('aiTag').textContent = (ai.state || '未知') + (ai.model ? ' · ' + ai.model : '');
   } catch (e) { $('workers').textContent = '读取失败：' + e.message; }
-}
-
-async function testAI(){
-  setState('aiState', '正在向 DeepSeek 发送探针（只发一句 OK，不含持仓）…');
-  try {
-    var res = await fetch('/v1/ai/verify', { method: 'GET', cache: 'no-store' });
-    var data = {}; try { data = await res.json(); } catch(e){}
-    if (res.ok){
-      setState('aiState', '验证成功 · state=' + (data.state || '') + ' · 模型 ' + (data.model || '未知') + '\n' + (data.message || ''), 'ok');
-    } else {
-      setState('aiState', '验证失败 · state=' + (data.state || '') + '\n' + (data.error || data.message || ('HTTP ' + res.status)), 'err');
-    }
-  } catch (e){ setState('aiState', '请求异常：' + e.message, 'err'); }
 }
 
 function showMarket(obj){ var el = $('market'); el.hidden = false; el.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); }

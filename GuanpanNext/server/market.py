@@ -84,7 +84,7 @@ def parse_quotes(body, codes, received_at=None):
             continue
         found[code] = {
             "code": code, "name": fields[1], "price": str(price), "previousClose": str(previous),
-            "time": stamp.isoformat(), "source": "Tencent qt.gtimg.cn", "providerInstrumentType": provider_type,
+            "time": stamp.isoformat(), "timeQuality": "exchange_time", "source": "Tencent qt.gtimg.cn", "providerInstrumentType": provider_type,
             "iopv": str(iopv) if iopv is not None else None,
         }
     return [found[code] for code in codes if code in found]
@@ -188,7 +188,7 @@ def fetch_eastmoney_quotes(codes):
         found[code] = {
             "code": code, "name": row.get("f14") or code,
             "price": price, "previousClose": prev,
-            "time": datetime.now(timezone.utc).isoformat(),
+            "time": datetime.now(timezone.utc).isoformat(), "timeQuality": "receipt_only",
             "source": "Eastmoney quote", "providerInstrumentType": None, "iopv": None,
             "changePercent": (float(pct) if isinstance(pct, (int, float)) else None),
         }

@@ -182,11 +182,12 @@ struct LocalPreferences: Codable {
     @Published var newsStatus: [String: String] = [:]
     @Published var dailyGuidance: NextDailyGuidance?
     @Published var guidanceStatus = "尚未生成今日指导"
-    @Published var gridStatus: NextNASGridStatus?
-    @Published var gridStatusMessage = "尚未读取 NAS 网格状态"
+    /// 手机端统一 AI 指导：NAS 只提供长期证据，在线模型不得另造价格。
+    @Published var unifiedAIAdvice: String?
+    @Published var unifiedAIStatus: String?
+    @Published var unifiedAIIsRunning = false
     @Published var status = "行情尚未刷新 · 缓存可离线查看"
     @Published var syncStatus = "NAS 未连接"
-    @Published var aiProviderStatus: NextAIProviderStatus?
     @Published var legacyImportPreview: NextLegacyBookPreview?
     @Published var dailyErrors: [String: String] = [:]
     @Published var notificationStatus = "尚未检查系统通知权限"
@@ -631,6 +632,32 @@ struct LocalPreferences: Codable {
         learnProfile()
     }
 
+    /// 手机是唯一最终顾问：NAS 只提供长期证据，在线模型不得另造价格或覆盖规则引擎门槛。
+    func runUnifiedMobileAI(key: String, profile modelProfile: String) async {
+        guard !book.positions.filter({ $0.units > 0 }).isEmpty else {
+            unifiedAIStatus = "没有真实持仓，无法生成持仓指导。"; return
+        }
+        unifiedAIIsRunning = true
+        unifiedAIStatus = "正在汇总真实持仓、最新行情、NAS 研究、新闻和投资画像…"
+        defer { unifiedAIIsRunning = false }
+        await refreshGuidance()
+        let context = makeDecisionContext()
+        do {
+            let response = try await DeepSeekMobile.analyze(prompt: context.promptBlock, key: key, profile: modelProfile)
+            unifiedAIAdvice = response.content
+            unifiedAIStatus = "手机端统一指导已生成 · \(response.model) · \(context.generatedAt.formatted(date: .numeric, time: .shortened))"
+            let stamp = Date()
+            let evidence = [
+                NextEvidence(id: "unified-guidance-context", title: "统一决策上下文", detail: context.promptBlock, level: "真实持仓 + 手机规则 + NAS + 新闻 + 画像", observedAt: stamp),
+                NextEvidence(id: "unified-guidance-ai", title: "手机在线 AI 最终指导", detail: response.content, level: response.model, observedAt: stamp)
+            ]
+            recordDecision(NextDecision(createdAt: stamp, title: "AI 今日统一指导", evidence: evidence,
+                                        options: [], status: "只读建议 · 不会自动下单", origin: "手机最终AI；NAS 仅提供研究"))
+        } catch {
+            unifiedAIStatus = "在线AI不可用：\(error.localizedDescription)；保留手机离线规则结果。"
+        }
+    }
+
     /// 决策记忆：写入「当时」的快照、把同一天重复条目合并、按有效期与失效条件迁移状态、
     /// 并对已真实成交的条目做复盘。这里**不会**因为 AI 建议就写任何成交。
     private func updateDecisionMemory(with guidance: NextDailyGuidance, now: Date) {
@@ -1051,10 +1078,8 @@ struct LocalPreferences: Codable {
     func cancelLegacyWebImport() { legacyImportPreview = nil }
     func probeNAS() async {
         do {
-            let health = try await NextNASService.checkHealth(baseURL: preferences.nasBaseURL)
-            aiProviderStatus = health.aiProvider
+            _ = try await NextNASService.checkHealth(baseURL: preferences.nasBaseURL)
         } catch {
-            aiProviderStatus = nil
             syncStatus = "NAS 离线或健康检查失败 · \(error.localizedDescription)"
             postLocalAlert(level: "NAS", fingerprint: "nas-connectivity", title: "NAS 连接不可用", detail: "\(error.localizedDescription)。本机账本和缓存仍可使用。", stamp: NextDataStamp(source: "NAS 连通性检查", observedAt: Date(), quality: .stale, detail: "用户触发检查"))
             return
@@ -1192,25 +1217,6 @@ struct LocalPreferences: Codable {
         preferences.navigation.tabRoutes[tab.rawValue] = routes
         preferences.navigation.routes = routes
         preferences = preferences
-    }
-    /// 拉取 NAS 网格引擎状态与「明日挂单表」。网格不预测涨跌，只给出现价附近的买卖档位与可达成数量。
-    func refreshGridStatus() async {
-        guard !preferences.nasBaseURL.isEmpty else { gridStatusMessage = "请先在「我的」里连接 NAS"; return }
-        let baseURL = preferences.nasBaseURL
-        gridStatusMessage = "正在读取 NAS 网格状态…"
-        do {
-            let result = try await NextNASService.fetchGridStatus(baseURL: baseURL)
-            guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址已变化；未采用旧连接结果") }
-            gridStatus = result
-            if !result.initialized {
-                gridStatusMessage = "NAS 网格尚未初始化；首次启动后由后台按持仓自动建网格"
-            } else if let summary = result.summary {
-                let rungs = result.ladder.reduce(0) { $0 + $1.rungs.count }
-                gridStatusMessage = "网格计划 · 覆盖 \(summary.holdingsCovered) 只 · 计划占用 ¥\(NextMoney.text(Decimal(string: summary.plannedBuyCapital) ?? 0)) · 单档净收益 ¥\(NextMoney.text(Decimal(string: summary.netPerRungTotal) ?? 0)) · 档位 \(rungs) 档"
-            } else {
-                gridStatusMessage = "NAS 网格已连接，但无汇总数据"
-            }
-        } catch { gridStatusMessage = "NAS 网格读取失败 · \(error.localizedDescription)" }
     }
     func recordDecision(_ decision: NextDecision) {
         decisions.removeAll { $0.id == decision.id }

@@ -67,7 +67,9 @@ struct GPSparkline: View {
 }
 
 /// 英雄卡内的区间选择胶囊（日/周/月/年 形态，值取自真实数据区间）。
+/// 颜色全部走 hero 令牌：五套主题的 hero 底色明暗不同，硬编码白字在浅色主题下会看不见。
 struct GPRangePills: View {
+    @Environment(\.gp) private var p
     @Binding var selection: GPAssetRange
     var body: some View {
         HStack(spacing: 2) {
@@ -79,19 +81,21 @@ struct GPRangePills: View {
                         .font(.system(size: 11, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
-                        .foregroundStyle(selection == range ? Color(hex: 0x1B3E8F) : Color.white.opacity(0.82))
-                        .background(selection == range ? Color.white : Color.clear, in: Capsule())
+                        .foregroundStyle(selection == range ? p.heroSurface : p.heroMutedInk)
+                        .background(selection == range ? p.heroInk : Color.clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(2)
-        .background(Color.white.opacity(0.16), in: Capsule())
+        .background(p.heroInk.opacity(0.12), in: Capsule())
     }
 }
 
-/// 首页「账户总资产」英雄卡：深蓝渐变 + 大数 + 当日盈亏 + 区间胶囊 + 迷你走势。
+/// 首页「账户总资产」英雄卡：主题 hero 渐变 + 大数 + 当日盈亏 + 区间胶囊 + 迷你走势。
+/// 渐变与文字色都从 GPPalette 取：同一张卡在五套主题下自动换色，数据完全一致。
 struct GPHeroAssetCard: View {
+    @Environment(\.gp) private var p
     let totalText: String
     var totalCaption: String? = nil
     var changeText: String? = nil
@@ -110,10 +114,10 @@ struct GPHeroAssetCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Text("账户总资产").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.white.opacity(0.82))
+                Text("账户总资产").font(.system(size: 12, weight: .medium)).foregroundStyle(p.heroMutedInk)
                 if let infoText {
                     Button { showInfo.toggle() } label: {
-                        Image(systemName: "info.circle").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.7))
+                        Image(systemName: "info.circle").font(.system(size: 12)).foregroundStyle(p.heroMutedInk.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("总资产口径说明")
@@ -122,29 +126,29 @@ struct GPHeroAssetCard: View {
             }
             Text(totalText)
                 .font(.system(size: 34, weight: .medium, design: .rounded)).monospacedDigit()
-                .foregroundStyle(.white)
+                .foregroundStyle(p.heroInk)
                 .lineLimit(1).minimumScaleFactor(0.72)
             if let changeText, let changePercentText {
                 HStack(spacing: 8) {
-                    Text("今日盈亏").font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.72))
-                    Text(changeText).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                    Text("今日盈亏").font(.system(size: 11)).foregroundStyle(p.heroMutedInk)
+                    Text(changeText).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(p.heroInk)
                     Text(changePercentText)
                         .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Color.white.opacity(0.2), in: Capsule())
-                        .foregroundStyle(.white)
+                        .background(p.heroInk.opacity(0.16), in: Capsule())
+                        .foregroundStyle(p.heroInk)
                 }
             }
             if let totalCaption {
-                Text(totalCaption).font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.62))
+                Text(totalCaption).font(.system(size: 10)).foregroundStyle(p.heroMutedInk)
             }
             if showInfo, let infoText {
-                Text(infoText).font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.78))
+                Text(infoText).font(.system(size: 10)).foregroundStyle(p.heroMutedInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if series.count >= 2 {
                 GPRangePills(selection: $range)
-                GPSparkline(values: series, color: .white, lineWidth: 1.7, height: 76)
+                GPSparkline(values: series, color: p.heroInk, lineWidth: 1.7, height: 76)
                 HStack {
                     Text(axisLabel(rangePoints.first?.date))
                     Spacer(minLength: 0)
@@ -153,16 +157,13 @@ struct GPHeroAssetCard: View {
                     Text(axisLabel(rangePoints.last?.date))
                 }
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.6))
+                .foregroundStyle(p.heroMutedInk.opacity(0.8))
             }
         }
         .padding(16)
-        .background(
-            LinearGradient(colors: [Color(hex: 0x1B3E8F), Color(hex: 0x2A5FD0), Color(hex: 0x3E7BEB)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing),
-            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 0.8))
-        .shadow(color: Color(hex: 0x1F4FBE).opacity(0.28), radius: 14, x: 0, y: 8)
+        .background(p.heroGradient, in: RoundedRectangle(cornerRadius: p.heroRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.heroRadius, style: .continuous).stroke(p.heroInk.opacity(0.14), lineWidth: 0.8))
+        .shadow(color: p.primary.opacity(0.25), radius: 12, x: 0, y: 6)
     }
     private func axisLabel(_ date: Date?) -> String {
         guard let date else { return "" }
@@ -231,53 +232,75 @@ struct GPDonutView: View {
     }
 }
 
-/// 市场温度半圆仪表（0–100）。颜色从「冷清」的青绿过渡到「过热」的红。
+/// 市场温度卡（0–100）：大数字 + 状态词 + 水平温度条 + 涨跌家数。
+/// 半圆指针仪表在窄屏/小字号下既挤又难读，改横向条：一屏扫完就知道冷暖。
 struct GPGaugeView: View {
     @Environment(\.gp) private var p
     let value: Double
     var caption: String
     var leftLabel: String = "冷清"
     var rightLabel: String = "过热"
+    /// 自选/持仓中上涨、下跌、持平的家数（没有报价的不计入）。
+    var upCount: Int = 0
+    var downCount: Int = 0
+    var flatCount: Int = 0
+    var sourceNote: String = "自选与持仓今日涨跌均值 · 50 为持平 · 本机粗算，不是预测"
 
     private var clamped: Double { NextNum.clamp(value, 0, 100) }
+    private var fraction: CGFloat { CGFloat(NextNum.clamp(value, 0, 100) / 100) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("市场温度").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.ink)
-            ZStack {
-                Circle()
-                    .trim(from: 0, to: 0.5)
-                    .stroke(LinearGradient(colors: [p.jade, p.chartGold, p.risk],
-                                           startPoint: .leading, endPoint: .trailing),
-                            style: StrokeStyle(lineWidth: 11, lineCap: .round))
-                    .rotationEffect(.degrees(180))
-                    .frame(width: 104, height: 104)
-                    .offset(y: 52)
-                Capsule()
-                    .fill(p.ink)
-                    .frame(width: 2.5, height: 38)
-                    .offset(y: 52)
-                    .rotationEffect(.degrees(180 - 180 * clamped / 100))
-                VStack(spacing: 1) {
-                    Text("\(Int(clamped.rounded()))")
-                        .font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(p.ink)
-                    Text(caption).font(.system(size: 9)).foregroundStyle(p.muted)
-                }
-                .offset(y: 22)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("市场温度").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.ink)
+                Spacer(minLength: 4)
+                Text(caption).font(.system(size: 10, weight: .medium)).foregroundStyle(tone)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 58)
-            .clipped()
-            HStack {
-                Text(leftLabel).font(.system(size: 9)).foregroundStyle(p.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(Int(clamped.rounded()))")
+                    .font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(tone)
                 Spacer(minLength: 0)
+                Text(leftLabel).font(.system(size: 9)).foregroundStyle(p.muted)
+                Text("→").font(.system(size: 9)).foregroundStyle(p.muted)
                 Text(rightLabel).font(.system(size: 9)).foregroundStyle(p.muted)
             }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(LinearGradient(colors: [p.jade, p.chartGold, p.risk], startPoint: .leading, endPoint: .trailing))
+                        .frame(maxWidth: .infinity).frame(height: 8)
+                    Circle()
+                        .fill(p.paper)
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(tone, lineWidth: 2))
+                        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                        .offset(x: max(0, min(geo.size.width - 14, geo.size.width * fraction - 7)))
+                }
+            }
+            .frame(height: 14)
+            HStack(spacing: 10) {
+                Text("涨 \(upCount)").font(.system(size: 10, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(p.gpUp)
+                Text("跌 \(downCount)").font(.system(size: 10, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(p.gpDown)
+                Text("平 \(flatCount)").font(.system(size: 10, weight: .medium, design: .rounded)).monospacedDigit().foregroundStyle(p.muted)
+                Spacer(minLength: 0)
+            }
+            Text(sourceNote).font(.system(size: 9)).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(p.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(p.line, lineWidth: 0.8))
+    }
+
+    /// 温度对应的语义色：偏冷青绿、平稳金、偏热红（与「跌绿涨红」的直觉一致）。
+    private var tone: Color {
+        switch clamped {
+        case ..<30: return p.jade
+        case ..<45: return p.chartBlue
+        case ..<55: return p.chartGold
+        case ..<70: return p.terracotta
+        default: return p.risk
+        }
     }
 }
 

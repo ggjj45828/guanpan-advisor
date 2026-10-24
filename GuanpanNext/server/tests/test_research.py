@@ -5,7 +5,7 @@ VWAP 按成交量加权、振幅按 (high-low)/mid、往返次数按穿越中位
 支撑压力取窗口内的分位、完整度按 240 分钟/日、新鲜度隔夜不算过期。
 """
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import research
@@ -82,15 +82,39 @@ class MinuteStatsTests(unittest.TestCase):
         self.assertTrue(stale["stale"])
 
     def test_quality_gate_for_long_term(self):
+        """新门槛：>=60 个交易日、分钟完整度 >=80%、成交量覆盖率 >=80%。
+        精确候选价必须见过完整月份，5 天全量数据不再算数。"""
+        days = [(date(2026, 8, 1) + timedelta(days=i)).isoformat() for i in range(60)]
+        now = datetime(2026, 10, 26, 15, 10, tzinfo=SH)
+
+        # 5 天全量：天数不够
         rows = []
         for index in range(5):
             rows.extend(minutes_for_day(f"2026-10-{20 + index:02d}", ["1.00"] * 240))
-        stats = research.minute_stats(rows, now=datetime(2026, 10, 26, 15, 10, tzinfo=SH))
-        self.assertTrue(stats["quality"]["enoughForLongTerm"])
+        stats = research.minute_stats(rows, now=now)
+        self.assertFalse(stats["quality"]["enoughForLongTerm"], "5 天在新门槛下不够")
 
-        thin = minutes_for_day("2026-10-20", ["1.00"] * 10)
-        thin_stats = research.minute_stats(thin, now=datetime(2026, 10, 20, 15, 10, tzinfo=SH))
-        self.assertFalse(thin_stats["quality"]["enoughForLongTerm"], "只有 1 天、10 分钟不能算够算长期结论")
+        # 60 天全量 + 有成交量：够
+        rows = []
+        for day in days:
+            rows.extend(minutes_for_day(day, ["1.00"] * 240))
+        stats = research.minute_stats(rows, now=now)
+        self.assertTrue(stats["quality"]["enoughForLongTerm"])
+        self.assertGreaterEqual(stats["quality"]["volumeCoverage"], 0.8)
+
+        # 60 天但每天只有 10 分钟：完整度不够
+        rows = []
+        for day in days:
+            rows.extend(minutes_for_day(day, ["1.00"] * 10))
+        stats = research.minute_stats(rows, now=now)
+        self.assertFalse(stats["quality"]["enoughForLongTerm"], "分钟稀稀拉拉不能算够")
+
+        # 60 天全量但成交量字段缺失：覆盖率不够
+        rows = []
+        for day in days:
+            rows.extend(minutes_for_day(day, ["1.00"] * 240, volumes=[None] * 240))
+        stats = research.minute_stats(rows, now=now)
+        self.assertFalse(stats["quality"]["enoughForLongTerm"], "成交量缺失不能算够")
 
     def test_empty_input_is_honest(self):
         stats = research.minute_stats([], now=datetime(2026, 10, 20, 15, 10, tzinfo=SH))

@@ -165,6 +165,7 @@ enum NextOpportunityScanner {
     /// 不预测涨跌；不交易是正常结论。
     static func scan(book: NextBook, quotes: [String: NextQuote], daily: [String: [NextChartSample]],
                      intraday: [String: [NextChartSample]], rules: [String: NextInstrumentRules],
+                     orderBooks: [String: NextOrderBookSnapshot] = [:],
                      goal: NextGoal, nasAvailable: Bool, profile: NextInvestorProfile? = nil,
                      research: [String: NextNASResearch] = [:],
                      news: [String: [NextNewsInput]] = [:],
@@ -231,11 +232,13 @@ enum NextOpportunityScanner {
             case .tTrade:
                 var result = NextTradeTPlanner.plan(kind: .reverse, book: book, quote: quote, daily: bars,
                                                     intraday: minutes, rules: rules[position.code],
+                                                    orderBook: orderBooks[position.code],
                                                     caps: caps, now: now)
                 if case let .insufficientData(_, reasons) = result {
                     // 反T做不了（如可卖份额不足）时，尝试正T。
                     let forward = NextTradeTPlanner.plan(kind: .forward, book: book, quote: quote, daily: bars,
                                                          intraday: minutes, rules: rules[position.code],
+                                                         orderBook: orderBooks[position.code],
                                                          caps: caps, now: now)
                     if case .ready = forward {
                         result = forward
@@ -255,6 +258,7 @@ enum NextOpportunityScanner {
             case .grid:
                 let result = NextGridPlanner.plan(book: book, quote: quote, daily: bars, gridCheck: gridCheck,
                                                   rules: rules[position.code], nasRange: nasRange,
+                                                  orderBook: orderBooks[position.code],
                                                   caps: caps, now: now)
                 gridPlan = result
                 if case let .ready(plan) = result {
@@ -347,13 +351,16 @@ enum NextOpportunityScanner {
                 ? "今天有 \(actionable.count) 只值得关注：\(names)"
                 : "今天有 \(actionable.count) 只出现机会，其中 \(heldBack.count) 只低于你通常执行的门槛：\(names)"
         }
+        // 休市日必须明说：否则「今天有 N 只值得关注」会被读成「今天可以动手」。
+        let closedSessionNote = NextMarketClock.isRegularSession(now) ? "" : "\(NextMarketClock.marketStatusText(now))"
+        let finalSummary = closedSessionNote.isEmpty ? summary : "\(closedSessionNote)。\(summary)"
         let noAction = ranked.filter { !$0.isActionable }.map { "\($0.name)：\($0.strategy.rawValue)" }.joined(separator: "；")
         let dataState: String
         if quotes.isEmpty { dataState = "断网/无行情 · 仅本地缓存与离线规则" }
         else if nasAvailable { dataState = "NAS 长期研究可用 · 实时行情正常" }
         else { dataState = "NAS 离线 · 仅实时行情 + 本地规则，长期统计缺失" }
 
-        return NextDailyGuidance(generatedAt: now, items: ranked, summary: summary,
+        return NextDailyGuidance(generatedAt: now, items: ranked, summary: finalSummary,
                                  noActionSummary: noAction.isEmpty ? "全部持仓都可以继续持有。" : "不建议操作：" + noAction,
                                  dataState: dataState)
     }
@@ -381,7 +388,9 @@ enum NextDecisionContextBuilder {
         var holdings: [String] = []
         for position in book.positions where position.units > 0 {
             let quote = quotes[position.code]
-            let priceText = quote.map { "现价 ¥\(NextMoney.text($0.price, digits: 3))" } ?? "无报价"
+            let priceText = quote.map {
+                "现价 ¥\(NextMoney.text($0.price, digits: 3))，来源 \($0.source)，行情时间 \($0.time.formatted(date: .numeric, time: .shortened))，\($0.isFresh(at: now) ? "新鲜" : "已过期/需核对")"
+            } ?? "无报价"
             let weight: String
             if let total = book.total(using: quotes), total > 0, let quote {
                 weight = "，占比 \(NextNum.text(NextNum.double(quote.price * Decimal(position.units) / total * 100), digits: 1))%"
@@ -405,6 +414,7 @@ enum NextDecisionContextBuilder {
         }
         let promptBlock = """
         你是观盘顾问，一位只基于用户真实持仓工作的投资顾问。以下是本次统一决策上下文，只能在此基础上给建议：
+        【交易时段】\(NextMarketClock.marketStatusText(now))
         【账户】现金 ¥\(NextMoney.text(book.cash))；持仓 \(book.positions.count) 只。
         【持仓】\(holdings.joined(separator: "\n"))
         【市场状态与候选计划】\(planLines.joined(separator: "\n"))
@@ -419,6 +429,7 @@ enum NextDecisionContextBuilder {
         4. 如果本次判断与上次不同，必须指出是哪个数据变化导致（行情、状态、新闻或持仓）；
         5. 投资画像只决定「推荐优先级」和「表达方式」，绝不能修改行情事实、不能降低数据质量与风险门槛、不能为了迎合偏好制造交易机会；当机会低于画像门槛时，如实说「有机会但低于你的执行门槛，因此不主动推荐」；
         6. 不要输出画像里的原始成交明细，只引用上面的结论。
+        7. 休市日（周末与法定节假日）不得建议「今天成交」：涉及做T、网格、挂单的计划只能面向下一交易日，并说明原因。
         """
         return NextDecisionContext(generatedAt: now, guidance: guidance, holdingsLines: holdings,
                                    nasResearchLines: nasResearchLines, newsLines: newsLines,

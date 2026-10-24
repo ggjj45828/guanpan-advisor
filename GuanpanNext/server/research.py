@@ -68,7 +68,8 @@ def group_by_day(rows):
         if stamp is None or price is None or price <= 0:
             continue
         days.setdefault(stamp.date().isoformat(), []).append(
-            {"at": stamp, "price": price, "volume": _d(row.get("volume"), Decimal("0")),
+            {"at": stamp, "price": price, "volumeObserved": _d(row.get("volume")) is not None,
+             "volume": _d(row.get("volume"), Decimal("0")),
              "iopv": _d(row.get("iopv"))})
     for day in days.values():
         day.sort(key=lambda item: item["at"])
@@ -113,6 +114,9 @@ def day_metrics(day_rows, expected=MINUTES_PER_DAY):
         "firstAt": day_rows[0]["at"],
         "lastAt": day_rows[-1]["at"],
         "hasVolume": total_volume > 0,
+        "volumeCoverage": sum(1 for item in day_rows if item.get("volumeObserved")) / len(day_rows),
+        "vwapHighDeviation": float((high / vwap - 1) if vwap > 0 else 0),
+        "vwapLowDeviation": float((low / vwap - 1) if vwap > 0 else 0),
     }
 
 
@@ -145,12 +149,15 @@ def window_stats(days, window, now=None):
         "expectedDays": window,
         "dayCoverage": round(len(selected) / window, 4),
         "minuteCoverage": round(sum(d["completeness"] for d in selected) / len(selected), 4),
+        "volumeCoverage": round(sum(d["volumeCoverage"] for d in selected) / len(selected), 4),
         "vwap": str(window_vwap.quantize(Decimal("0.0001"))),
         "closeVsVwapPercent": (round(float((last["close"] - window_vwap) / window_vwap * 100), 3)
                                if window_vwap > 0 else None),
         "amplitudeMedianPercent": round(median([d["amplitudePercent"] for d in selected]), 3),
         "amplitudeP80Percent": round(float(_quantile([d["amplitudePercent"] for d in selected], 0.8) or 0), 3),
         "roundTripsMedian": round(median([d["roundTrips"] for d in selected]), 2),
+        "vwapHighDeviationMedian": round(median([d["vwapHighDeviation"] for d in selected]), 5),
+        "vwapLowDeviationMedian": round(median([d["vwapLowDeviation"] for d in selected]), 5),
         "support": str(min(lows).quantize(Decimal("0.0001"))),
         "resistance": str(max(highs).quantize(Decimal("0.0001"))),
         "supportP10": str(Decimal(str(round(float(_quantile([float(v) for v in lows], 0.1) or 0), 4)))),
@@ -202,6 +209,8 @@ def minute_stats(rows, now=None, windows=WINDOWS):
         if stats:
             windows_out[str(window)] = stats
     total_minutes = sum(d["minutes"] for d in days)
+    volume_coverage = (sum(d["volumeCoverage"] * d["minutes"] for d in days) / total_minutes
+                       if total_minutes else 0.0)
     return {
         "source": "NAS 1-minute archive",
         "days": len(days),
@@ -212,9 +221,11 @@ def minute_stats(rows, now=None, windows=WINDOWS):
         "quality": {
             "days": len(days),
             "minuteCoverage": round(sum(d["completeness"] for d in days) / len(days), 4) if days else 0.0,
+            "volumeCoverage": round(volume_coverage, 4),
             "hasVolume": any(d["hasVolume"] for d in days),
-            # 5 天以上、且分钟覆盖 ≥60%，才算"够算长期结论"。
-            "enoughForLongTerm": len(days) >= 5 and (sum(d["completeness"] for d in days) / len(days)) >= 0.6 if days else False,
+            # 精确候选价需要至少60个有效交易日、分钟与成交量都达到80%覆盖。
+            "enoughForLongTerm": len(days) >= 60 and
+                (sum(d["completeness"] for d in days) / len(days)) >= 0.8 and volume_coverage >= 0.8 if days else False,
         },
         "windows": windows_out,
         "daily": [

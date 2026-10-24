@@ -89,7 +89,7 @@ enum DeepSeekMobile {
             "thinking": ["type": "disabled"],
             "max_tokens": 4096,
             "messages": [
-                ["role": "system", "content": "你是观盘 Next 的谨慎投资研究员，不是涨跌预测器。分析任何标的都严格遵循三步：①先判断资产本身是否值得长期投资；②再判断当前价格与估值是否合适；③最后结合用户真实持仓、成本、仓位占比与现金需求，判断整个账户是否适合这笔交易。请覆盖七个维度：基本面与估值、技术趋势、资金与流动性、新闻与事件、宏观经济、组合适配性、交易执行条件。输出用中文，并严格按此结构：综合判断（持有/观察/分批买入/暂停加仓/减仓/退出）+ 主要理由 + 关键证据 + 主要风险 + 反方观点 + 数据缺口与置信度 + 失效条件与下次复核触发点。区分长期投资与短期机动交易，承认不确定性，不保证收益、不预测顶底、不把缺失数据当零、不编造 IOPV/费率/盘口，绝不自动下单。"],
+                ["role": "system", "content": "你是手机端唯一的观盘 AI 私人投资顾问。输入是一份已由应用规则引擎生成的统一决策上下文，账户事实只认其中的真实持仓。NAS仅提供长期数据研究，不是另一个顾问。必须先读市场状态、行情时间、NAS样本质量、新闻、组合风险和投资画像，再用中文给出一份统一结论。具体交易动作只能沿用上下文中的规则引擎策略和候选价格/份额；候选不存在、被标为数据不足、行情时间仅为接收时间或规则未核实时，必须明确说无法给出可靠挂单价。绝不能新算或编造价格、份额、收益、盘口、IOPV或交易规则。结论可以是做T、网格、持有、等待、暂停加仓、减仓或不交易；不交易是正常结论。说明依据、风险、计划期限/失效条件及与上次判断相比发生的变化。画像只用于排序与解释，不得降低门槛或迎合偏好造机会。未真实成交前不改写账本，不模拟收益，不自动下单。"],
                 ["role": "user", "content": prompt]
             ]
         ])
@@ -121,54 +121,11 @@ enum DeepSeekMobile {
     }
 }
 
-/// NAS 顾问接口访问口令（r31 安全加固）：与 NAS 部署目录 .env 的 GUANPAN_ADVISOR_TOKEN 相同。
-/// 只存本机钥匙串，不进入账本、不上传任何第三方。
-enum AdvisorAccessToken {
-    private static let service = "com.guanpan.advisor.ios.nas"
-    private static let account = "advisor-access-token"
-
-    static func load() -> String? { read() }
-    static func save(_ token: String) throws {
-        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.count >= 32 else { throw DeepSeekError.invalidAdvisorToken }
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = Data(value.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        item[kSecAttrSynchronizable as String] = false
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw DeepSeekError.keychain(status) }
-    }
-    static func delete() throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw DeepSeekError.keychain(status) }
-    }
-    private static func read() -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account,
-                                    kSecReturnData as String: true,
-                                    kSecMatchLimit as String: kSecMatchLimitOne,
-                                    kSecAttrSynchronizable as String: false]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-}
-
 enum DeepSeekError: LocalizedError {
-    case invalidKey, invalidAdvisorToken, invalidProfile, unauthorized, rateLimited, serviceUnavailable, invalidResponse, network, http(Int), keychain(OSStatus)
+    case invalidKey, invalidProfile, unauthorized, rateLimited, serviceUnavailable, invalidResponse, network, http(Int), keychain(OSStatus)
     var errorDescription: String? {
         switch self {
         case .invalidKey: "请输入 DeepSeek API key。"
-        case .invalidAdvisorToken: "NAS 顾问访问口令至少需要 32 位。"
         case .invalidProfile: "请选择有效的 DeepSeek 模型。"
         case .unauthorized: "API key 无效或没有该模型权限。"
         case .rateLimited: "请求频率或账户额度受限，请检查 DeepSeek 账户。"

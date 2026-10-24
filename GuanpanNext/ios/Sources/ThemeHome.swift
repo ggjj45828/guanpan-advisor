@@ -544,8 +544,13 @@ private struct HomeIndexBoard: View {
         do {
             let all = try await GlobalIndexFeed.fetch()
             if let sh = all.first(where: { $0.symbol == "s_sh000001" }) {
+                // 上证也补 30 点日 K 迷你走势：三张卡的有无走势必须一致，不能一张有线两张空白。
+                var spark: [Double] = []
+                if let daily = try? await NextMarketDataService.fetchDaily(code: "000001") {
+                    spark = daily.value.samples.suffix(30).compactMap { $0.close > 0 ? NextNum.double($0.close) : nil }
+                }
                 result.append(IndexRow(id: "000001", name: "上证", fullName: "上证指数", price: sh.price,
-                                       percent: sh.price > 0 ? sh.changePercent : nil, spark: []))
+                                       percent: sh.price > 0 ? sh.changePercent : nil, spark: spark))
             }
         } catch { problems.append("上证指数取不到") }
         // 深证成指 / 创业板指走多源报价链 + 日 K 迷你走势
@@ -986,7 +991,12 @@ private struct EditorialHome: View {
     private var footerRow: some View {
         HStack(spacing: 8) {
             Button { model.requestTab(.decision, route: .decision(nil)) } label: {
-                footerChip("sparkles", "AI 指导 · 新闻解读")
+                footerChip("sparkles", "AI 指导")
+            }
+            .buttonStyle(.plain)
+            // 新闻是独立路由：以前和 AI 指导混在一个 chip 里，点进去只会到决策页，看不到新闻列表。
+            Button { model.requestTab(.decision, route: .news) } label: {
+                footerChip("newspaper", "新闻")
             }
             .buttonStyle(.plain)
             Button { model.requestTab(.market, route: nil) } label: {
@@ -1035,6 +1045,7 @@ private struct ModernHome: View {
                 HomeIndexBoard(style: .cards)
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: true)
                 LeadOpportunityCard(snapshot: snapshot, style: .modern)
+                newsRow
                 nasRow
             }
             .padding(.horizontal, 14)
@@ -1116,6 +1127,22 @@ private struct ModernHome: View {
         .background(p.paper, in: RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous).stroke(p.line, lineWidth: 0.8))
     }
+
+    /// 新闻入口：现代主题首页以前没有任何路径能到新闻页。
+    private var newsRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "newspaper.fill").font(.system(size: 12)).foregroundStyle(p.chartViolet)
+            Text("新闻与市场解读").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.ink)
+            Spacer()
+            Button { model.requestTab(.decision, route: .news) } label: {
+                Text("查看").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(p.paper, in: RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.cardRadius, style: .continuous).stroke(p.line, lineWidth: 0.8))
+    }
 }
 
 // MARK: - 3. 交易仪表盘
@@ -1124,7 +1151,6 @@ private struct DashboardHome: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.gp) private var p
     let snapshot: HomeSnapshot
-    @State private var tab = 0
 
     var body: some View {
         ScrollView {
@@ -1145,19 +1171,25 @@ private struct DashboardHome: View {
 
     private var tabHeader: some View {
         HStack(spacing: 14) {
-            ForEach(Array(["市场", "持仓", "AI 指导", "新闻"].enumerated()), id: \.offset) { index, title in
-                Button { tab = index } label: {
-                    VStack(spacing: 3) {
-                        Text(title).font(.system(size: 13, weight: index == tab ? .bold : .medium))
-                            .foregroundStyle(index == tab ? p.ink : p.muted)
-                        Capsule().fill(index == tab ? p.primary : Color.clear).frame(width: 18, height: 2)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
+            // 以前四个 tab 只动下划线、不换内容（死 tab）。现在全部导航到真实目的地：
+            // 市场→行情页签，持仓→资产页签，AI 指导→决策页签，新闻→决策页签内的新闻路由。
+            dashboardTab("市场") { model.requestTab(.market, route: nil) }
+            dashboardTab("持仓") { model.requestTab(.assets, route: nil) }
+            dashboardTab("AI 指导") { model.requestTab(.decision, route: .decision(nil)) }
+            dashboardTab("新闻") { model.requestTab(.decision, route: .news) }
             Spacer(minLength: 4)
             HomeTopBar()
         }
+    }
+
+    private func dashboardTab(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(p.ink)
+                Capsule().fill(p.primary.opacity(0.45)).frame(width: 18, height: 2)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var opportunityBoard: some View {
@@ -1184,8 +1216,9 @@ private struct DashboardHome: View {
         HStack(spacing: 8) {
             Text("新闻与市场解读").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.ink)
             Spacer()
-            Button { model.requestTab(.decision, route: .decision(nil)) } label: {
-                Text("进入 AI 对话").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
+            // 文案写的是「新闻与市场解读」，落点也必须是新闻路由；以前进的是 AI 对话。
+            Button { model.requestTab(.decision, route: .news) } label: {
+                Text("查看").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.primary)
             }
             .buttonStyle(.plain)
         }
@@ -1309,6 +1342,9 @@ private struct MagazineHome: View {
                 LeadOpportunityCard(snapshot: snapshot, style: .magazine)
                 HairlineRule()
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: false)
+                HairlineRule()
+                nasRow
+                newsRow
                 if !snapshot.profileTags.isEmpty {
                     HStack(spacing: 6) {
                         Text("AI 认为你是").font(.system(size: 10)).foregroundStyle(p.muted)
@@ -1352,6 +1388,35 @@ private struct MagazineHome: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(p.heroSurface, in: RoundedRectangle(cornerRadius: p.heroRadius, style: .continuous))
+    }
+
+    /// NAS 后台研究入口：杂志主题以前只字未提 NAS，用户不知道后台研究员在不在线。
+    private var nasRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 12)).foregroundStyle(p.forest)
+            Text("NAS 长期研究：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
+            Spacer()
+            Text(snapshot.nasConfigured ? "在线" : "未连")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    /// 新闻入口：杂志主题以前没有任何路径能到新闻页。
+    private var newsRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "newspaper.fill").font(.system(size: 12)).foregroundStyle(p.chartViolet)
+            Button { model.requestTab(.decision, route: .news) } label: {
+                Text("新闻与市场解读").font(.system(size: 11, weight: .semibold)).foregroundStyle(p.ink)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(p.muted)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 
@@ -1411,6 +1476,8 @@ private struct PuzzleHome: View {
                         }
                     }
                 }
+                // 指数板：拼图主题以前完全没有指数信息，用户要看大盘得自己切到行情页。
+                HomeIndexBoard(style: .tiles)
                 HStack(spacing: 10) {
                     positionTile(snapshot.positions.first, tone: tones[2], toneIndex: 2)
                     positionTile(snapshot.positions.count > 1 ? snapshot.positions[1] : nil, tone: tones[3], toneIndex: 3)
@@ -1437,9 +1504,18 @@ private struct PuzzleHome: View {
                             Text("NAS 状态").font(.system(size: 9.5)).foregroundStyle(p.muted)
                             Text(snapshot.nasText).font(.system(size: 13, weight: .heavy, design: .rounded))
                                 .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted)
-                            Text("新闻与市场解读").font(.system(size: 9)).foregroundStyle(p.muted)
+                            // 文案必须和落点一致：这里讲的是后台研究员（数据/研究/新闻源），不是第二顾问。
+                            Text("后台研究归档 · 不构成第二建议").font(.system(size: 9)).foregroundStyle(p.muted)
+                            // 拼图主题的新闻入口收在这块砖里：整卡是状态展示，新闻走真实路由。
+                            Button { model.requestTab(.decision, route: .news) } label: {
+                                HStack(spacing: 3) {
+                                    Text("新闻与市场解读").font(.system(size: 9, weight: .semibold)).foregroundStyle(p.primary)
+                                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .bold)).foregroundStyle(p.primary)
+                                }
+                            }
+                            .buttonStyle(.plain)
                         }
-                    } action: { model.requestTab(.decision, route: .decision(nil)) }
+                    }
                 }
                 if !snapshot.profileTags.isEmpty {
                     Button { model.push(.profile, in: .decision) } label: {
