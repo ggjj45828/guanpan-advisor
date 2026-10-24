@@ -1527,33 +1527,28 @@ struct LocalPreferences: Codable {
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
-    /// 日 K 多源链：NAS（部署服务的缓存口径）优先，失败自动直连 腾讯 → 东财 → 新浪。
-    /// 任一源成功即写入缓存；全部失败才记录错误——不再因为「NAS 取不到」就没有日 K。
-    /// 旧数据不覆盖新数据：新结果的最新样本不晚于缓存时，保留原缓存。
+    /// 日 K 多源链（2026-10-24 平衡调整）：**手机直连优先**（腾讯 → 东财 → 新浪），
+    /// 避免 NAS 拉的历史日 K 再经隧道同步给手机、浪费穿透流量。
+    /// 直连全失败且配置了 NAS 时，才回退 NAS 归档（含 >640 天超长历史）兜底。
+    /// 旧数据不覆盖新数据：新结果最新样本不晚于缓存时，保留原缓存。
     func refreshDaily(_ code: String, required: Bool = false) async {
-        if !preferences.nasBaseURL.isEmpty {
-            do {
-                let dataset = try await NextNASService.fetchDaily(code: code, baseURL: preferences.nasBaseURL)
-                dailyErrors.removeValue(forKey: code)
-                if shouldReplaceDayDataset(chartData["\(code):day"], with: dataset) { chartData["\(code):day"] = dataset }
-                return
-            } catch let nasFailure {
-                do {
-                    let direct = try await NextMarketDataService.fetchDaily(code: code)
-                    dailyErrors.removeValue(forKey: code)
-                    if shouldReplaceDayDataset(chartData["\(code):day"], with: direct.value) { chartData["\(code):day"] = direct.value }
-                } catch {
-                    dailyErrors[code] = "NAS 日 K 失败：\(nasFailure.localizedDescription)；直连也失败：\(error.localizedDescription)"
-                }
-                return
-            }
-        }
         do {
             let direct = try await NextMarketDataService.fetchDaily(code: code)
             dailyErrors.removeValue(forKey: code)
             if shouldReplaceDayDataset(chartData["\(code):day"], with: direct.value) { chartData["\(code):day"] = direct.value }
-        } catch {
-            dailyErrors[code] = error.localizedDescription
+            return
+        } catch let directFailure {
+            guard !preferences.nasBaseURL.isEmpty else {
+                dailyErrors[code] = directFailure.localizedDescription
+                return
+            }
+            do {
+                let dataset = try await NextNASService.fetchDaily(code: code, baseURL: preferences.nasBaseURL)
+                dailyErrors.removeValue(forKey: code)
+                if shouldReplaceDayDataset(chartData["\(code):day"], with: dataset) { chartData["\(code):day"] = dataset }
+            } catch {
+                dailyErrors[code] = "直连日 K 失败：\(directFailure.localizedDescription)；NAS 也失败：\(error.localizedDescription)"
+            }
         }
     }
 
