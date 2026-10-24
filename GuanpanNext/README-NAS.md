@@ -18,7 +18,7 @@
    docker compose -p guanpan-advisor logs --tail=100
    ```
 
-4. 打开 `http://NAS内网地址:8786/health`，确认 `codeVersion` 为本包版本，并核对 `workers` 只有三条采集线程：`daily-archive` / `minute-archive` / `dividend-archive`。网页是 `http://NAS内网地址:8786/`。
+4. 打开 `http://NAS内网地址:8786/health`，确认 `codeVersion` 为本包版本，并核对 `workers` 只有四条采集线程：`daily-archive` / `minute-archive` / `cross-market` / `dividend-archive`。网页是 `http://NAS内网地址:8786/`。
 5. 首次部署库为空。iOS 设置只保存一个 NAS 地址；填入 `http://NAS内网地址:8786`，由用户主动下载/上传并核对账本。
 
 `update.sh` 只会重建当前目录内名字严格为 `guanpan-advisor` 的 Compose 项目，不会搜索、停止或覆盖其它 Guanpan 容器。升级请先备份 `guanpan_advisor_data`。
@@ -56,10 +56,36 @@ docker exec -it <容器名> python diagnose.py
 | `GET /v1/market/dividends/{code}` | 分红事件（已核实与推算分开标注） |
 | `GET /v1/news/{code}` | 新闻标题（Google News RSS） |
 | `GET /v1/research/{code}` | 分时统计；`factors`/`ai` **恒为 null**（研究已归手机端），`researchOwner: mobile` |
+| `GET /v1/cross/series?market=&days=` | 跨市场快照归档（日经/KOSPI/恒生科技/纳指），**只给原始观测，不给任何统计结论** |
+| `GET /v1/cross/availability` | 每个市场归档了多少个交易日、够不够 30 天；不够时手机端必须显示「暂无稳定领先关系」 |
 | `GET /v1/real/books/main` | 真实账本正文 |
 | `GET /v1/real/books/main?meta=1` | **只回 `revision` 与 `hasBook`，不带正文**。手机做连通性检查与上传前修订核对走这个 |
 | `POST /v1/real/books/main` | 上传账本（需 `mode: manual-confirmed` + `expectedRevision` 防覆盖） |
 | `/v1/ai/*`、`/v1/advisor/*`、`/v1/backtests/*`、`/v1/simulations/*` | 已退役，恒返回 410 |
+
+## 跨市场快照归档（116–145 的数据来源）
+
+日经225 / 韩国KOSPI / 恒生科技 / 纳斯达克100 这几个源**只给快照，不给分钟线**。
+所以「日韩午休修复 → A股午后修复」这条经验要能被证伪，只能由 NAS 自己按分钟攒历史。
+
+- 线程 `cross-market`：北京时间 **08:00–16:10、每分钟一次**，一次请求覆盖 4 个符号
+  （覆盖日韩 09:00–15:30 与港股 09:30–16:00 的完整交易时段；纳指此时是收盘后的最后价，
+  因此每天只有很少几个点——这是如实记录，不在夜里空转凑点数）。
+- 表 `cross_market_samples(market, stamp, price, change_percent, source, observed_at)`，
+  主键 `(market, stamp)`，重复采到同一时刻只覆盖不新增。
+- **源时间过期即丢弃**（超过 300 秒）：收盘后源会一直返回最后成交价，
+  把它当成「新的一分钟」存进去，会让回放凭空多出一段横盘，结论全歪。
+  丢弃原因会写进 `workers` 的 `cross-market` 状态里（`staleSource` / `noSourceTime` / `sourceInFuture`）。
+- 日期按**各市场自己的时区**切分：用上海时区切美股，会把美股一个交易日劈成两天。
+
+想确认攒够没有，直接看：
+
+```bash
+curl -s http://NAS内网地址:8786/v1/cross/availability | python3 -m json.tool
+```
+
+`sufficient: false` 就是不够（少于 30 个交易日）。**这时候手机上不该出现任何「日韩领先 A股」的结论**——
+不是保守，而是 3 天样本算出来的「胜率 67%」跟抛硬币没有区别。
 
 ## 未完成 / 部署前需知
 
