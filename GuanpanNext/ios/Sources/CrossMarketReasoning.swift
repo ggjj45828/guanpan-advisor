@@ -345,11 +345,11 @@ enum NextLeadSourceRanker {
             if let existing = weights[rolling.lead], existing.weight >= rolling.weight { continue }
             weights[rolling.lead] = rolling
         }
-        var entries: [Entry] = []
+        var entries: [NextLeadSourceRanking.Entry] = []
         for study in studies where study.followCode == code {
             guard let best = study.best else { continue }
             let rolling = weights[study.lead]
-            let entry = Entry(
+            let entry = NextLeadSourceRanking.Entry(
                 lead: study.lead,
                 minutes: best.minutes,
                 correlation: best.correlation,
