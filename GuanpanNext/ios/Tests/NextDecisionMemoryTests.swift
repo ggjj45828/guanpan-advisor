@@ -116,6 +116,141 @@ final class NextDecisionMemoryTests: XCTestCase {
         XCTAssertTrue(review.note.contains("未记录真实成交"))
     }
 
+    // MARK: - 143 闭环记录并入决策记忆
+
+    /// 一个拦截态的闭环产出：已验证领先关系 + 午休修复信号 + 已确认假设。
+    private func interceptOutcome(code: String = "513520", at: Date? = nil) -> NextLoopOutcome {
+        let stamp = at ?? now
+        return NextLoopOutcome(
+            code: code, at: stamp,
+            gate: .intercept(reason: "跨市场信号（已验证领先关系）作为风险拦截器：暂停已有候选计划并要求重算"),
+            signal: NextLoopSignal(kind: .lunchRepair, market: .japan,
+                                   evidence: "日本午休期间修复 +1.20 个百分点", strength: 1.2),
+            hypothesis: NextCrossHypothesis(code: code, createdAt: stamp.addingTimeInterval(-40 * 60),
+                                            confirmDeadline: stamp.addingTimeInterval(30 * 60),
+                                            statement: "午后修复", overseasEvidence: ["日本午休修复"]),
+            chain: NextReasoningChain(code: code, steps: []),
+            explanation: ["假设「午后修复」，证据：日本午休期间修复 +1.20 个百分点",
+                          "「午休修复」来自已通过逐 ETF 长期验证 + 预注册前瞻复现的领先关系"])
+    }
+
+    /// 什么都没评估的一天：没有信号也没有假设。闭环的正式结论是「今天没有达到门槛的信号」。
+    private func quietOutcome(code: String = "513520", at: Date? = nil) -> NextLoopOutcome {
+        NextLoopOutcome(code: code, at: at ?? now,
+                        gate: .clear(reason: "没有达到门槛的跨市场信号"),
+                        signal: nil, hypothesis: nil,
+                        chain: NextReasoningChain(code: code, steps: []),
+                        explanation: ["跨市场今天没有达到门槛的信号：不参与计划决策，不生成任何计划"])
+    }
+
+    private func loopQuote() -> NextQuote {
+        NextQuote(code: "513520", name: "日经ETF", price: Decimal(string: "1.400")!,
+                  previousClose: Decimal(string: "1.396")!, time: now, source: "test")
+    }
+
+    /// 闭环「什么都没评估」的一天不落盘：记忆页不该被每天每只股票的「无信号」填满。
+    func testLoopOutcomeWithoutSignalOrHypothesisIsNotRemembered() {
+        let records = NextDecisionMemory.loopRecords(
+            from: [quietOutcome()], names: ["513520": "日经ETF"], quotes: [:],
+            unitsFor: { _ in 0 }, sessionEndFor: { NextMarketClock.sessionClose($0) })
+        XCTAssertTrue(records.isEmpty, "没有信号也没有假设的一天不该占记忆")
+    }
+
+    /// 落盘的闭环记录必须搬「当时」的事实：闸门、假设标题、当时本地价、逐行解释；
+    /// 并且必须没有限价与份额——跨市场不生成计划。
+    func testLoopRecordCapturesGateStatementAndReferencePrice() {
+        let outcome = interceptOutcome()
+        let records = NextDecisionMemory.loopRecords(
+            from: [outcome], names: ["513520": "日经ETF"], quotes: ["513520": loopQuote()],
+            unitsFor: { _ in 10_000 }, sessionEndFor: { NextMarketClock.sessionClose($0) })
+        guard let record = records.first else { return XCTFail("有信号又有假设时必须落盘") }
+        XCTAssertEqual(record.origin, .crossLoop)
+        XCTAssertEqual(record.code, "513520")
+        XCTAssertEqual(record.snapshot.state, "风险拦截 · 暂停并需重算")
+        XCTAssertEqual(record.snapshot.headline, outcome.headline)
+        XCTAssertEqual(record.snapshot.price, "1.400", "当时本地价必须原样留下，供事后核对")
+        XCTAssertEqual(record.snapshot.quoteSource, "test")
+        XCTAssertEqual(record.snapshot.units, 10_000)
+        XCTAssertEqual(record.snapshot.evidence, outcome.explanation, "逐行解释必须全文保留")
+        XCTAssertEqual(record.snapshot.risks, [outcome.gate.reason])
+        XCTAssertNil(record.snapshot.limitPrice, "跨市场不生成计划，闭环记录没有限价")
+        XCTAssertNil(record.snapshot.limitUnits, "闭环记录没有份额")
+        XCTAssertEqual(record.snapshot.confidenceLevel, "低", "闭环结论只作风险上下文，置信度照实写低")
+        XCTAssertEqual(record.snapshot.validUntil, NextMarketClock.sessionClose(now),
+                       "闭环记录的自然终点是当日收盘")
+        XCTAssertEqual(record.outcome, .pending)
+        XCTAssertNil(record.review.filledPrice, "没有任何自动成交路径")
+    }
+
+    /// 没有报价时不编数字：price 留空，由界面说「无报价」。
+    func testLoopSnapshotWithoutQuoteLeavesPriceEmpty() {
+        let outcome = interceptOutcome()
+        let snapshot = NextDecisionMemory.loopSnapshot(outcome: outcome, quote: nil, units: 0,
+                                                       validUntil: NextMarketClock.sessionClose(now))
+        XCTAssertNil(snapshot.price)
+        XCTAssertNil(snapshot.quoteSource)
+        XCTAssertEqual(snapshot.headline, outcome.headline, "没有报价不影响结论与解释落盘")
+    }
+
+    /// 同一天同一只证券：指导记录与闭环记录是两件不同的事实，都必须留着。
+    func testLoopRecordAndGuidanceRecordCoexistSameDaySameCode() {
+        let guidance = record(snapshot())
+        let loop = NextDecisionMemory.loopRecords(
+            from: [interceptOutcome(code: "159941")], names: ["159941": "纳指ETF"],
+            quotes: [:], unitsFor: { _ in 0 }, sessionEndFor: { NextMarketClock.sessionClose($0) })[0]
+        let merged = NextDecisionMemory.merge(existing: [], incoming: [guidance, loop])
+        XCTAssertEqual(merged.count, 2, "计划建议与跨市场风险姿态是同一天的两件事，不能互相吞掉")
+        XCTAssertTrue(merged.contains { $0.origin == .guidance })
+        XCTAssertTrue(merged.contains { $0.origin == .crossLoop })
+    }
+
+    /// 同一天同一来源的闭环记录只留一条：闸门或标题变了写改判轨迹，「当时」的快照不改。
+    func testLoopRecordsDedupPerDayAndRecordRevision() {
+        let first = NextDecisionMemory.loopRecords(
+            from: [interceptOutcome()], names: ["513520": "日经ETF"], quotes: [:],
+            unitsFor: { _ in 0 }, sessionEndFor: { NextMarketClock.sessionClose($0) })[0]
+        let changedGate = NextLoopOutcome(
+            code: "513520", at: now.addingTimeInterval(600),
+            gate: .clear(reason: "拦截已解除"),
+            signal: NextLoopSignal(kind: .lunchRepair, market: .japan, evidence: "e", strength: 1.2),
+            hypothesis: nil,
+            chain: NextReasoningChain(code: "513520", steps: []),
+            explanation: ["拦截解除"])
+        let second = NextDecisionMemory.loopRecords(
+            from: [changedGate], names: ["513520": "日经ETF"], quotes: [:],
+            unitsFor: { _ in 0 }, sessionEndFor: { NextMarketClock.sessionClose($0) })[0]
+        let merged = NextDecisionMemory.merge(existing: [first], incoming: [second])
+        XCTAssertEqual(merged.count, 1, "同一天同一只同一来源只保留一条")
+        XCTAssertEqual(merged[0].snapshot.state, "风险拦截 · 暂停并需重算", "保留的是当时那一份")
+        XCTAssertEqual(merged[0].revisions.count, 1, "闸门变化必须写进改判轨迹")
+    }
+
+    /// 闭环记录过期时的措辞必须说清「不涉及成交」——不能套用计划那条「未记录到真实成交」。
+    func testLoopRecordExpiresAtSessionEndWithoutImplyingTrade() {
+        let loop = NextDecisionMemory.loopRecords(
+            from: [interceptOutcome()], names: ["513520": "日经ETF"], quotes: [:],
+            unitsFor: { _ in 0 }, sessionEndFor: { NextMarketClock.sessionClose($0) })[0]
+        let result = NextDecisionMemory.expire([loop], at: now.addingTimeInterval(86_400),
+                                               quoteFor: { _ in Decimal(string: "1.400") })
+        XCTAssertEqual(result[0].outcome, .expired)
+        XCTAssertFalse(result[0].outcome.isFilled)
+        XCTAssertTrue(result[0].review.note.contains("不涉及成交"), "闭环记录不是计划：\(result[0].review.note)")
+        XCTAssertFalse(result[0].review.note.contains("未记录到真实成交"))
+    }
+
+    /// 旧备份没有 origin 键：解码时按「今日指导」处理，老用户升级不丢记忆。
+    func testOldBackupWithoutOriginKeyDecodesAsGuidance() {
+        let original = record(snapshot())
+        let data = try! JSONEncoder().encode(original)
+        var json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+        json.removeValue(forKey: "origin")
+        let stripped = try! JSONSerialization.data(withJSONObject: json)
+        let decoded = try! JSONDecoder().decode(NextDecisionRecord.self, from: stripped)
+        XCTAssertEqual(decoded.origin, .guidance)
+        XCTAssertEqual(decoded.code, original.code)
+        XCTAssertEqual(decoded.snapshot.headline, original.snapshot.headline)
+    }
+
     // MARK: - 新闻 → 持仓 → 计划
 
     func testMajorHeadlineInvalidatesReadyTPlan() {

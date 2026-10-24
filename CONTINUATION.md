@@ -1,8 +1,8 @@
 # CONTINUATION.md — 观盘 AI 私人投资顾问（双端：iOS + NAS）
 
 > 本文件依《完整开发、重构、测试与验收总要求》#114/#115 写入：若执行轮次必须结束，把完整状态写于此，下一轮从此续做。
-> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：主链拦截器重构 + 125 汇率数据链 + 防伪相关口径收紧）
-> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（主表 80✅/0🟡/2🟠/0❌；116–146 段 13✅/16🟡/2🟠，合计 113 行：93✅/16🟡/4🟠/0❌）。
+> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：主链拦截器重构 + 125 汇率数据链 + 防伪相关口径收紧 + 143 闭环记录并入决策记忆）
+> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（主表 80✅/0🟡/2🟠/0❌；116–146 段 14✅/15🟡/2🟠，合计 113 行：94✅/15🟡/4🟠/0❌）。
 
 ---
 
@@ -298,6 +298,19 @@ CI 曾抓出 4 项 `NextLeadValidationTests` 失败。**根因不是夹具写错
 
 ### 10.5 构建状态与接手第一件事
 
-- 本机 Windows 无 Swift 工具链：**iOS 编译与测试只能靠 CI**。最后两个提交 `f55d030`（FX 字段映射）与 `2dff65c`（边界用例）的 run 分别是 `40112444461`（被新 push 按并发规则取消）与 `40113385826`（在跑）。
-- **接手第一件事**：确认 run `40113385826`（sha `2dff65c`）四步全 success——`Core logic tests` / `Build unsigned device app` / `UI navigation and gesture tests` / `Theme screenshots`。若 FX 相关用例失败，先看 `NextFXContextTests` 的 provenanceNote 断言与 `NextFXFeed.parse` 透传。
-- 全绿后：①跑 NAS 157 项本机复现（无需 CI）；②按矩阵 Remaining 推进下一批 Partial（126 开盘信息消化仍是 🟠、142 打扰门槛依赖 131）；③数据侧等 NAS 攒够 30 个交易日后再谈「稳定领先关系」——现在显示「暂无」是正确结果。
+- 本机 Windows 无 Swift 工具链：**iOS 编译与测试只能靠 CI**。
+- run `40113385826`（sha `2dff65c`）**失败**，但只败在一处：`testHoldoutGivesIntervalOnlyAtBoundary` 三处断言。根因是**我的算术错误**——199 行按 70/30 恰好切出 60 行留出段（触发/对照各 30）踩满门槛，引擎给了区间，「差一天不给区间」的断言用 199 行是错的。真实边界：196 行才切得出 59 行（触发 29 < 30）→ 连区间都不给；197 行起才给。`cb971f8` 改行数 + 补 `holdoutSessions == 59`/`triggerCount == 29` 断言；该 run 中其余 6 项新用例与全部 FX 用例已通过、Theme screenshots 已 success。
+- **已全绿**：run `40115155097`（sha `cb971f8`）四步全 success——`Core logic tests` / `Build unsigned device app` / `UI navigation and gesture tests` / `Theme screenshots`。至此裁定第八点（FX 字段映射 provisional）、7 项边界用例、矩阵/CONTINUATION 回写全部落地。
+- 教训：无 Swift 编译器时用 Python 干跑复刻引擎能拦下大部分口径错，但 **holdout 的 70/30 切分算术仍靠 CI 才抓到**——干跑脚本必须覆盖切分函数本身，不能只复刻统计量。
+
+### 10.6 143 闭环记录并入决策记忆（cb971f8 之后，本轮收尾）
+
+`NextDecisionMemory.loopRecords` / `loopSnapshot`：闭环每跑一次，把「当时」的结论转成决策记忆条目——闸门状态、假设标题、**当时本地价**（取自真实报价；没有就留空，不拿闭环内部点数凑数）、逐行解释全文、风险=闸门理由。三条口径：
+
+1. **没有信号也没有假设的一天不落盘**：闭环明确说了「今天没有达到门槛的信号」，每天每只股票存一条只会把记忆页变成噪音。记忆记的是「有事发生的日子」。
+2. **有效期 = 当日收盘**（`NextMarketClock.sessionClose`：同日 15:00，与给计划用的 `NextPlanClock.sessionEnd(after:)` 语义相反——那个永远返回未来，这个已过就返回过去，不把当天的记录悄悄延长一天）。收盘后自动迁移「已过期」，措辞写明「只保存当时的闸门与解释，**不涉及成交**」。
+3. **两种事实分开存放**：新增 `NextDecisionOrigin`（guidance / crossLoop），`merge` 按「标的+来源+当天」去重——同一天同一只证券可以同时有一条计划建议和一条跨市场风险记录，合成一条会吞掉其中一个。旧备份无 `origin` 键按「今日指导」解码（显式 `init(from:)` 补默认值），老用户升级不丢记忆。
+
+落盘复用 `decisionMemory` 的 didSet 持久化；`outcome` 恒为待处理、**没有任何自动成交路径**；界面侧闭环记录不提供「我已成交/我放弃了」（没有计划可成交，点了反而是伪造成交事实）。`NextDecisionMemoryTests` 新增 7 项用例。矩阵 143 由 🟡 翻 ✅，全表 113 行 **94✅/15🟡/4🟠/0❌**。
+
+**下一步**：126 开盘信息消化（🟠，需开盘分钟数据）与 142 打扰门槛（🟠，依赖 131）是仅剩的两个未实现项；144 的事后比对尚未接定时任务自动跑。

@@ -118,12 +118,24 @@ struct NextDecisionReview: Codable, Equatable {
     }
 }
 
+/// 决策记忆里两种不同的事实，必须分开存放、分开去重：
+/// - `guidance`：今日指导给出的具体计划建议（可能带限价与份额）；
+/// - `crossLoop`：跨市场闭环当时的闸门与解释（只作风险上下文，没有限价）。
+/// 同一天同一只证券完全可以两者都有——一个是计划建议，一个是跨市场风险姿态，
+/// 合成一条会把其中一个事实吞掉。
+enum NextDecisionOrigin: String, Codable, Equatable {
+    case guidance = "今日指导"
+    case crossLoop = "跨市场闭环"
+}
+
 struct NextDecisionRecord: Codable, Identifiable, Equatable {
     var id = UUID()
     let code: String
     let name: String
     let createdAt: Date
     let snapshot: NextDecisionSnapshot
+    /// 记录来源。旧备份没有这个键，解码时按「今日指导」处理（新增字段不影响老数据）。
+    var origin: NextDecisionOrigin = .guidance
     var outcome: NextDecisionOutcome = .pending
     var outcomeAt: Date?
     var review = NextDecisionReview()
@@ -140,6 +152,34 @@ struct NextDecisionRecord: Codable, Identifiable, Equatable {
                                             toHeadline: snapshot.headline, changes: changes)
         revisions.append(revision)
         return revision
+    }
+
+    /// 显式解码只为兼容旧备份：`origin` 键缺失时按「今日指导」处理。
+    /// 新增字段一律走这里补默认值，不让老用户升级后丢记忆。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        code = try container.decode(String.self, forKey: .code)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        snapshot = try container.decode(NextDecisionSnapshot.self, forKey: .snapshot)
+        origin = try container.decodeIfPresent(NextDecisionOrigin.self, forKey: .origin) ?? .guidance
+        outcome = try container.decodeIfPresent(NextDecisionOutcome.self, forKey: .outcome) ?? .pending
+        outcomeAt = try container.decodeIfPresent(Date.self, forKey: .outcomeAt)
+        review = try container.decodeIfPresent(NextDecisionReview.self, forKey: .review) ?? NextDecisionReview()
+        revisions = try container.decodeIfPresent([NextDecisionRevision].self, forKey: .revisions) ?? []
+    }
+
+    /// 成员逐一构造器（写了 init(from:) 之后合成版不再生成，这里补齐并保持旧调用点不变）。
+    init(code: String, name: String, createdAt: Date, snapshot: NextDecisionSnapshot,
+         origin: NextDecisionOrigin = .guidance, outcome: NextDecisionOutcome = .pending,
+         outcomeAt: Date? = nil, review: NextDecisionReview = NextDecisionReview(),
+         revisions: [NextDecisionRevision] = []) {
+        self.id = UUID()
+        self.code = code; self.name = name; self.createdAt = createdAt; self.snapshot = snapshot
+        self.origin = origin
+        self.outcome = outcome; self.outcomeAt = outcomeAt
+        self.review = review; self.revisions = revisions
     }
 }
 
@@ -311,16 +351,18 @@ enum NextDecisionMemory {
         }
     }
 
-    /// 同一天同一只证券只保留最新一条「待处理」记录，避免刷一次页面就堆一条。
+    /// 同一天同一只证券、同一个来源只保留最新一条「待处理」记录，避免刷一次页面就堆一条。
+    /// **必须按 origin 分开匹配**：同一天同一只证券可以同时有一条「今日指导」计划和一条
+    /// 「跨市场闭环」风险记录，它们是两件不同的事实，合成一条会吞掉其中一个。
     static func merge(existing: [NextDecisionRecord], incoming: [NextDecisionRecord],
                       calendar: Calendar = .current) -> [NextDecisionRecord] {
         var result = existing
         for record in incoming {
             if let index = result.firstIndex(where: {
-                $0.code == record.code && $0.outcome == .pending
+                $0.code == record.code && $0.origin == record.origin && $0.outcome == .pending
                     && calendar.isDate($0.createdAt, inSameDayAs: record.createdAt)
             }) {
-                // 同一天同一只：保留原记录，但把改判写进轨迹，不改「当时」的快照。
+                // 同一天同一只同一来源：保留原记录，但把改判写进轨迹，不改「当时」的快照。
                 _ = result[index].revise(with: record.snapshot, at: record.createdAt)
             } else {
                 result.append(record)
@@ -338,7 +380,13 @@ enum NextDecisionMemory {
             if let validUntil = copy.snapshot.validUntil, validUntil < now {
                 copy.outcome = .expired
                 copy.outcomeAt = now
-                copy.review.note = "计划有效期已过（\(NextDecisionDiff.dateText(validUntil))），未记录到真实成交"
+                // 闭环记录不是计划：措辞必须说清「只保存当时的闸门与解释，不涉及成交」，
+                // 不能套用计划那条「未记录到真实成交」——它会暗示这里本该有成交。
+                if copy.origin == .crossLoop {
+                    copy.review.note = "跨市场观察记录的有效期到当日收盘（\(NextDecisionDiff.dateText(validUntil))）已过；这条只保存当时的闸门与解释，不涉及成交"
+                } else {
+                    copy.review.note = "计划有效期已过（\(NextDecisionDiff.dateText(validUntil))），未记录到真实成交"
+                }
                 return copy
             }
             // 失效条件里写明「突破区间」的，用当时给的限价做一次事实核对。
@@ -391,5 +439,64 @@ enum NextDecisionMemory {
         if validUntil < now { return "已过期（有效期 \(NextDecisionDiff.dateText(validUntil))）" }
         let minutes = Int(validUntil.timeIntervalSince(now) / 60)
         return "待处理（还有 \(max(1, minutes)) 分钟有效期）"
+    }
+
+    // MARK: - 143 闭环记录并入决策记忆
+    //
+    // 跨市场闭环每跑一次就有一条「当时」的结论（闸门 / 假设 / 参考价 / 逐行解释）。
+    // 这里把它转成决策记忆条目，之后就走与指导记录完全相同的落盘、去重、过期链路。
+    // 三条口径：
+    // 1. 只搬「当时」的事实：闸门、假设、当时的本地价、逐行解释——全部来自本次闭环，
+    //    不允许调用方塞「后来」的数字；
+    // 2. 没有信号也没有假设的一天不落盘：闭环明确说了「今天没有达到门槛的信号」，
+    //    把它每天每只股票存一条只会把记忆页变成噪音；
+    // 3. 闭环记录永远没有限价与份额（跨市场不生成计划），outcome 恒为待处理，
+    //    除用户自己回填外没有任何自动成交路径。
+
+    /// 把一批闭环产出转成待写入的记忆条目。`quotes` 提供当时的本地行情（参考价），
+    /// `sessionEndFor` 给出当日收盘时刻——闭环记录的自然终点就是当日收盘。
+    static func loopRecords(from outcomes: [NextLoopOutcome], names: [String: String],
+                            quotes: [String: NextQuote], unitsFor: (String) -> Int,
+                            sessionEndFor: (Date) -> Date) -> [NextDecisionRecord] {
+        outcomes.compactMap { outcome in
+            // 没有信号也没有假设：今天闭环什么都没评估，不占记忆。
+            guard outcome.signal != nil || outcome.hypothesis != nil else { return nil }
+            let quote = quotes[outcome.code]
+            let snapshot = loopSnapshot(outcome: outcome, quote: quote,
+                                        units: unitsFor(outcome.code),
+                                        validUntil: sessionEndFor(outcome.at))
+            return NextDecisionRecord(code: outcome.code, name: names[outcome.code] ?? outcome.code,
+                                      createdAt: outcome.at, snapshot: snapshot,
+                                      origin: .crossLoop)
+        }
+    }
+
+    /// 单条闭环产出 → 「当时」的快照。价格/昨收/来源/时间取自当时的真实报价；
+    /// 没有报价就留空，不拿闭环内部点数凑一个数。
+    static func loopSnapshot(outcome: NextLoopOutcome, quote: NextQuote?, units: Int,
+                             validUntil: Date) -> NextDecisionSnapshot {
+        NextDecisionSnapshot(
+            price: quote.map { "\($0.price)" },
+            previousClose: quote.map { "\($0.previousClose)" },
+            quoteSource: quote?.source,
+            quoteAt: quote?.time,
+            units: units,
+            averageCost: nil,
+            nasDays: nil, nasVwap20: nil, nasCloseVsVwap20: nil,
+            nasAmplitude60: nil, nasRoundTrips60: nil, nasVolatility120: nil,
+            nasSupportP10: nil, nasResistanceP90: nil,
+            nasStale: nil, nasEnoughForLongTerm: nil,
+            newsTitles: [], profileTags: [],
+            state: outcome.gate.label,
+            strategy: "跨市场风险观察（不生成计划）",
+            headline: outcome.headline,
+            evidence: outcome.explanation,
+            risks: [outcome.gate.reason],
+            validUntil: validUntil,
+            invalidConditions: [],
+            limitPrice: nil, limitUnits: nil,
+            expectedNetGain: nil, expectedCostReduction: nil,
+            // 闭环结论只作风险上下文，不作为出价依据——置信度照实写「低」。
+            confidenceLevel: NextDataConfidence.Level.low.rawValue)
     }
 }

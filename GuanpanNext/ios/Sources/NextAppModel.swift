@@ -696,7 +696,7 @@ struct LocalPreferences: Codable {
         let guidance = buildGuidance(now: Date())
         dailyGuidance = guidance
         guidanceStatus = guidance.summary
-        updateDecisionMemory(with: guidance, now: Date())
+        updateDecisionMemory(with: guidance, loops: crossLoops, now: Date())
         evaluateCandidatePlans()
         logGuidanceSuggestions(guidance)
         learnProfile()
@@ -730,11 +730,21 @@ struct LocalPreferences: Codable {
 
     /// 决策记忆：写入「当时」的快照、把同一天重复条目合并、按有效期与失效条件迁移状态、
     /// 并对已真实成交的条目做复盘。这里**不会**因为 AI 建议就写任何成交。
-    private func updateDecisionMemory(with guidance: NextDailyGuidance, now: Date) {
+    /// - guidance：今日指导里「有计划或有新闻阻断」的条目；
+    /// - loops：跨市场闭环的闸门记录（143）。两者是不同的**事实**，merge 按「标的+来源+当天」
+    ///   分开去重——同一天同一只股票可以同时有一条计划和一条跨市场风险记录。
+    private func updateDecisionMemory(with guidance: NextDailyGuidance, loops: [String: NextLoopOutcome],
+                                      now: Date) {
         let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
         let incoming = NextDecisionMemory.records(from: guidance, quotes: quoteMap, book: book,
                                                   research: nasResearch, news: nasNews, profile: profile)
-        var merged = NextDecisionMemory.merge(existing: decisionMemory, incoming: incoming)
+        let names = Dictionary(uniqueKeysWithValues: book.positions.map { ($0.code, $0.name) })
+        let loopIncoming = NextDecisionMemory.loopRecords(
+            from: Array(loops.values), names: names, quotes: quoteMap,
+            unitsFor: { code in book.positions.first { $0.code == code }?.units ?? 0 },
+            // 闭环记录的自然终点 = 当日收盘；收盘后自动迁移为「已过期」，不永远挂待处理。
+            sessionEndFor: { NextMarketClock.sessionClose($0) })
+        var merged = NextDecisionMemory.merge(existing: decisionMemory, incoming: incoming + loopIncoming)
         merged = NextDecisionMemory.expire(merged, at: now, quoteFor: { quoteMap[$0]?.price })
         merged = merged.map { record in
             guard record.outcome == .filled, record.review.reviewedAt == nil else { return record }

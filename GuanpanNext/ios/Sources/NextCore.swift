@@ -1151,6 +1151,19 @@ enum NextMarketClock {
         return day
     }
 
+    /// 当日 A股 收盘时刻（15:00，Asia/Shanghai）。给「当日有效」的记录一个自然终点：
+    /// 跨市场闭环记录、当日观察都以此过期，不会永远挂在「待处理」。
+    /// 与 `NextPlanClock.sessionEnd(after:)` 的区别：那个给计划用，永远返回**未来**的收盘
+    /// （已过收盘就顺延到次日）；这个给「当天的记录」用，已过 15:00 就返回今天 15:00
+    /// （过去时刻）——过期由调用方的迁移逻辑负责，不把记录悄悄延长一天。
+    /// 用「取年月日 + 直接设时分秒」而不是 `date(bySettingHour:)`：后者在已过 15:00 时
+    /// 可能按 `.next` 策略滚到次日 15:00。
+    static func sessionClose(_ date: Date) -> Date {
+        var comps = shanghai.dateComponents([.year, .month, .day], from: date)
+        comps.hour = 15; comps.minute = 0; comps.second = 0
+        return shanghai.date(from: comps) ?? date
+    }
+
     /// 市场状态文本（UI 与 AI 上下文共用）：开不开、为什么、下一交易日何时。
     static func marketStatusText(_ date: Date = Date()) -> String {
         let parts = shanghai.dateComponents([.weekday, .hour, .minute], from: date)

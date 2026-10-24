@@ -39,7 +39,7 @@ struct DecisionMemoryView: View {
                     if records.isEmpty {
                         GPCard {
                             GPInlineEmpty(symbol: "clock.arrow.circlepath",
-                                          text: "还没有决策记忆。生成今日指导后，每条「有具体计划」的建议都会连同当时的行情、持仓、NAS 统计、新闻与画像一起记下来。")
+                                          text: "还没有决策记忆。生成今日指导后，每条「有具体计划」的建议都会连同当时的行情、持仓、NAS 统计、新闻与画像一起记下来；跨市场闭环出现信号或拦截时，也会按同样的口径留下当时的闸门与解释。")
                         }
                     } else {
                         ForEach(records) { record in
@@ -112,6 +112,14 @@ struct DecisionMemoryView: View {
                     HStack(spacing: 6) {
                         Text(record.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(p.ink).lineLimit(1)
                         Text(record.snapshot.state).font(.system(size: 9)).foregroundStyle(p.muted)
+                        if record.origin == .crossLoop {
+                            // 143：闭环记录与计划建议是两种事实，行内直接标出来，不混为一谈。
+                            Text("跨市场")
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 5).padding(.vertical, 1.5)
+                                .background(p.chartBlue.opacity(0.12), in: Capsule())
+                                .foregroundStyle(p.chartBlue)
+                        }
                         if !record.revisions.isEmpty {
                             Text("\(record.revisions.count) 次改判")
                                 .font(.system(size: 9, weight: .semibold))
@@ -215,6 +223,10 @@ struct DecisionRecordDetail: View {
                 line("持仓", "\(s.units) 份", note: s.averageCost.map { "成本 $\($0)" })
                 if let days = s.nasDays {
                     line("NAS 长期分时", "\(days) 天归档", note: s.nasStale == true ? "已过期" : "新鲜")
+                } else if record.origin == .crossLoop {
+                    // 闭环看的是「海外市场归档深度」，不是这只标的的长期分时统计——
+                    // 不能套用指导记录那句「本次结论只用本地数据」。
+                    line("NAS 长期分时", "不涉及", note: "闭环依据海外归档深度与本地确认，不经该标的长期统计")
                 } else {
                     line("NAS 长期分时", "不可用", note: "本次结论只用本地数据")
                 }
@@ -241,10 +253,14 @@ struct DecisionRecordDetail: View {
 
     private func planCard(_ record: NextDecisionRecord) -> some View {
         let s = record.snapshot
-        return DataPanel(title: "当时的建议", accent: p.forest) {
+        return DataPanel(title: record.origin == .crossLoop ? "当时的闸门" : "当时的建议", accent: p.forest) {
             VStack(alignment: .leading, spacing: 5) {
                 if let price = s.limitPrice {
                     line("限价", "¥\(price)", note: s.limitUnits.map { "\($0) 份" })
+                } else if record.origin == .crossLoop {
+                    // 闭环记录本来就没有限价：跨市场不生成计划。不能写成「数据不足」——
+                    // 那是指导记录缺数据时的措辞，用在这里会假装这里本该有个价格。
+                    line("限价", "没有限价", note: "跨市场不生成计划，只作风险上下文")
                 } else {
                     line("限价", "没有给出具体价格", note: "数据不足时宁可不给")
                 }
@@ -268,7 +284,13 @@ struct DecisionRecordDetail: View {
                 .font(.caption2).foregroundStyle(p.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if record.outcome == .pending {
-                if showFillForm {
+                if record.origin == .crossLoop {
+                    // 闭环记录没有计划可成交：这里不提供「我已成交 / 我放弃了」——
+                    // 点了反而是伪造一条成交事实。它只保存当时的闸门与解释。
+                    Text("这是跨市场闭环的风险记录：没有限价与份额，也不存在「成交」。它只保存当时的闸门与解释，当日收盘后自动归档。")
+                        .font(.caption2).foregroundStyle(p.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if showFillForm {
                     HStack(spacing: 8) {
                         TextField("成交价", text: $fillPrice).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                         TextField("份额", text: $fillUnits).keyboardType(.numberPad).textFieldStyle(.roundedBorder)
