@@ -222,6 +222,8 @@ struct CandidatePlanRow: View {
         case .active: return p.forest
         case .triggered: return p.chartGold
         case .confirmed: return p.jade
+        // 被跨市场风险拦截器暂停：不是作废，也不是可执行，用警示色区分开。
+        case .paused: return p.risk
         case .expired, .invalidated, .withdrawn: return p.muted
         }
     }
