@@ -437,7 +437,7 @@ final class NextLeadValidationTests: XCTestCase {
     // MARK: 留出段硬门槛：不足时连验证性置信区间都不给
 
     /// 边界值：200 行（留出段触发/对照恰好各 30）→ 才给区间；
-    /// 199 行（对照 29 < 30）→ 状态与区间都不给。
+    /// 196 行（留出段只能切出 59 行、触发 29 < 30）→ 状态与区间都不给。
     /// 样本不足不许被包装成具有验证意义的置信区间。
     func testHoldoutGivesIntervalOnlyAtBoundary() {
         var enough: [NextEvidenceRow] = []
@@ -454,13 +454,17 @@ final class NextLeadValidationTests: XCTestCase {
         XCTAssertNotNil(pass.edgeInterval, "踩满门槛就必须给区间")
         XCTAssertEqual(pass.state, .candidateRequiresReplication)
 
+        // 留出段要 60 行（触发/对照各 30）。196 行按 70/30 只能切出 59 行：
+        // 触发 29、对照 30 —— 差一行都不给验证性置信区间。
         var justShort: [NextEvidenceRow] = []
-        for day in 0..<199 {
+        for day in 0..<196 {
             let triggered = day % 2 == 0
             justShort.append(NextEvidenceRow(day: dayKey(day), dataComplete: true,
                                              triggered: triggered, confirmed: triggered))
         }
         let fail = NextEvidenceEngine.holdout(justShort)
+        XCTAssertEqual(fail.holdoutSessions, 59)
+        XCTAssertEqual(fail.triggerCount, 29)
         XCTAssertEqual(fail.state, .insufficient)
         XCTAssertNil(fail.edgeInterval, "差一天也不给验证性置信区间")
         XCTAssertTrue(fail.note.contains("样本不足"))
