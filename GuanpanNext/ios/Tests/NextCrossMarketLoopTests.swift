@@ -210,9 +210,11 @@ final class NextCrossMarketLoopTests: XCTestCase {
 
     // MARK: 144 复盘
 
+    /// 跨市场信号现在是风险拦截器：它暂停计划而非下单，复盘只判断「暂停事后看对不对」。
+    /// 跌了 = 正确的取消（算成功）；涨了 = 错过（事实，不算失败）。
     func test_reviewCountsCorrectCancellationAsSuccess() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .clear(reason: "A股 未确认"),
+                                    gate: .intercept(reason: "风险拦截"),
                                     statement: "午后修复", referencePrice: 1.000)
         let review = NextLoopReviewer.review(record, laterPrice: 0.985)
         XCTAssertEqual(review.outcome, .avoidedLoss)
@@ -222,21 +224,12 @@ final class NextCrossMarketLoopTests: XCTestCase {
 
     func test_reviewRecordsMissAsFactNotFailure() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .clear(reason: "A股 未确认"),
+                                    gate: .intercept(reason: "风险拦截"),
                                     statement: "午后修复", referencePrice: 1.000)
         let review = NextLoopReviewer.review(record, laterPrice: 1.012)
         XCTAssertEqual(review.outcome, .missedGain)
         XCTAssertFalse(review.outcome.isSuccess, "踏空不算失败，但也不该记成成功")
         XCTAssertTrue(review.note.contains("不算错"))
-    }
-
-    /// 跨市场信号现在是风险拦截器：它暂停计划而非下单，复盘只判断「暂停事后看对不对」。
-    func test_reviewInterceptorIsJudgedByDirection() {
-        let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .intercept(reason: "风险拦截"),
-                                    statement: "午后修复", referencePrice: 1.000)
-        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 0.99).outcome, .avoidedLoss)
-        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 1.01).outcome, .missedGain)
     }
 
     func test_reviewWithoutReferencePriceGivesNoConclusion() {

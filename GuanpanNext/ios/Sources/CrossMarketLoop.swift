@@ -367,7 +367,7 @@ enum NextLoopReviewer {
             // 涨了就是「错过」，都如实记，不算失败。
             if downward {
                 return NextLoopReview(code: record.code, outcome: .avoidedLoss, movePercent: move,
-                                      note: "按风险拦截暂停了计划，之后 \(String(format: "%+.2f%%", move))，暂停是对的")
+                                      note: "按风险拦截暂停了计划，之后 \(String(format: "%+.2f%%", move))，取消是对的")
             }
             if upward {
                 return NextLoopReview(code: record.code, outcome: .missedGain, movePercent: move,
