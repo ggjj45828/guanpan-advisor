@@ -245,14 +245,16 @@ struct NextFXContext: Equatable {
         case let .missing(reason):
             return "\(market.displayName)汇率未接入（\(reason)）：无法把标的涨跌和汇率影响分开，也不会假设汇率为 0"
         case let .stale(reason):
-            return "\(market.displayName)汇率数据已过期（\(reason)）：不用旧汇率解释今天的行情；不能当实时值"
+            return "\(market.displayName)汇率数据已过期（\(reason)）：不用旧汇率解释今天的行情；不能当实时值 · \(provenanceNote)"
         case let .suspicious(reason):
-            return "\(market.displayName)汇率数据可疑（\(reason)）：先不当成真实行情，也不能当实时值"
+            return "\(market.displayName)汇率数据可疑（\(reason)）：先不当成真实行情，也不能当实时值 · \(provenanceNote)"
         case let .available(days, percent):
             let direction = percent > 0.001 ? "升值" : (percent < -0.001 ? "贬值" : "基本持平")
-            let base = "\(market.displayName)汇率 \(pair?.displayName ?? "")今日\(direction) \(String(format: "%+.2f", percent))%"
+            // 来源与新鲜度必须跟着涨跌一起说出来：只报一个涨跌数字，
+            // 用户无从判断这个数字是刚测的还是三天前的。
+            let base = "\(market.displayName)汇率 \(pair?.displayName ?? "")今日\(direction) \(String(format: "%+.2f", percent))% · \(provenanceNote)"
             if days >= NextFXContextEngine.minimumDays {
-                return "\(base) · 已有 \(days) 个交易日，可算平均干扰度 · \(provenanceNote)"
+                return "\(base) · 已有 \(days) 个交易日，可算平均干扰度"
             }
             return "\(base) · 只有 \(days) 个交易日，不足 \(NextFXContextEngine.minimumDays) 天，暂不算平均干扰度"
         }
