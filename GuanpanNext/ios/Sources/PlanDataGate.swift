@@ -18,7 +18,9 @@ import Foundation
 //   - `insufficient`：不出价
 // 中间这档是关键：直接拒绝会浪费可用的机会，直接放行会把噪声当信号。
 
-enum NextPlanKind: String, Equatable {
+/// 注意名字带 Data：`NextPlanKind` 已经被候选计划（反T/正T/网格买入…）占用，
+/// 这里问的是另一个维度——「这是哪一种计划的数据门槛」。
+enum NextPlanDataKind: String, Equatable {
     case doT
     case grid
 
@@ -92,7 +94,7 @@ enum NextPlanDataGate {
     static let amplitudeStabilityLower = 0.5
     static let amplitudeStabilityUpper = 2.0
 
-    static func assess(kind: NextPlanKind, profile: NextPlanDataProfile) -> NextPlanDataState {
+    static func assess(kind: NextPlanDataKind, profile: NextPlanDataProfile) -> NextPlanDataState {
         var hard: [String] = []
         var soft: [String] = []
 

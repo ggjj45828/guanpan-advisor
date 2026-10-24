@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
+import calendar_cn
 from crossmarket import fetch_snapshots, archive_rows, should_sample
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -113,6 +114,12 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
     def daily_loop():
         update("daily-archive", "starting", "worker starting")
         while True:
+            # 休市日不抓：日 K 源会返回最后成交的一条，日复一日地重复归档同一根 K 线，
+            # 只会让「归档天数」虚高，而回放器是按交易日数算样本的。
+            if not calendar_cn.is_a_share_trading_day(datetime.now(SHANGHAI)):
+                update("daily-archive", "idle",
+                       calendar_cn.describe(datetime.now(SHANGHAI)) + "；不抓大陆标的的日 K，历史归档保持可用")
+                time.sleep(1800); continue
             codes = tracked()
             if not codes:
                 update("daily-archive", "idle", EMPTY_NOTE)
@@ -129,7 +136,13 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
         update("minute-archive", "starting", "worker starting")
         while True:
             local = datetime.now(SHANGHAI)
-            if local.weekday() < 5 and ((9, 15) <= (local.hour, local.minute) <= (11, 35) or (13, 0) <= (local.hour, local.minute) <= (15, 5)):
+            # 先过交易日历再过时段：调休上班的周末（1/4、2/14 等）虽然上班，
+            # 但交易所不开市，以前只看 weekday 会在这些日子白抓一整天。
+            if not calendar_cn.is_a_share_trading_day(local):
+                update("minute-archive", "idle",
+                       calendar_cn.describe(local) + "；不抓大陆指数与分时，历史归档保持可用")
+                time.sleep(300); continue
+            if (9, 15) <= (local.hour, local.minute) <= (11, 35) or (13, 0) <= (local.hour, local.minute) <= (15, 5):
                 codes = tracked()
                 if not codes:
                     update("minute-archive", "idle", EMPTY_NOTE)

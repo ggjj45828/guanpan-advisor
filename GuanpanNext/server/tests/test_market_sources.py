@@ -5,7 +5,13 @@
 """
 import json
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
+
+
+# 2026-10-22 是周四、A 股交易日；用它而不是「现在」，
+# 否则「休市日不抓大陆指数」这条规则会让用例在周末/假日全体失败。
+TRADING_DAY = datetime(2026, 10, 22, 3, 0, tzinfo=timezone.utc)
 
 import market
 
@@ -89,8 +95,10 @@ class MarketSourcesTest(unittest.TestCase):
         self.assertEqual({r["code"] for r in rows}, {"510300", "159915"})
 
     def test_fetch_eastmoney_indices(self):
+        # 传一个明确的交易日：休市日不抓大陆指数是刻意的行为，
+        # 让这条用例依赖「今天是哪天」只会周三过、周六挂。
         with patch("market.urlopen", _router):
-            rows = market._fetch_eastmoney_indices()
+            rows = market._fetch_eastmoney_indices(now=TRADING_DAY)
         self.assertEqual(len(rows), 10, rows)
         by = {r["symbol"]: r for r in rows}
         self.assertEqual(by["1.000001"]["name"], "上证指数")
@@ -102,8 +110,15 @@ class MarketSourcesTest(unittest.TestCase):
 
     def test_fetch_indices_prefers_eastmoney(self):
         with patch("market.urlopen", _router):
-            rows = market.fetch_indices()
+            rows = market.fetch_indices(now=TRADING_DAY)
         self.assertEqual(len(rows), 10)
+
+    def test_fetch_indices_drops_mainland_on_holiday(self):
+        with patch("market.urlopen", _router):
+            rows = market.fetch_indices(now=datetime(2026, 10, 1, 3, 0, tzinfo=timezone.utc))
+        self.assertTrue(rows)
+        self.assertEqual(len(rows), 6)
+        self.assertNotIn("上证指数", {row["name"] for row in rows})
 
     def test_fetch_eastmoney_kline(self):
         with patch("market.urlopen", _router):

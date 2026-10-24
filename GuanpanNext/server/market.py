@@ -7,6 +7,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+import calendar_cn
+
 
 def symbol_for(code):
     if not isinstance(code, str) or len(code) != 6 or not code.isascii() or not code.isdigit():
@@ -445,8 +447,24 @@ SINA_INDEX_SYMBOLS = [
 ]
 
 
-def _fetch_eastmoney_indices():
-    secids = [s for _, s in INDEX_SOURCES]
+def active_index_sources(include_mainland=None, now=None):
+    """今天该向源要哪些指数。
+
+    休市日不要大陆指数：源会返回「最后一个成交价」，落下来就是一整段
+    不存在的横盘，回放器分不清那是行情还是休市。
+    `include_mainland` 显式传入时以传入为准（测试与离线重算用）。
+    """
+    if include_mainland is None:
+        include_mainland = calendar_cn.mainland_indices_should_fetch(
+            now if now is not None else datetime.now(timezone.utc))
+    if include_mainland:
+        return list(INDEX_SOURCES)
+    return [item for item in INDEX_SOURCES
+            if not calendar_cn.is_mainland_index_secid(item[1])]
+
+
+def _fetch_eastmoney_indices(now=None):
+    secids = [s for _, s in active_index_sources(now=now)]
     query = urlencode({"fields": "f12,f13,f14,f2,f3,f4,f6,f60",
                       "secids": ",".join(secids), "fltt": "2", "np": "1"})
     request = Request("https://push2.eastmoney.com/api/qt/ulist.np/get?" + query,
@@ -501,8 +519,12 @@ def _sina_parse_index_fields(symbol, fields):
             "previousClose": close, "observedAt": stamp, "kline": symbol}
 
 
-def _fetch_sina_indices():
-    query = ",".join(symbol for symbol, _, _ in SINA_INDEX_SYMBOLS)
+def _fetch_sina_indices(now=None):
+    include_mainland = calendar_cn.mainland_indices_should_fetch(
+        now if now is not None else datetime.now(timezone.utc))
+    sources = [item for item in SINA_INDEX_SYMBOLS
+               if include_mainland or not calendar_cn.is_mainland_index_name(item[1])]
+    query = ",".join(symbol for symbol, _, _ in sources)
     request = Request("https://hq.sinajs.cn/list=" + query,
                       headers={"Referer": "https://finance.sina.com.cn/",
                                "User-Agent": "Mozilla/5.0 (compatible; GuanpanAdvisor/1)"})
@@ -517,19 +539,34 @@ def _fetch_sina_indices():
         fields = line[eq + 2:end].split(',')
         quote = _sina_parse_index_fields(symbol, fields)
         if quote: found[symbol] = quote
-    result = [found[s] for s, _, _ in SINA_INDEX_SYMBOLS if s in found]
+    result = [found[s] for s, _, _ in sources if s in found]
     if not result: raise ValueError("sina index source returned no parsable data")
     return result
 
 
-def fetch_indices():
-    """指数报价：东财优先，东财不可用退回新浪。"""
+def fetch_indices(now=None):
+    """指数报价：东财优先，东财不可用退回新浪。
+
+    `now` 用于判定 A 股是否开市（默认取当下）。休市日只返回海外指数，
+    不返回大陆指数——返回「昨天的收盘价」比返回空更容易被误读成「今天没动」。
+    两个源都做了过滤，最后再按名字兜一遍，防止某个源自己多塞了大陆指数。
+    """
+    include_mainland = calendar_cn.mainland_indices_should_fetch(
+        now if now is not None else datetime.now(timezone.utc))
     try:
-        quotes = _fetch_eastmoney_indices()
-        if quotes: return quotes
+        quotes = _fetch_eastmoney_indices(now)
+        if quotes:
+            return _strip_mainland(quotes, include_mainland)
     except Exception:
         pass
-    return _fetch_sina_indices()
+    return _strip_mainland(_fetch_sina_indices(now), include_mainland)
+
+
+def _strip_mainland(quotes, include_mainland):
+    if include_mainland:
+        return quotes
+    return [quote for quote in quotes
+            if not calendar_cn.is_mainland_index_name(quote.get("name") or "")]
 
 
 def _valid_kline_symbol(symbol):
