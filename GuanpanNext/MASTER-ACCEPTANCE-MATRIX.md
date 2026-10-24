@@ -12,7 +12,7 @@
 | A1 | 只有一个真实账户，无模拟/虚拟/孪生 | ✅ | 全树无 simulations/mobile_research；`NextAppModel` 仅 `NextAuditedBook` |  grep + 账本写入链审计 | 账本唯一真相源，AI 只读 | — |
 | A2 | AI 只指导不自动下单 | ✅ | `NextCandidatePlan` 状态机（Draft/Active/Triggered/Expired/Cancelled/UserConfirmedFilled）；无任何下单 API | 代码审计 | 计划≠订单，成交必须用户确认（AIFillSheet） | — |
 | A3 | 未成交计划不改账户 | ✅ | `patientLimitPlans/candidatePlans` 与 `ledger` 分离；`recordDecision` 只写决策史 | 代码审计 | 持仓/现金/流水仅在「我已成交」后变更 | — |
-| A4 | NAS=后台研究员，非第二顾问 | ✅ | 服务端 `/v1/advisor/analyze`、`/v1/ai/analyze`、`/v1/backtests/` 恒 410（advisor.py/ai.py/backtest.py/grid.py 已删）；iOS DecisionScreen NAS 面板/顾问口令/runNASAI 全拆（#32）；设置页「验证 NAS 上的 DeepSeek」入口全拆（#33）；NAS 网页 index.html 退役端点入口清零（#29） | 三端 grep 零残留 + 68 项服务端测试 | NAS 只提供数据/研究/新闻证据，零 AI 建议入口 | — |
+| A4 | NAS＝纯数据仓库，非第二顾问 | ✅ | 服务端 `/v1/advisor/analyze`、`/v1/ai/analyze`、`/v1/backtests/` 恒 410（advisor.py/ai.py/backtest.py/grid.py 已删）；iOS DecisionScreen NAS 面板/顾问口令/runNASAI 全拆（#32）；设置页「验证 NAS 上的 DeepSeek」入口全拆（#33）；NAS 网页 index.html 退役端点入口清零（#29）；2026-10-24 再删后台 `research_loop`，并拆掉 market.html 残留的「跑 AI 分析/验证 AI」按钮与 DeepSeek Key 提示（此前只清了 index.html） | 三端 grep 零残留 + 68 项服务端测试实跑全绿 | NAS 只提供数据归档（日K/分时/分红/新闻），不研究、不下判断、零 AI 建议入口 | — |
 | A5 | 手机在线 AI 唯一最终指导 | ✅ | `NextAppModel.runUnifiedMobileAI` + `DeepSeekMobile`（fix8 系统提示词「手机端唯一的观盘 AI 私人投资顾问」）；DecisionScreen「唯一综合指导」卡；休市感知已入 prompt 与摘要（#36） | 代码审计 + 11 项休市日历复算 | 唯一入口闭环 | — |
 
 ## B. 核心数据链（§4）
@@ -27,8 +27,9 @@
 | # | 需求 | 状态 | 代码位置 | 验证方法 | 结果 | 剩余 |
 |---|---|---|---|---|---|---|
 | C1 | NAS 采集 1 分钟分时/日K/成交量/来源/时间 | ✅ | `server/minute_bars.py`、`server/market.py`（timeQuality：腾讯 exchange_time / 东财 receipt_only） | 99 项 Python 测试 | 含复权信息基础字段 | — |
-| C2 | 5/20/60/120 日窗口 + 质量门槛 | ✅ | `server/research.py`：`enoughForLongTerm = ≥60 天 ∧ 完整度≥0.8 ∧ 成交量覆盖≥0.8`；`volumeCoverage/vwapHigh/LowDeviation` | `test_research.py::test_quality_gate_for_long_term` | 门槛已按 fix8 收紧版落地 | — |
-| C3 | 手机端只用结论不重算 | ✅ | `NextNASMinuteStats` + `RoundTripEvidence`（往返证据） | 代码审计 | 大模型不得凭空描述分钟统计 | — |
+| C2 | 5/20/60/120 日窗口 + 质量门槛 | ✅ | `server/research.py`：`enoughForLongTerm = ≥60 天 ∧ 完整度≥0.8 ∧ 成交量覆盖≥0.8`；`volumeCoverage/vwapHigh/LowDeviation` | `test_research.py::test_quality_gate_for_long_term` | 门槛已按 fix8 收紧版落地；模块为**被动按需计算**，非后台研究 | — |
+| C3 | 手机端只用结论不重算 | ✅ | `NextNASMinuteStats` + `RoundTripEvidence`（往返证据） | 代码审计 | 分时窗口统计由 NAS 用归档现算（数据只在 NAS），手机不重算；策略/因子/AI 判断则全在手机 | — |
+| C4 | NAS＝纯数据仓库，不做后台研究（2026-10-24 用户定调） | ✅ | `server/workers.py` 删除 `research_loop`/`research_factors`，线程仅剩 daily/minute/dividend；`/v1/research/{code}` 的 `factors`/`ai` 恒 `null` 并返回 `researchOwner: "mobile"` | 68 项服务端测试实跑全绿 + grep 零残留 | 研究、因子、判断、最终 AI 全在手机；手机需要历史数据时才向 NAS 要，属正常同步、与隧道无关 | — |
 
 ## D. 行情源与新鲜度（§7–10）
 
@@ -99,7 +100,7 @@
 | J2 | 跟随场景 | ✅ | `ThemeManager.resolve` + `activeScene`（首页/盘中/持仓/AI日报/详情） | 代码审计 | §68 齐 | — |
 | J3 | 统一 ThemeManager/AppTheme/LayoutStyle/Tokens | ✅ | `AppThemeCore.swift` + `ThemeKit.swift`（DesignTokens） | 代码审计 | §69 齐 | — |
 | J4 | 五套首页真正不同（布局/卡片/背景/装饰） | ✅ | EditorialHome/ModernHome/DashboardHome/MagazineHome/PuzzleHome + 5 套 backdrop（山水/城市/拼图/仪表盘） | CI 五主题截图 | §61/§62–§66 首页层齐 | — |
-| J5 | 首页 8 模块齐全 | ✅ | #40 补齐：现代/杂志新闻入口、杂志 NAS 状态入口、拼图指数板（HomeIndexBoard）、仪表盘 tabHeader 接真实导航（市场/持仓/AI 指导/新闻）、编辑室新闻 chip 独立、拼图 NAS 砖文案修正为「后台研究归档 · 不构成第二建议」 | 逐主题代码审计（news 入口 6 处） | §12 齐 | — |
+| J5 | 首页 8 模块齐全 | ✅ | #40 补齐：现代/杂志新闻入口、杂志 NAS 状态入口、拼图指数板（HomeIndexBoard）、仪表盘 tabHeader 接真实导航（市场/持仓/AI 指导/新闻）、编辑室新闻 chip 独立、拼图 NAS 砖文案修正为「数据归档 · 不构成第二建议」 | 逐主题代码审计（news 入口 6 处） | §12 齐 | — |
 | J6 | 主题统一性（非首页页不跳戏） | ✅ | #37：硬编码渐变（0x1B3E8F 等 16 处 Color(hex:)）清零，持仓/网格 hero 卡改 `p.heroGradient/heroInk/heroMutedInk/heroSurface`，五主题自动换色 | grep 零残留 | 用户 N7 投诉闭环 | — |
 | J7 | DesignTokens 组件族（AIRecommendationCard/TradePlanCard/IndexCard…） | 🟠 | 组件以 GP* 前缀实现（GPCard/DataPanel/GPStatTile/CandidatePlanRow…），命名不齐但功能在 | 代码审计 | §70 部分 | 可选：重命名归拢 |
 | J8 | 深色模式/横屏/Dynamic Type | ✅ | `effectiveScheme` + 横屏图表 + `.dynamicTypeSize` | CI 截图（含小屏 7/8） | §73–§75 基本齐 | 极端数字截断需真机复核（⚠️） |
@@ -110,11 +111,11 @@
 |---|---|---|---|---|---|---|
 | K1 | 底部导航 4–5 项、无孪生 Tab | ✅ | 「首页」已移到第一位（#34）；入口去重后无孪生 tab | 代码审计 | 用户 N1 投诉闭环 | — |
 | K2 | AI 聊天（直接问，自动带上下文） | ✅ | DecisionScreen 对话入口 + `makeDecisionContext` 注入 | 代码审计 | §77 齐 | — |
-| K3 | AI 回答结构化卡片 | ✅ | `AIAnswerView`（结论/证据/风险/等待/失效/跟踪拆块） | 代码审计 | §78 齐 | — |
+| K3 | AI 回答结构化卡片 | ✅ | `AIAnswerView`（结论/证据/风险/等待/失效/跟踪拆块）；2026-10-24 重写排版层：剥 Markdown 记号（`**`/`#`/`` ` ``）、识别 `【结论】`·`1. 结论` 等标题变体、有序列表编号对齐、表格行转「a ｜ b」、一行多要点按「；」断行、每节浅底 + 左侧色条 | 代码审计 | §78 齐；「排版乱」反馈已处理（待 Mac 截图复核） | — |
 | K4 | NAS 状态简洁 + 异常进通知中心 | ✅ | 首页 NAS 状态文本 + `AlertCenterScreen` + LocalNotificationService | 代码审计 | §79/§80 齐 | — |
 | K5 | 通知 8 类 + 画像过滤 | ✅ | priceRules/AI 计划触发/新闻影响/NAS 异常 | 代码审计 | §81 齐 | 真机推送验证（⚠️） |
-| K6 | 离线可用 + 旧数据显时间 | ✅ | 缓存报价/图表/NAS 研究快照 + 时间戳文案 | 代码审计 | §82 齐 | — |
-| K7 | 三类数据同步分离 | ✅ | 账本（autoUploadBookIfNeeded）/行情（轮询）/NAS 研究（refreshNASResearch）分通道 | 代码审计 | §83 齐 | — |
+| K6 | 离线可用 + 旧数据显时间 | ✅ | 缓存报价/图表/NAS 归档快照 + 时间戳文案 | 代码审计 | §82 齐 | — |
+| K7 | 三类数据同步分离 | ✅ | 账本（autoUploadBookIfNeeded）/行情（轮询）/NAS 归档数据（refreshNASResearch）分通道 | 代码审计 | §83 齐 | — |
 | K8 | API Key 不明文进日志 | ✅ | Keychain + provider/HTTP 状态级日志 | 代码审计 | §84/§85 齐 | — |
 
 ## L. Risk Guard/费用/规则/置信度/防未来函数（§86–93）
@@ -162,13 +163,17 @@
 
 > 验收口径：113 条正文 + 末尾 #114/#115（轮次必须结束须写 CONTINUATION.md）＝用户所称「115 条」。
 
-- ✅ Verified：78 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿，自 76 升 78）｜🟡 Implemented/Not Verified：1 项（D4 0–100 数据质量总分 UI，代码已落地、待 Mac 编译/截图验证）｜🟠 Partial：2 项（B1 端到端实机链、J7 组件命名归拢）｜❌ Missing：0 项
+- ✅ Verified：79 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿；新增 C4「NAS＝纯数据仓库、无后台研究」）｜🟡 Implemented/Not Verified：1 项（D4 0–100 数据质量总分 UI，代码已落地、待 Mac 编译/截图验证）｜🟠 Partial：2 项（B1 端到端实机链、J7 组件命名归拢）｜❌ Missing：0 项
 - ⚠️ 外部验证必需：真机推送（K5）/ 实机网络多源（D1）/ 部分成交（G3）/ NAS 真实部署 / 极端字号截断（J8）/ 端到端链（B1）
 - **主题严格审计（本轮，回应「其他主题也要严格做」）**：J1–J8 五套主题（编辑室/现代/仪表盘/杂志/拼图）经源码钉死——`AppThemeCore.swift` 单一真相源（5 `AppTheme` + `ThemeManager.resolve` + `forcesDark` + 场景→主题映射），`ThemeHome.swift` 五套互异首页结构体（EditorialHome:900 / ModernHome:1026 / DashboardHome:1150 / MagazineHome:1312 / PuzzleHome:1432），J6 硬编码渐变清零。五主题对照视觉见仓库外 `guanpan-themes-5-comparison.svg`。
 - **诚实自纠（§105/§108）**：原矩阵 L1/B1 将风险校验写作独立符号 `NextRiskGate`；本轮 grep 全树零命中，证实其为分布式内联校验（新鲜度 `NextDataConfidence.assess` / 规则·手续费·单位 `InstrumentRules` / 流动性 `NextOrderBookEvidence.assess` / 可卖 `book.availableUnits` / 现金 `NextAppModel` 拦截），LLM 仅接收已校验结论。已据实更正，杜绝过度宣称。
 - **D4 落地（本轮）**：`NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（新文件 GPDataQualityScore.swift，绿/橙/红分档）已注入 AIGuidanceViews.swift:128 的 AI 指导列表。出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，分数低不编挂单价。状态 🟡（已写码、Windows 无 Mac 未跑 swift build 验证）。
 - **旧文件全盘清理（本轮，回应「明日挂单表这类旧文件」）**：grep 全树确认「明日挂单表」仅存于文档与一处**过期 UITest**——`ios/UITests/NativeNavigationTests.swift` 的 `testGridPlanControlsAreVisibleInLaboratory`（断言已下线的「网格实验室/明日挂单表/虚拟账户」）及 `tabs` 数组残留的 `tab.laboratory`。已删除该方法 + 移除 `tab.laboratory` 项（底栏确为 5 入口：首页/行情/持仓/收息/我的）；并删除过时 `previews/观盘Next-五页界面预览.svg`。经核查 `BackupDocument.swift`（账本导出）、`NASService.downloadAndStageLegacyBook`/`legacyWebBaseURL`（旧网页账本迁移导入）、`NextTab.overview/laboratory` 枚举（仅为解码旧存档保留）均为**在用合法功能，非死代码，保留**。矩阵原 N4/N5/F3 的 ✅ 经此清理才真正闭环（此前遗漏了 UITest 残留）。
-- **NAS↔手机 穿透流量平衡（本轮）**：原则＝**实时归手机直连（零隧道）、NAS 只归档/研究（不推手机）**，隧道仅用于账本上行 + 手机按需拉 NAS 独有研究/超长历史。落地：①`minute_loop` 不再每分钟额外拉实时报价（**分时归档保留——用户明确重要**）；②日 K 拉取上限 640→1000，配合 `put_daily` 按日期合并、从不裁剪 → NAS 累积保存 1000+ 天日 K；③`refreshQuotes` 改为**手机直连优先**（腾讯首源自带 IOPV，`NextCore.swift:301` 第 78 字段），NAS 仅直连全失败时兜底，IOPV 不经隧道。④`refreshDaily` 亦改为直连优先、NAS 仅兜底/补超长历史（日 K 图表不再经隧道下行）。详见 `GuanpanNext/NAS-MOBILE-SPLIT.md`。待 Mac/真机验证 IOPV 不丢与穿透流量下降。
+- **NAS↔手机 穿透流量平衡**：原则＝**实时归手机直连（零隧道）、NAS 只归档（不推手机）**，隧道仅用于账本上行 + 手机按需取 NAS 独有数据。落地：①`minute_loop` 不再每分钟额外拉实时报价（**分时归档保留——用户明确重要**）；②日 K 拉取上限 640→1000，配合 `put_daily` 按日期合并、从不裁剪 → NAS 累积保存 1000+ 天日 K；③`refreshQuotes` 改为**手机直连优先**（腾讯首源自带 IOPV，`NextCore.swift:301` 第 78 字段），NAS 仅直连全失败时兜底，IOPV 不经隧道。④`refreshDaily` 亦改为直连优先、NAS 仅兜底/补超长历史（日 K 图表不再经隧道下行）。详见 `GuanpanNext/NAS-MOBILE-SPLIT.md`。待 Mac/真机验证 IOPV 不丢与穿透流量下降。
+- **NAS 取消后台研究（本轮，回应「研究就交给手机」）**：删除 `server/workers.py` 的 `research_loop` 与 `research_factors`，后台线程仅剩 `daily-archive` / `minute-archive` / `dividend-research` 三个**采集**线程；`/v1/research/{code}` 的 `factors`/`ai` 改为恒 `null`（键保留以兼容旧客户端解码）并新增 `researchOwner: "mobile"`，历史 `factors-*`/`deepseek-*` 残留不再回传，避免手机读到与本机规则不一致的过期结论；`research.py` 头注明「被动按需计算」而非后台研究员。文案同步改为「NAS 长期归档 / 数据归档」（ThemeHome 两处、GuanpanAdvisorApp、DeepSeekMobile 系统提示、NextCandidatePlans 上下文与 dataState、NASService/NextAppModel/NextCore 错误文案、server/web/index.html、news.py、app.py 注释）。`put_research`/`get_research`/`get_research_stats` 保留（测试与按需缓存用）。68 项服务端测试实跑全绿。
+- **模型输出排版重写（本轮，回应「大模型生成的文字排版有点乱」）**：`AIAnswerView` 重写解析与渲染——①剥除行内 Markdown（`**`/`__`/`` ` ``/`###`/`#`），此前 `**结论**` 会原样显示成符号；②标题识别扩到 `【结论】`、`1. 结论`、`一、结论`、`## 结论`（`headingProbe` 去编号/括号/粗体后再匹配）；③有序列表 `1.`/`1、`/`1)` 编号右对齐成列表标；④表格行 `| a | b |` 转「a ｜ b」；⑤一行用「；」串多条要点的按分号断行（保留标点）；⑥每节浅底 + 左侧色条、风险/失效条件用警示色、行距与节间距加大。价格如 `1.400` 不会被误判成编号（小数点后须有空格）。纯渲染层改动，不动 prompt 与内容。
+- **闪退隐患修复（本轮）**：①`GuanpanAdvisorApp.swift` 盘口卡片 `model.orderBooks[code]!` 强解包 → 改为 `if let` 绑定（刷新瞬间字典被清空会直接把卡片点崩）；②`GPAssetCards.GPSparkline` 对含 NaN/∞ 的序列直接不画（非法坐标进 CoreGraphics 可能崩）；③`NextAppModel` 存储层 `applicationSupportDirectory.first!` → 三级兜底（App Support → Documents → 临时目录），容器异常时不再启动即闪退。
+- **NAS 网页 AI 入口彻底拆除（本轮）**：`market.html` 删「跑 AI 分析」「验证 AI」按钮、`runAI()`/`verifyAI()`/`aiHtml()` 及 DeepSeek Key 提示（这些按钮点下去打的是恒 410 的退役端点）。页面改为「NAS 归档数据 · 只读」，只渲染分钟归档统计。
 - 用户 8 项反馈（N1–N8）全部闭环；A4/H5「NAS 非第二顾问、手机唯一最终 AI」三端（服务端/iOS/网页）清零。
 - 端口与旧服务（本轮）：`8789→8786` 全树替换（a3f22cc）、CI 第 5 处编译错修正（eef86d7）、旧 30001 服务退役并全树统一 8786（af56b7c）。
 - 下一步：D4 待 Mac 轮次 `swift test` + 截图验收后翻 ✅；J7 组件命名归拢（低风险，随 Mac 轮次做）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。

@@ -39,7 +39,9 @@ struct GPSparkline: View {
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
-            if values.count >= 2, let lo = values.min(), let hi = values.max() {
+            // 含 NaN/∞ 的序列会让坐标变成非法浮点，CoreGraphics 画轨迹时可能直接崩，
+            // 这些点只可能来自异常行情，直接不画（宁可不画，也不让卡片点崩）。
+            if values.count >= 2, values.allSatisfy({ $0.isFinite }), let lo = values.min(), let hi = values.max() {
                 let span = max(hi - lo, 0.000_000_1)
                 let pts: [CGPoint] = values.enumerated().map { index, value in
                     CGPoint(x: size.width * CGFloat(index) / CGFloat(values.count - 1),

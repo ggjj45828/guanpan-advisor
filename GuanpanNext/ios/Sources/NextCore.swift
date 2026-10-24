@@ -1236,10 +1236,12 @@ struct NextNASResearch: Codable, Equatable {
     struct Factor: Codable, Equatable { let code: String; let asOf: String; let source: String; let close: String; let ma20: String; let ma250: String; let state: String }
     struct AI: Codable, Equatable { let code: String; let asOf: String; let source: String; let provider: String; let model: String; let content: String; let realOrder: Bool }
     struct ProviderStatus: Codable, Equatable { let state: String; let configured: Bool; let profile: String; let model: String?; let message: String }
+    /// NAS 是纯数据仓库（2026-10-24）：只归档日 K/分时/分红/新闻，不产出因子、不下判断。
+    /// `factors`/`ai`/`providerConfigured`/`providerStatus` 仅为解码旧缓存而保留，NAS 新响应恒为 nil；
+    /// 真正的研究与最终 AI 指导全部在手机端完成，`minuteStats` 是 NAS 按需现算的归档统计。
     let factors: Factor?
     let ai: AI?
-    /// NAS 已停用大模型（2026-10-24）：研究记录只剩本机可复算的因子与分钟统计，
-    /// `ai`/`providerConfigured`/`providerStatus` 只为解码旧缓存而保留，新记录恒为空。
+    /// `providerConfigured`/`providerStatus` 同上：只为解码旧缓存，新记录恒为空。
     var providerConfigured: Bool? = nil
     var providerStatus: ProviderStatus? = nil
     /// 长期分时统计。没有就是没有（NAS 上还没攒够分钟归档），界面要如实说。
@@ -1335,7 +1337,7 @@ struct NextAppArchive: Codable, Equatable {
             guard code.count == 6, code.allSatisfy(\.isNumber),
                   report.factors.map({ $0.code == code }) ?? true,
                   report.ai.map({ $0.code == code && !$0.realOrder && !$0.content.isEmpty }) ?? true else {
-                throw NextError.invalid("NAS 研究缓存校验失败")
+                throw NextError.invalid("NAS 归档缓存校验失败")
             }
         }
     }

@@ -38,7 +38,7 @@
 | 研究统计缓存 | ✅ | `app.py /v1/research/<code>` 按最新分钟戳缓存（`put_research_stats`）；本环境实证计算 |
 | 新闻接口 | ⚠️ | `/v1/news/<code>` 调 `advisor.fetch_headlines`（Google News RSS）。沙箱无法连通 Google → 优雅降级 `state:unavailable`，**不伪造标题**（无 Mock）；生产 NAS 可正常拉取 |
 | DeepSeek AI | ⚠️ | `/health` 显示 `aiProvider: missing_key`：沙箱未配置 `DEEPSEEK_API_KEY`，代码已优雅处理；真实 key 待联调 |
-| `/health` 与 worker 状态 | ✅ | 实测返回真实 worker 状态（daily-archive 4/4、factor-research ok、minute-archive idle 收盘时段） |
+| `/health` 与 worker 状态 | ✅ | 实测返回真实 worker 状态（daily-archive 4/4、minute-archive idle 收盘时段）；`factor-research` 线程已于 2026-10-24 移除（NAS 改纯数据仓库） |
 
 ## C. Web 网页
 

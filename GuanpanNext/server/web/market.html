@@ -166,19 +166,16 @@ details.exlist .body{padding:6px 10px}
 
   <section id="ai">
     <div class="card">
-      <h2>研究与 AI 分析 <span class="tag">DeepSeek</span></h2>
+      <h2>NAS 归档数据 <span class="tag">只读</span></h2>
       <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
         <select id="aiCode" style="width:160px"></select>
-        <button class="act mini" onclick="loadResearch()">看缓存</button>
-        <button class="act mini" onclick="runAI()">跑 AI 分析</button>
-        <button class="act mini" onclick="verifyAI()">验证 AI</button>
+        <button class="act mini" onclick="loadResearch()">读取归档统计</button>
       </div>
-      <div class="sm mut">标的自动列出（持仓 + 自选），直接点「跑 AI 分析」即可，不用手输代码；分析上下文由 NAS 服务端用账本+行情+日K+分红自动拼装。</div>
-      <div id="aiBody" class="sm mut">选好标的后点「跑 AI 分析」。</div>
+      <div class="sm mut">NAS 只做数据仓库：日K / 分时 / 分红 / 新闻的采集与归档。研究、判断与 AI 结论全部在手机端完成，NAS 没有 AI 入口。</div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
         <h3 style="font-size:13px;margin:0 0 4px">长期分时统计 <span class="tag t">1/5/20/60/120 日</span></h3>
         <div class="sm mut" style="margin-bottom:4px">全部来自 NAS 分钟归档的实算：VWAP 偏离、日内振幅、往返次数、支撑压力、波动率、完整度与新鲜度。归档不够就明说不够，不做外推。</div>
-        <div id="minuteStats" class="sm mut">点「看缓存」时一并读取。</div>
+        <div id="minuteStats" class="sm mut">点「读取归档统计」时读取。</div>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
         <h3 style="font-size:13px;margin:0 0 4px">相关新闻与计划影响 <span class="tag" style="background:var(--terra)">标题级</span></h3>
@@ -858,40 +855,17 @@ async function loadDividends(){
   }catch(e){ body.className="sm mut"; body.textContent="查询失败："+e.message; }
 }
 
-// ---------- 研究 / AI ----------
-// 真实连通性验证：让 NAS 用配置好的 key 发一条最小请求，不携带任何持仓数据。
-async function verifyAI(){
-  const body=$("aiBody"); body.className="sm mut"; body.textContent="正在让 NAS 向 DeepSeek 发一条最小验证请求…";
-  try{
-    const v=await api("/v1/ai/verify");
-    body.className="";
-    body.innerHTML='<div class="status ok">DeepSeek 连通 ✓</div>'
-      + '<div class="row"><span>模型</span><span class="right">'+(v.model||'–')+'</span></div>'
-      + '<div class="row"><span>档案</span><span class="right">'+(v.profile||'–')+'</span></div>'
-      + '<div class="sm mut" style="margin-top:6px">'+(v.message||'')+'</div>';
-  }catch(e){
-    body.className="";
-    body.innerHTML='<div class="status err">验证失败：'+e.message+'</div>'
-      + '<div class="sm mut" style="margin-top:6px">常见原因：NAS 未填 DEEPSEEK_API_KEY、key 失效、NAS 出不了外网、模型名不被支持。</div>';
-  }
-}
-
+// ---------- NAS 归档统计 ----------
+// 只读归档：NAS 不产因子、不产 AI 结论（2026-10-24 起删除后台研究线程），
+// 所以这里只渲染「分钟归档算出来的窗口统计」。手机端要 AI 结论由手机自己生成。
 async function loadResearch(){
   const code=$("aiCode").value.trim(); if(!isSix(code)){toast("请输入6位代码");return;}
-  const body=$("aiBody"); body.className="sm mut"; body.textContent="读取缓存…";
   try{
     const v=await api("/v1/research/"+code);
-    const f=v.factors||{}; const ai=v.ai||{};
-    body.className="";
-    body.innerHTML=`<div class="status ${v.providerConfigured?'ok':'err'}">DeepSeek：${v.providerConfigured?'已配置':'NAS 未配置 API Key（编辑 .env 设置 DEEPSEEK_API_KEY 后重建）'}</div>
-      <div class="row"><span>名称 / 类型</span><span class="right">${f.name||'–'} ${f.instrumentType?'· '+f.instrumentType:''}</span></div>
-      <div class="row"><span>近一年股息率</span><span class="num">${f.dividendYield!=null?pct(Number(f.dividendYield)):'–'}</span></div>
-      <div class="row"><span>规模(亿元)/年化波动</span><span class="right">${f.scale!=null?fmt(Number(f.scale)):'–'} / ${f.volatility!=null?pct(Number(f.volatility)):'–'}</span></div>
-      <div class="row"><span>溢价率</span><span class="num">${f.premium!=null?pct(Number(f.premium)):'–'}</span></div>
-      ${ai.text?`<div style="margin-top:8px;white-space:pre-wrap;font-size:12px;background:#f4f5f1;padding:10px;border-radius:8px">${escapeHtml(ai.text)}</div>`:'<div class="sm mut" style="margin-top:8px">暂无 AI 分析缓存，点“跑 AI 分析”。</div>'}`;
     renderMinuteStats(v.minuteStats);
-  }catch(e){ body.className="sm mut"; body.textContent="读取失败："+e.message;
-    $("minuteStats").className="sm mut"; $("minuteStats").textContent="长期分时统计读取失败："+e.message; }
+  }catch(e){
+    $("minuteStats").className="sm mut"; $("minuteStats").textContent="长期分时统计读取失败："+e.message;
+  }
 }
 
 /* ---------- 长期分时统计（NAS research.minute_stats 的原文渲染） ---------- */
@@ -946,79 +920,6 @@ async function loadNews(){
       </div>`;}).join("")}
       <div class="sm mut" style="margin-top:6px">重大事件未经人工确认前，手机端会收回原做T/网格计划；这里只做标题级提示，不读正文、不下单。</div>`;
   }catch(e){ box.className=""; box.innerHTML='<div class="status err">新闻不可用：'+escapeHtml(e.message)+'</div>'; }
-}
-/* ---------- AI 结果排版 ----------
-   服务端 prompt 已固定输出「结论 / 置信度 / 证据 / 风险 / 等待条件 / 失效条件 / 后续跟踪」六节，
-   这里按小节渲染成卡片，和手机端 AIAnswerView 的解析保持一致；
-   万一模型没按格式来（解析不到小节），退回整段原文，不至于变得不可读。 */
-const AI_SECTIONS=[["结论","结论"],["证据","证据"],["事实依据","证据"],["推断","推断"],
-  ["风险","风险"],["等待条件","等待条件"],["等待","等待条件"],["观察","等待条件"],
-  ["失效条件","失效条件"],["后续跟踪","后续跟踪"],["跟踪","后续跟踪"]];
-function aiConfidence(text){
-  const at=String(text||"").indexOf("置信度"); if(at<0) return null;
-  const tail=String(text).slice(at, at+12);
-  if(tail.includes("高")) return "高"; if(tail.includes("中")) return "中"; if(tail.includes("低")) return "低"; return null;
-}
-function aiSections(text){
-  const out=[]; let cur=null, buf=[];
-  const flush=()=>{ if(cur){ const b=buf.join("\n").trim(); if(b) out.push({title:cur, body:b}); } cur=null; buf=[]; };
-  String(text||"").split("\n").forEach(raw=>{
-    const probe=raw.trim().replace(/^[\s*#>•\-\d.、]+/,"");
-    const hit=AI_SECTIONS.find(([m])=>probe.startsWith(m));
-    if(hit){ flush(); cur=hit[1]; const rest=probe.slice(hit[0].length).trim().replace(/^[:：]\s*/,""); if(rest) buf.push(rest); }
-    else if(cur) buf.push(raw.trim());
-  });
-  flush(); return out;
-}
-function aiHtml(text){
-  const secs=aiSections(text);
-  if(!secs.length) return `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:#f4f5f1;padding:10px;border-radius:8px">${escapeHtml(text||"")}</div>`;
-  const conf=aiConfidence(text);
-  let h="";
-  if(conf){
-    const color = conf==="高" ? "#315d58" : conf==="中" ? "#b46b58" : "#c24e58";
-    h+=`<div style="margin-top:8px"><span style="display:inline-block;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;background:${color}22;color:${color}">置信度 ${conf}</span></div>`;
-  }
-  secs.forEach(sec=>{
-    const caution = sec.title==="风险"||sec.title==="失效条件";
-    const accent = caution ? "#c24e58" : "#315d58";
-    const lines = sec.body.split("\n").map(l=>l.trim()).filter(Boolean);
-    h+=`<div style="margin-top:8px;border-left:3px solid ${accent};padding:7px 11px;background:#f7f8f5;border-radius:0 8px 8px 0">`
-      +`<div style="font-size:11px;font-weight:600;color:${accent};letter-spacing:.3px">${escapeHtml(sec.title)}</div>`
-      +`<div style="margin-top:4px;font-size:12px;line-height:1.75;color:#252a3b">`;
-    lines.forEach(l=>{
-      const bullet=/^[·•\-\*]\s?/.test(l);
-      const txt=escapeHtml(l.replace(/^[·•\-\*]\s?/,""));
-      h += bullet
-        ? `<div style="display:flex;gap:6px"><span style="color:#94a3b8">·</span><span style="flex:1">${txt}</span></div>`
-        : `<div>${txt}</div>`;
-    });
-    h+=`</div></div>`;
-  });
-  return h;
-}
-async function runAI(){
-  const sel=$("aiCode"); const code=sel?(sel.value||"").trim():"";
-  if(!isSix(code)){ toast("先在下拉里选一个标的（持仓或自选）"); return; }
-  const body=$("aiBody"); body.className="sm mut"; body.textContent="调用 DeepSeek 中…（需 NAS 已配置 Key，上下文由服务端拼装）";
-  try{
-    const v=await api("/v1/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userConfirmed:true,code})});
-    body.className="";
-    // 服务端返回的是 content（不是 text）——原来取 v.text 会退化成整段 JSON，很难看。
-    const raw=v.content||v.text||"";
-    body.innerHTML=`<div class="status ok">分析完成（${v.provider||'deepseek'}${v.model?" · "+v.model:""}）</div>`+aiHtml(raw);
-  }catch(e){
-    // 失败必须说清是哪一类，否则只会看到一句"分析失败"，无从下手。
-    const st=e.status||"", raw=e.serverError||e.message||"";
-    let why="";
-    if(st===400) why="请求被 DeepSeek 拒绝（400）。最常见原因：NAS 还在跑旧代码，模型名仍是已停用的 <b>deepseek-flash</b>；部署最新版后 /health 的 model 应变成 <b>deepseek-v4-flash</b>。";
-    else if(st===401||st===403) why="密钥问题（"+st+"）：NAS 的 .env 里 DEEPSEEK_API_KEY 没填、填错或已失效，改完要重启容器。";
-    else if(String(st).startsWith("5")||!st) why="服务端/网络问题：NAS 出不了外网，或 DeepSeek 暂时不可达。可点「验证 AI」看具体原因。";
-    body.className="";
-    body.innerHTML='<div class="status err">分析失败'+(st?"（HTTP "+st+"）":"")+'</div>'
-      + (why?'<div class="sm" style="margin-top:6px">'+why+'</div>':'')
-      + '<div class="sm mut" style="margin-top:6px">服务端原文：'+escapeHtml(raw)+'</div>';
-  }
 }
 function escapeHtml(s){return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
 

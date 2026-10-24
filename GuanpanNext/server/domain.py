@@ -362,6 +362,10 @@ class NextDatabase:
                 db.execute("ALTER TABLE dividend_archive ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
+            # 已退役的后台任务（2026-10-24）：NAS 改为纯数据仓库，`factor-research`
+            # 研究线程已删除。旧库里的心跳行若留着，`worker_health()` 会永远把它算成
+            # stale —— 既是假警报，还会经 K4/K5 冒到手机通知中心。启动时清掉。
+            db.execute("DELETE FROM worker_status WHERE name IN ('factor-research')")
 
     def connect(self):
         return sqlite3.connect(self.filename, timeout=15)

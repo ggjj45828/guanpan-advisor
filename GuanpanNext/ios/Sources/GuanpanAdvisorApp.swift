@@ -675,9 +675,14 @@ private struct InstrumentDetailScreen: View {
                 }
                 WorthBuyPanel(code: code)
                 EditorialSection(title: "交易盘口", trailing: model.rules[code]?.isVerified == true ? "规则已验证" : "规则待验证", accent: p.chartViolet) {
-                    if model.orderBooks[code] == nil { GPStatus(title: "盘口数据尚未连接", detail: "五档报价未到达前不展示模拟档位或推测成交。", symbol: "rectangle.split.3x1") }
-                    else if model.rules[code]?.isVerified != true { GPStatus(title: "交易规则尚未验证", detail: "不会假设 ETF 是 T+0，也不会固定推断手数或费用。", symbol: "checkmark.shield") }
-                    else { OrderBookView(snapshot: model.orderBooks[code]!) }
+                    // 不再强解包：盘口字典随时可能因刷新被清空，`!` 会直接把卡片点崩。
+                    if let snapshot = model.orderBooks[code], model.rules[code]?.isVerified == true {
+                        OrderBookView(snapshot: snapshot)
+                    } else if model.orderBooks[code] == nil {
+                        GPStatus(title: "盘口数据尚未连接", detail: "五档报价未到达前不展示模拟档位或推测成交。", symbol: "rectangle.split.3x1")
+                    } else {
+                        GPStatus(title: "交易规则尚未验证", detail: "不会假设 ETF 是 T+0，也不会固定推断手数或费用。", symbol: "checkmark.shield")
+                    }
                 }
                 EditorialSection(title: "账户与规则", accent: p.chartGold) {
                     if let basis = model.book.costBasis(for: code) {
@@ -942,7 +947,9 @@ private struct DecisionScreen: View {
                     Image(systemName: "sparkles").foregroundStyle(p.forest)
                     Text("私人投资顾问").font(.caption.weight(.semibold)).foregroundStyle(p.forest)
                     Spacer()
-                    Text(code.flatMap { model.researchStatus[$0] } ?? (code.flatMap { model.nasResearch[$0]?.ai } == nil ? "本地规则 · AI 待连接" : "显示已保存研究"))
+                    // NAS 不再产 AI 结论（研究在手机端），有归档统计就说明「用了 NAS 数据」，
+                    // 没有就如实说没有，不要写成「AI 待连接」让人以为在等 NAS 出建议。
+                    Text(code.flatMap { model.researchStatus[$0] } ?? (code.flatMap { model.nasResearch[$0]?.minuteStats } == nil ? "本地规则 · 无 NAS 归档统计" : "本地规则 · 已用 NAS 归档统计"))
                         .font(.caption2).foregroundStyle(p.muted).lineLimit(2).multilineTextAlignment(.trailing)
                 }.padding(.top, 7)
                 Text(code.map { "围绕 \(knownName($0))，把已知信息整理成下一步" } ?? "你的真实持仓，今天怎么处理").font(.system(.title2, design: .serif).weight(.semibold)).foregroundStyle(p.ink).padding(.top, 10)
@@ -1025,7 +1032,7 @@ private struct DecisionScreen: View {
                     AIInputsCard(code: code)
                     EditorialSection(title: "手机端统一 AI 指导", accent: p.terracotta) {
                         GPCard(accent: p.terracotta) {
-                            Text("手机端统一读取全部真实持仓、最新缓存行情、NAS 长期研究与相关新闻、离线规则结论及投资画像，生成唯一一份最终建议。具体价格只引用规则引擎通过门槛的候选计划；NAS 仅提供长期数据研究，不是另一个顾问。")
+                            Text("手机端统一读取全部真实持仓、最新缓存行情、NAS 长期归档数据与相关新闻、离线规则结论及投资画像，生成唯一一份最终建议。具体价格只引用规则引擎通过门槛的候选计划；NAS 只是数据仓库，研究与判断都在手机上，不是另一个顾问。")
                                 .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                             GPActionButton(title: model.unifiedAIIsRunning ? "正在综合分析…" : "生成唯一综合指导", secondary: true, systemImage: "sparkles") {
                                 guard let key = DeepSeekMobile.loadKey() else {
@@ -1154,6 +1161,12 @@ private struct DecisionScreen: View {
 
 /// 借鉴小万量化的「结构化结论」：把 AI 自由文本按 结论/证据/风险/等待条件/失效条件/后续跟踪 拆成区块，
 /// 并抽出「置信度：高/中/低」做成徽标；拆不出区块就原样展示全文（优雅降级，不丢信息）。
+///
+/// 排版原则（2026-10-24 用户反馈「排版有点乱」）：
+/// 1. 模型爱写 Markdown（`**加粗**`、`## 标题`、`- 要点`、`| 表格 |`），原样显示就是满屏符号——
+///    这里统一剥离记号再呈现，只改排版、不改一个字的内容。
+/// 2. 模型常把三条要点挤在一行用「；」隔开，读起来最崩——按分号拆成多行（标点保留）。
+/// 3. 小节之间要有呼吸感：每节浅底 + 左侧色条，风险/失效条件用警示色，一眼分得清主次。
 private struct AIAnswerView: View {
     @Environment(\.gp) private var p
     let text: String
@@ -1167,6 +1180,8 @@ private struct AIAnswerView: View {
         ("失效条件", "失效条件"),
         ("后续跟踪", "后续跟踪"), ("跟踪", "后续跟踪")
     ]
+
+    // MARK: - 解析
 
     private var confidence: String? {
         guard let r = text.range(of: "置信度") else { return nil }
@@ -1188,13 +1203,12 @@ private struct AIAnswerView: View {
             currentTitle = nil; buffer = []
         }
         for raw in text.components(separatedBy: "\n") {
-            let probe = Self.stripped(raw.trimmingCharacters(in: .whitespaces))
-            if let hit = Self.headerMap.first(where: { probe.hasPrefix($0.match) }) {
+            let probe = Self.headingProbe(raw)
+            if !probe.isEmpty, let hit = Self.headerMap.first(where: { probe.hasPrefix($0.match) }) {
                 flush()
                 currentTitle = hit.title
                 var rest = String(probe.dropFirst(hit.match.count)).trimmingCharacters(in: .whitespaces)
                 if rest.hasPrefix(":") || rest.hasPrefix("：") { rest = String(rest.dropFirst()).trimmingCharacters(in: .whitespaces) }
-                while rest.hasPrefix("*") { rest = String(rest.dropFirst()).trimmingCharacters(in: .whitespaces) }
                 if !rest.isEmpty { buffer.append(rest) }
             } else if currentTitle != nil {
                 buffer.append(raw)
@@ -1203,23 +1217,113 @@ private struct AIAnswerView: View {
         flush()
         return out
     }
-    private static func lines(_ body: String) -> [String] {
-        body.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+
+    // MARK: - 文本清洗（只改排版，不改内容）
+
+    /// 剥掉行内 Markdown 记号：`**加粗**`、`` `代码` ``、`## 标题`、`> 引用`。
+    static func plain(_ s: String) -> String {
+        var r = s
+        for token in ["**", "__", "`", "###", "##", "#"] { r = r.replacingOccurrences(of: token, with: "") }
+        return r.trimmingCharacters(in: .whitespaces)
     }
+    /// 只用于「这一行是不是小节标题」的判断：去掉编号（一、/1./（1））、书名号括号、粗体记号。
+    static func headingProbe(_ raw: String) -> String {
+        var s = plain(raw)
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: "【】[]（）() "))
+        var changed = true
+        while changed {
+            changed = false
+            if let f = s.first, f.isNumber { s.removeFirst(); changed = true }
+            for mark in [".", "、", ")", "）", "(", "（", "【", "】", "[", "]", "：", ":", " ", "\u{3000}",
+                         "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"] {
+                if s.hasPrefix(mark) { s.removeFirst(); changed = true }
+            }
+        }
+        return s
+    }
+    private static let bulletMarks: [Character] = ["·", "•", "-", "*", "–", "—"]
     private static func isBullet(_ line: String) -> Bool {
-        guard let first = line.first else { return false }
-        return "·•-*".contains(first)
+        guard let f = line.first else { return false }
+        return bulletMarks.contains(f)
     }
     private static func bulletText(_ line: String) -> String {
         String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
     }
-    private static func stripped(_ s: String) -> String {
-        var r = s
-        while let f = r.first, "*#>".contains(f) || f == "-" || f == "•" || f == " " { r.removeFirst() }
-        return r
+    /// 有序列表：`1. 内容` / `1、内容` / `1) 内容`。
+    /// 注意 `1.400` 这种价格不能被当成编号——小数点后必须跟空格才算列表。
+    private static func orderedParts(_ line: String) -> (String, String)? {
+        var digits = ""
+        var rest = Substring(line)
+        while let f = rest.first, f.isNumber { digits.append(f); rest = rest.dropFirst() }
+        guard !digits.isEmpty, let sep = rest.first, ".、)）".contains(sep) else { return nil }
+        rest = rest.dropFirst()
+        if sep == "." {
+            guard let f = rest.first, f == " " || f == "\u{3000}" else { return nil }
+        }
+        let body = String(rest).trimmingCharacters(in: .whitespaces)
+        guard !body.isEmpty else { return nil }
+        return (digits + ")", body)
     }
+    /// 表格行（`| 项目 | 值 |`）没有真正的表格容器，直接显示管道符很乱：换成「项目 ｜ 值」。
+    private static func tablePlain(_ line: String) -> String {
+        guard line.filter({ $0 == "|" }).count >= 2 else { return line }
+        let cells = line.split(separator: "|")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.allSatisfy { $0 == "-" || $0 == ":" } }
+        guard cells.count >= 2 else { return line }
+        return cells.joined(separator: " ｜ ")
+    }
+    /// 切行：空行丢弃；一行里用「；」串了好几条要点的，按分号拆成多行（标点保留在行尾）。
+    static func lines(_ body: String) -> [String] {
+        var out: [String] = []
+        for raw in body.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            // 以数字开头的是有序列表，拆了会破坏编号，保持整行。
+            let startsWithDigit = line.first?.isNumber == true
+            if !startsWithDigit, !isBullet(line), line.count > 48, line.contains("；") {
+                var piece = ""
+                for ch in line {
+                    piece.append(ch)
+                    if ch == "；" {
+                        out.append(piece.trimmingCharacters(in: .whitespaces))
+                        piece = ""
+                    }
+                }
+                let tail = piece.trimmingCharacters(in: .whitespaces)
+                if !tail.isEmpty { out.append(tail) }
+            } else {
+                out.append(line)
+            }
+        }
+        return out
+    }
+
+    // MARK: - 渲染
+
+    @ViewBuilder
+    private func row(_ rawLine: String) -> some View {
+        let line = Self.plain(rawLine)
+        if let ordered = Self.orderedParts(line) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(ordered.0).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(p.muted)
+                Text(ordered.1).font(.subheadline).foregroundStyle(p.ink)
+                    .lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+        } else if Self.isBullet(line) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("·").font(.subheadline.weight(.bold)).foregroundStyle(p.muted)
+                Text(Self.bulletText(line)).font(.subheadline).foregroundStyle(p.ink)
+                    .lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+        } else {
+            Text(Self.tablePlain(line)).font(.subheadline).foregroundStyle(p.ink)
+                .lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if let confidence {
                 HStack(spacing: 6) {
                     Text("置信度").font(.caption2).foregroundStyle(p.muted)
@@ -1230,33 +1334,32 @@ private struct AIAnswerView: View {
                 }
             }
             if sections.isEmpty {
-                Text(text).font(.subheadline).foregroundStyle(p.ink).textSelection(.enabled)
+                // 模型没按格式输出：整段原样呈现，但照样剥掉 Markdown 记号、照样按分号断行。
+                let fallback = Self.lines(text)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(fallback.indices, id: \.self) { j in row(fallback[j]) }
+                }
             } else {
                 ForEach(sections.indices, id: \.self) { i in
                     let sec = sections[i]
                     let caution = sec.title == "风险" || sec.title == "失效条件"
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                            Image(systemName: caution ? "exclamationmark.triangle.fill" : "circle.fill").font(.system(size: 7)).foregroundStyle(caution ? p.terracotta : p.forest)
-                            Text(sec.title).font(.caption.weight(.semibold)).foregroundStyle(caution ? p.terracotta : p.forest)
-                        }
-                        VStack(alignment: .leading, spacing: 3) {
-                            let lines = Self.lines(sec.body)
-                            ForEach(lines.indices, id: \.self) { j in
-                                let line = lines[j]
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    if Self.isBullet(line) {
-                                        Text("·").foregroundStyle(p.muted)
-                                        Text(Self.bulletText(line)).font(.subheadline).foregroundStyle(p.ink)
-                                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                                    } else {
-                                        Text(line).font(.subheadline).foregroundStyle(p.ink)
-                                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                                    }
-                                }
+                    let accent = caution ? p.terracotta : p.forest
+                    HStack(alignment: .top, spacing: 9) {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(accent.opacity(0.75)).frame(width: 3)
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 5) {
+                                Image(systemName: caution ? "exclamationmark.triangle.fill" : "circle.fill")
+                                    .font(.system(size: 7)).foregroundStyle(accent)
+                                Text(sec.title).font(.caption.weight(.semibold)).foregroundStyle(accent)
                             }
+                            let rows = Self.lines(sec.body)
+                            ForEach(rows.indices, id: \.self) { j in row(rows[j]) }
                         }
                     }
+                    .padding(.vertical, 9).padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
             Text("AI 生成 · 仅供研究，不构成交易指令。").font(.caption2).foregroundStyle(p.muted)

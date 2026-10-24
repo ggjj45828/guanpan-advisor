@@ -99,7 +99,7 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                                         "workers": database.worker_health()})
             if path == "/v1/ai/verify":
                 # NAS 不再代理任何大模型：手机端 API key 只保存在本机钥匙串，
-                # 连通性在手机上直接验证。NAS 是后台研究员，不是第二个顾问。
+                # 连通性在手机上直接验证。NAS 只是数据仓库，不是研究员、也不是第二个顾问。
                 return self.reply(410, {"error": "NAS AI 辅助已停用；AI key 仅保存在手机本地，请在手机设置中验证。",
                                         "code": "nas_ai_retired"})
             if path == "/api/data":
@@ -124,6 +124,7 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     # 支撑压力、波动率、成交量与数据完整度/新鲜度。纯计算，不缓存也不伪造。
                     # 结果按「最新分钟戳」缓存：归档有新数据就重算，没有就直接复用，
                     # 既不让手机端每次重算，也不会读到与归档不一致的旧结论。
+                    # 注意：这是**被动按需计算**——只有手机来问才跑，NAS 不存在后台研究循环。
                     try:
                         minute_rows = database.get_minute_range(code, 130)
                     except (InvalidData, ValueError):
@@ -136,9 +137,13 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                         stats = research.minute_stats(minute_rows)
                         if latest:
                             database.put_research_stats(code, latest, stats)
-                    return self.reply(200, {"factors": database.get_research("factors-" + code),
-                                            "ai": database.get_research("deepseek-" + code),
-                                            "minuteStats": stats})
+                    # factors / ai 恒为 None：NAS 已不再生成因子与 AI 结论（研究交给手机端）。
+                    # 键保留是为了让旧版客户端解码不报错，历史上写入的残留记录不再回传，
+                    # 避免手机读到与本机规则不一致的过期结论。
+                    return self.reply(200, {"factors": None,
+                                            "ai": None,
+                                            "minuteStats": stats,
+                                            "researchOwner": "mobile"})
                 except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/news/"):
                 # 新闻 → 行业/证券 → 真实持仓 → 当前计划。手机端要能反复取标题来核对

@@ -1,7 +1,7 @@
 """新闻标题抓取（Google News RSS）。
 
-NAS 是后台研究员：只负责把公开新闻标题带到手机端，由手机端规则引擎
-（NextNewsImpactEngine）判断与持仓的关系。NAS 不生成任何 AI 结论。
+NAS 是纯数据仓库：只负责把公开新闻标题带到手机端，由手机端规则引擎
+（NextNewsImpactEngine）判断与持仓的关系。NAS 不做研究、不生成任何 AI 结论。
 """
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime

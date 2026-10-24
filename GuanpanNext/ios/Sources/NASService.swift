@@ -251,14 +251,17 @@ enum NextNASService {
         struct Event: Decodable { let code: String; let date: String; let amountPerShare: String; let isEstimated: Bool?; let recordDate: String?; let payDate: String? }
     }
 
+    /// 按需取 NAS 归档统计（分时窗口 VWAP/支撑压力/完成度等）。
+    /// NAS 已不产出因子与 AI 结论（研究在手机端），因此 `factors`/`ai` 恒为 nil，
+    /// 下面两道校验对 nil 视为通过；保留它们是为了兼容旧版 NAS 与防止串号。
     static func fetchResearch(code: String, baseURL: String, session: URLSession = .shared) async throws -> NextNASResearch {
         guard code.count == 6, code.allSatisfy(\.isNumber) else { throw NextError.invalid("证券代码无效") }
         let url = try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("research").appendingPathComponent(code)
         let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 10))
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw NextError.invalid("NAS 研究记录暂不可用") }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw NextError.invalid("NAS 归档数据暂不可用") }
         let report = try JSONDecoder().decode(NextNASResearch.self, from: data)
         guard report.ai.map({ $0.code == code && !$0.realOrder }) ?? true,
-              report.factors.map({ $0.code == code }) ?? true else { throw NextError.invalid("NAS 研究记录与证券不符") }
+              report.factors.map({ $0.code == code }) ?? true else { throw NextError.invalid("NAS 归档记录与证券不符") }
         return report
     }
 

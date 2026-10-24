@@ -1116,7 +1116,7 @@ private struct ModernHome: View {
     private var nasRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 12)).foregroundStyle(p.forest)
-            Text("NAS 长期研究：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
+            Text("NAS 长期归档：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
             Spacer()
             Button { model.push(.profile, in: .decision) } label: {
                 Text("AI 对我的了解").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.forest)
@@ -1390,11 +1390,11 @@ private struct MagazineHome: View {
         .background(p.heroSurface, in: RoundedRectangle(cornerRadius: p.heroRadius, style: .continuous))
     }
 
-    /// NAS 后台研究入口：杂志主题以前只字未提 NAS，用户不知道后台研究员在不在线。
+    /// NAS 归档状态入口：杂志主题以前只字未提 NAS，用户不知道数据仓库在不在线。
     private var nasRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 12)).foregroundStyle(p.forest)
-            Text("NAS 长期研究：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
+            Text("NAS 长期归档：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
             Spacer()
             Text(snapshot.nasConfigured ? "在线" : "未连")
                 .font(.system(size: 9, weight: .semibold))
@@ -1504,8 +1504,9 @@ private struct PuzzleHome: View {
                             Text("NAS 状态").font(.system(size: 9.5)).foregroundStyle(p.muted)
                             Text(snapshot.nasText).font(.system(size: 13, weight: .heavy, design: .rounded))
                                 .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted)
-                            // 文案必须和落点一致：这里讲的是后台研究员（数据/研究/新闻源），不是第二顾问。
-                            Text("后台研究归档 · 不构成第二建议").font(.system(size: 9)).foregroundStyle(p.muted)
+                            // 文案必须和落点一致：NAS 是纯数据仓库（归档日K/分时/分红/新闻），
+                            // 研究与判断全部在手机端，这里只是数据源状态，不是第二顾问。
+                            Text("数据归档 · 不构成第二建议").font(.system(size: 9)).foregroundStyle(p.muted)
                             // 拼图主题的新闻入口收在这块砖里：整卡是状态展示，新闻走真实路由。
                             Button { model.requestTab(.decision, route: .news) } label: {
                                 HStack(spacing: 3) {

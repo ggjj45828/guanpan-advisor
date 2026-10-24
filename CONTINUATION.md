@@ -1,8 +1,8 @@
 # CONTINUATION.md — 观盘 AI 私人投资顾问（双端：iOS + NAS）
 
 > 本文件依《完整开发、重构、测试与验收总要求》#114/#115 写入：若执行轮次必须结束，把完整状态写于此，下一轮从此续做。
-> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：`af56b7c`
-> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（HEAD af56b7c，78✅/0🟡/3🟠/0❌）。
+> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：NAS 取消后台研究）
+> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（79✅/1🟡/2🟠/0❌）。
 
 ---
 
@@ -12,7 +12,7 @@
 - 工作红线（不可逾越）：
   1. 只有一个真实账户，无模拟/虚拟/孪生账户（A1）。
   2. AI 只指导、**绝不自动下单**（A2/A3，成交必须用户确认）。
-  3. NAS = 后台研究员，**非第二顾问**；手机在线 AI 是**唯一最终指导**（A4/A5/H5）。
+  3. NAS = **纯数据仓库**（日K/分时/分红/新闻的采集与归档），**不做后台研究、不下判断、非第二顾问**；研究、因子与最终 AI 指导**全部在手机端**（A4/C4/A5/H5）。
   4. 数据不足**不出伪精确价格**（E3/H3，LLM 不造价格/统计/新闻）。
 
 ## 2. 本轮已完成的审计与修正（2026-10-24）
@@ -25,13 +25,31 @@
    - 五主题对照视觉：`/c/Users/Administrator/WorkBuddy/2026-10-15-21-10-40/guanpan-themes-5-comparison.svg`（配色取自 `previewHexes`，骨架取自 ThemeHome 五结构体）。
 3. **CI 绿确认**：`grwzxq` 监控 eef86d7/af56b7c 推送后连续 18 次轮询 `ci-logs-build` **无新 failure 目录**，且 `ci-logs-sim` 分支未生成＝screenshots job 通过。M3（构建）/ M6（五主题截图）自 🟡 翻 ✅。
 4. **矩阵回写三提交**：a3f22cc（端口 8789→8786 全树）、eef86d7（CI 第 5 处编译错 scan() 实参顺序）、af56b7c（退役旧 30001 服务）。
-5. **NAS↔手机 穿透流量平衡（新增，详见 `GuanpanNext/NAS-MOBILE-SPLIT.md`）**：实时归手机直连（零隧道）、NAS 只归档/研究、不推实时给手机。代码：①`worker.minute_loop` 去实时报价拉取（分时归档保留）；②日 K 上限 640→1000 + `put_daily` 合并不裁剪（累积 1000+ 天）；③`refreshQuotes` 直连优先（腾讯首源含 IOPV），NAS 仅兜底；④`refreshDaily` 亦直连优先、NAS 仅兜底/补超长历史。<br>**待 Mac/真机验证**：IOPV 不丢（`NextCore.swift:301`）、直连优先无编译错、穿透流量下降。
+5. **NAS↔手机 穿透流量平衡（详见 `GuanpanNext/NAS-MOBILE-SPLIT.md`）**：实时归手机直连（零隧道）、NAS 只归档、不推实时给手机。代码：①`worker.minute_loop` 去实时报价拉取（分时归档保留）；②日 K 上限 640→1000 + `put_daily` 合并不裁剪（累积 1000+ 天）；③`refreshQuotes` 直连优先（腾讯首源含 IOPV），NAS 仅兜底；④`refreshDaily` 亦直连优先、NAS 仅兜底/补超长历史。<br>**待 Mac/真机验证**：IOPV 不丢（`NextCore.swift:301`）、直连优先无编译错、穿透流量下降。
+6. **NAS 取消后台研究（回应「研究就交给手机」）**：
+   - `server/workers.py`：删除 `research_loop` + `research_factors`，`start_workers` 线程仅剩 `daily-archive` / `minute-archive` / `dividend-research`（全部是**采集**，不是研究）。
+   - `server/app.py` · `/v1/research/{code}`：`factors`/`ai` 恒 `null`（键保留以兼容旧客户端解码）、新增 `researchOwner: "mobile"`；历史 `factors-*`/`deepseek-*` 残留**不再回传**（否则手机读到与本机规则不一致的过期结论）。接口本身保留＝「手机来问才现算归档统计」的被动通道。
+   - `server/research.py`：头注明「被动按需计算，不是后台研究员」；`put_research`/`get_research`/`get_research_stats` 保留（测试与按需缓存）。
+   - 文案统一为「NAS 长期归档 / 数据归档」：`ThemeHome.swift` 两处、`GuanpanAdvisorApp.swift`（统一 AI 说明）、`DeepSeekMobile.swift`（系统提示）、`NextCandidatePlans.swift`（dataState + 上下文标签）、`NASService.swift`/`NextAppModel.swift`/`NextCore.swift` 错误与状态文案、`server/web/index.html`、`server/news.py`、`server/app.py` 注释。
+   - 验证：`py_compile` 通过；`python -m unittest discover -s tests` **68 项全绿**。
+7. **模型输出排版重写（回应「大模型生成的文字排版有点乱」）**：`ios/Sources/GuanpanAdvisorApp.swift` 的 `AIAnswerView` 重写——
+   - 剥行内 Markdown（`**`/`__`/`` ` ``/`###`/`#`），此前 `**结论**` 会原样显示成符号；
+   - 小节标题识别扩到 `【结论】`/`1. 结论`/`一、结论`/`## 结论`（`headingProbe` 去编号·括号·粗体后匹配）；
+   - 有序列表 `1.`/`1、`/`1)` 编号成列表标（`1.400` 这类价格不会误判，小数点后须有空格）；
+   - 表格行 `| a | b |` 转「a ｜ b」；一行用「；」串多条要点的按分号断行（保留标点）；
+   - 每节浅底 + 左侧色条、风险/失效条件警示色、行距与节间距加大。
+   - 纯渲染层，不动 prompt 与内容。
+8. **闪退隐患修复（回应「闪退卡片/闪退按钮」）**：
+   - 盘口卡片 `model.orderBooks[code]!` 强解包 → `if let` 绑定；
+   - `GPSparkline` 遇 NaN/∞ 序列不画（非法坐标进 CoreGraphics 可能崩）；
+   - 存储层 `applicationSupportDirectory.first!` → App Support → Documents → 临时目录三级兜底。
+9. **NAS 网页 AI 入口彻底拆除 + 死文件清理**：`market.html` 删「跑 AI 分析/验证 AI」按钮、`runAI()`/`verifyAI()`/`aiHtml()`、DeepSeek Key 提示（点下去打的是恒 410 的退役端点），改为「NAS 归档数据 · 只读」；删除已 410 的 `server/web/classic.html`（1.6 MB 死页面，仍含影子模拟网格 UI）。
 
 ## 3. 当前状态汇总
 
 | 状态 | 数量 | 项 |
 |---|---|---|
-| ✅ Verified | 78 | 含 M3/M6 本轮翻绿 |
+| ✅ Verified | 79 | 含 M3/M6 本轮翻绿 + 新增 C4（NAS＝纯数据仓库、无后台研究） |
 | 🟡 Implemented/Not Verified | 1 | D4（DataQuality 0–100 总分 UI，代码已落地，待 Mac 编译验证） |
 | 🟠 Partial | 2 | B1（端到端实机链）、J7（组件命名归拢） |
 | ❌ Missing | 0 | — |

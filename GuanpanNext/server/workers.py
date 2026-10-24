@@ -1,4 +1,10 @@
-"""Independent NAS workers. No worker reads the mobile sync preference."""
+"""Independent NAS archive workers. No worker reads the mobile sync preference.
+
+NAS 的定位是「纯数据仓库」——只负责采集/归档（日 K、分时、分红事件、新闻），
+不跑因子研究、不下判断、不生成 AI 结论。研究全部在手机端完成；
+只有当手机 AI 需要 NAS 上的历史数据时才按需向 NAS 拉取，这与隧道无关，
+属于正常的数据同步。
+"""
 import json
 import threading
 import time
@@ -61,20 +67,6 @@ def attach_quote_iopv(rows, quote):
     if quote_time.astimezone(SHANGHAI).date() == last_time.astimezone(SHANGHAI).date() and abs((quote_time - last_time).total_seconds()) <= 300:
         rows[-1]["iopv"] = quote["iopv"]
     return rows
-
-
-def research_factors(code, bars):
-    """Traceable local factor research; no model-generated claims or real trading."""
-    closes = [Decimal(row["close"]) for row in bars]
-    if len(closes) < 250: return None
-    ma20 = sum(closes[-20:]) / 20
-    ma250 = sum(closes[-250:]) / 250
-    delta = closes[-1] / closes[-21] - 1
-    drawdown = closes[-1] / max(closes[-20:]) - 1
-    return {"code": code, "asOf": bars[-1]["date"], "close": str(closes[-1]),
-        "ma20": str(ma20), "ma250": str(ma250), "momentum20": str(delta),
-        "drawdown20": str(drawdown), "state": "观察" if closes[-1] >= ma250 and delta > 0 else "谨慎",
-        "source": "NAS archived Tencent qfqday", "type": "local-factor-research", "realOrder": False}
 
 
 def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute):
@@ -154,23 +146,5 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                    f"{collected}/{len(codes)} codes checked; ETF F10 events separated from qfq/raw estimates; history retained{missing_note(failures)}")
             time.sleep(86400)
 
-    def research_loop():
-        update("factor-research", "starting", "worker starting")
-        while True:
-            codes = tracked(); failures = []; researched = 0
-            for code in codes:
-                try:
-                    data = database.get_daily(code)
-                    result = research_factors(code, data["bars"]) if data else None
-                    if result:
-                        database.put_research("factors-" + code, result)
-                        # NAS 不再生成 AI 结论：研究记录只保留本机可复算的因子，
-                        # 最终 AI 指导由手机端统一生成。
-                        researched += 1
-                except Exception as error: failures.append(f"{code}:{type(error).__name__}")
-            update("factor-research", "ok" if not failures else "degraded",
-                   f"{researched}/{len(codes)} codes have usable 250-day research; next run in 15m{missing_note(failures)}")
-            time.sleep(900)
-
-    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-research", dividend_loop), ("factor-research", research_loop)):
+    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-research", dividend_loop)):
         threading.Thread(target=target, name=name, daemon=True).start()

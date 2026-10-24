@@ -160,6 +160,37 @@ struct NextDailyGuidance: Equatable {
     var actionableItems: [NextGuidanceItem] { items.filter(\.isActionable) }
 }
 
+/// NAS 长期分时统计 → 人话。两处共用（界面「为什么今天这样」+ 在线 AI 的上下文），
+/// 单一来源避免两边文案漂移：改门槛/改措辞只改这里。
+enum NextNasStatsText {
+    /// 只描述 NAS 归档能算出来的事实：VWAP 偏离、振幅/往返、波动率、样本是否够。
+    /// 样本不够就明说不够，绝不补一句「大概还行」。
+    static func notes(_ stats: NextNASMinuteStats) -> [String] {
+        var notes: [String] = []
+        if let w20 = stats.window(20), let deviation = w20.closeVsVwapPercent {
+            notes.append("NAS 20 日 VWAP ¥\(w20.vwap)，现价偏离 \(String(format: "%+.2f", deviation))%（\(w20.daysUsed) 天 · \(Int((w20.minuteCoverage * 100).rounded()))% 分钟覆盖）")
+        }
+        if let w60 = stats.window(60), let amplitude = w60.amplitudeMedianPercent,
+           let trips = w60.roundTripsMedian {
+            notes.append("NAS 60 日日内振幅中位数 \(String(format: "%.2f", amplitude))%、日均往返 \(String(format: "%.1f", trips)) 次")
+        }
+        if let w120 = stats.window(120), let volatility = w120.volatilityPercent {
+            notes.append("NAS 120 日波动率 \(String(format: "%.2f", volatility))%")
+        }
+        if !stats.quality.enoughForLongTerm {
+            notes.append("NAS 分时归档仅 \(stats.days) 天 / 覆盖 \(Int((stats.quality.minuteCoverage * 100).rounded()))%，还不足以支撑长期结论")
+        }
+        return notes
+    }
+
+    /// 新鲜度单独一行：界面上它已经由置信度降档表达过，这里供在线 AI 上下文用，
+    /// 避免模型把「上个月的分时」当成今天的盘面。
+    static func freshnessNote(_ stats: NextNASMinuteStats) -> String? {
+        guard stats.freshness.stale else { return nil }
+        return "NAS 归档已过期：\(stats.freshness.reason ?? "最后一天 \(stats.lastDay ?? "未知")")"
+    }
+}
+
 enum NextOpportunityScanner {
     /// 扫描全部真实持仓，按「成功概率 × 风险 × 流动性 × 成本 × 数据可信度」排序。
     /// 不预测涨跌；不交易是正常结论。
@@ -188,22 +219,7 @@ enum NextOpportunityScanner {
             // 但绝不改写行情事实，也绝不替本地算价格。
             let nasStats = research[position.code]?.minuteStats
             let nasRange = NextNasRange(stats: nasStats)
-            var nasNotes: [String] = []
-            if let stats = nasStats {
-                if let w20 = stats.window(20), let deviation = w20.closeVsVwapPercent {
-                    nasNotes.append("NAS 20 日 VWAP ¥\(w20.vwap)，现价偏离 \(String(format: "%+.2f", deviation))%（\(w20.daysUsed) 天 · \(Int((w20.minuteCoverage * 100).rounded()))% 分钟覆盖）")
-                }
-                if let w60 = stats.window(60), let amplitude = w60.amplitudeMedianPercent,
-                   let trips = w60.roundTripsMedian {
-                    nasNotes.append("NAS 60 日日内振幅中位数 \(String(format: "%.2f", amplitude))%、日均往返 \(String(format: "%.1f", trips)) 次")
-                }
-                if let w120 = stats.window(120), let volatility = w120.volatilityPercent {
-                    nasNotes.append("NAS 120 日波动率 \(String(format: "%.2f", volatility))%")
-                }
-                if !stats.quality.enoughForLongTerm {
-                    nasNotes.append("NAS 分时归档仅 \(stats.days) 天 / 覆盖 \(Int((stats.quality.minuteCoverage * 100).rounded()))%，还不足以支撑长期结论")
-                }
-            }
+            let nasNotes: [String] = nasStats.map(NextNasStatsText.notes) ?? []
             var confidence = NextDataConfidence.assess(quote: quote, now: now, dailyBarCount: bars.count,
                                                        minuteSampleCount: minutes.filter { $0.close > 0 }.count)
             if let stats = nasStats, stats.freshness.stale {
@@ -357,8 +373,8 @@ enum NextOpportunityScanner {
         let noAction = ranked.filter { !$0.isActionable }.map { "\($0.name)：\($0.strategy.rawValue)" }.joined(separator: "；")
         let dataState: String
         if quotes.isEmpty { dataState = "断网/无行情 · 仅本地缓存与离线规则" }
-        else if nasAvailable { dataState = "NAS 长期研究可用 · 实时行情正常" }
-        else { dataState = "NAS 离线 · 仅实时行情 + 本地规则，长期统计缺失" }
+        else if nasAvailable { dataState = "NAS 长期归档可用 · 实时行情正常" }
+        else { dataState = "NAS 未提供可用长期统计 · 仅实时行情 + 本地规则，长期统计缺失" }
 
         return NextDailyGuidance(generatedAt: now, items: ranked, summary: finalSummary,
                                  noActionSummary: noAction.isEmpty ? "全部持仓都可以继续持有。" : "不建议操作：" + noAction,
@@ -418,7 +434,7 @@ enum NextDecisionContextBuilder {
         【账户】现金 ¥\(NextMoney.text(book.cash))；持仓 \(book.positions.count) 只。
         【持仓】\(holdings.joined(separator: "\n"))
         【市场状态与候选计划】\(planLines.joined(separator: "\n"))
-        【NAS 长期研究】\(nasResearchLines.isEmpty ? "暂无（NAS 离线或未返回）" : nasResearchLines.joined(separator: "\n"))
+        【NAS 长期归档数据】\(nasResearchLines.isEmpty ? "暂无（NAS 未连接，或归档还没攒够可用统计）" : nasResearchLines.joined(separator: "\n"))
         【新闻】\(newsLines.isEmpty ? "暂无" : newsLines.joined(separator: "\n"))
         【投资画像】\(profileLines.isEmpty ? "暂无足够行为样本，按默认门槛处理" : profileLines.joined(separator: "\n"))
         【今日结论】\(guidance.summary)

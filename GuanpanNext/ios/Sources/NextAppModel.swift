@@ -54,7 +54,11 @@ struct LocalPreferences: Codable {
     private var blockedFiles = Set<String>()
     private(set) var integrityWarning: String?
     init(fileManager: FileManager = .default) {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // 强解包曾在容器目录异常时把 App 直接带崩（启动即闪退、还看不到任何提示）。
+        // 拿不到 Application Support 就退回临时目录，账本仍可用、只是本机持久化降级。
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         directory = base.appendingPathComponent("GuanpanProNative", isDirectory: true)
         recoveryDirectory = base.appendingPathComponent("GuanpanProNative-Recovery", isDirectory: true)
         do {
@@ -638,7 +642,7 @@ struct LocalPreferences: Codable {
             unifiedAIStatus = "没有真实持仓，无法生成持仓指导。"; return
         }
         unifiedAIIsRunning = true
-        unifiedAIStatus = "正在汇总真实持仓、最新行情、NAS 研究、新闻和投资画像…"
+        unifiedAIStatus = "正在汇总真实持仓、最新行情、NAS 归档数据、新闻和投资画像…"
         defer { unifiedAIIsRunning = false }
         await refreshGuidance()
         let context = makeDecisionContext()
@@ -703,8 +707,11 @@ struct LocalPreferences: Codable {
             if let dataset = chartData["\(position.code):day"] { daily[position.code] = dataset.samples }
             if let dataset = chartData[position.code] { intraday[position.code] = dataset.samples }
         }
+        // 「可用」必须是真的有归档统计，不能只看填了 NAS 地址：填了地址但 NAS 没连上
+        // 或归档还没攒够时，dataState 说「可用」就是骗人。
+        let nasHasStats = nasResearch.values.contains { $0.minuteStats != nil }
         return NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
-                                           rules: rules, goal: goal, nasAvailable: !preferences.nasBaseURL.isEmpty,
+                                           rules: rules, goal: goal, nasAvailable: nasHasStats,
                                            profile: profile, research: nasResearch, news: nasNews, now: now)
     }
 
@@ -790,15 +797,19 @@ struct LocalPreferences: Codable {
         Task { await refreshGuidance() }
     }
 
-    /// 统一决策上下文：NAS 长期研究 + 手机离线结论汇总成一份，供在线 AI 综合时引用。
+    /// 统一决策上下文：NAS 长期归档数据 + 手机离线结论汇总成一份，供在线 AI 综合时引用。
     /// 在线 AI 只能引用候选计划里的价格，不允许自行生成具体挂单价。
     func makeDecisionContext() -> NextDecisionContext {
         let guidance = dailyGuidance ?? buildGuidance(now: Date())
+        // NAS 只给归档数据（分时窗口统计），不给结论：这里把统计翻成人话喂给模型，
+        // 而不是像过去那样塞 NAS 自己的 AI 段落（NAS 已不产 AI，那段永远为空）。
         var researchLines: [String] = []
         for (code, report) in nasResearch {
-            if let content = report.ai?.content, !content.isEmpty {
-                researchLines.append("\(NextNameBook.resolve(code))：\(content.prefix(160))")
-            }
+            guard let stats = report.minuteStats else { continue }
+            var parts = NextNasStatsText.notes(stats)
+            if let stale = NextNasStatsText.freshnessNote(stats) { parts.append(stale) }
+            guard !parts.isEmpty else { continue }
+            researchLines.append("\(NextNameBook.resolve(code))（\(code)）：" + parts.joined(separator: "；"))
         }
         let quoteMap = Dictionary(uniqueKeysWithValues: quotes.map { ($0.key, $0.value.quote) })
         return NextDecisionContextBuilder.build(guidance: guidance, book: book, quotes: quoteMap,
@@ -1483,10 +1494,10 @@ struct LocalPreferences: Codable {
                 return
             }
             nasResearch[code] = report
-            researchStatus[code] = "已从 NAS 刷新研究状态"
+            researchStatus[code] = "已从 NAS 刷新归档数据"
         } catch {
             researchStatus[code] = nasResearch[code] == nil
-                ? "NAS 研究不可用 · 暂无本机缓存"
+                ? "NAS 归档不可用 · 暂无本机缓存"
                 : "NAS 刷新失败 · 当前显示本机缓存"
         }
     }
