@@ -107,8 +107,16 @@ enum NextEvidenceEngine {
         let controls = holdoutRows.filter { !$0.triggered }
         let triggerHits = triggered.filter { $0.confirmed == true }.count
         let controlHits = controls.filter { $0.confirmed == true }.count
-        let triggerInterval = wilson(successes: triggerHits, trials: triggered.count)
-        let controlInterval = wilson(successes: controlHits, trials: controls.count)
+        // 样本门槛先算出来——它决定"给不给区间"，而不仅仅是"状态叫什么"。
+        // 以前先算区间、再判状态，结果是 40 天也会输出一个置信区间，
+        // 状态和区间自相矛盾：嘴上说样本不足，手上却递出一个有验证意味的区间。
+        let short = eligible.count < minimumSessions
+            || triggered.count < minimumHoldoutTriggers
+            || controls.count < minimumHoldoutTriggers
+        let triggerInterval = short ? nil : wilson(successes: triggerHits, trials: triggered.count)
+        let controlInterval = short ? nil : wilson(successes: controlHits, trials: controls.count)
+        // 样本不足时**连区间都不给**。原始描述性统计（条数、命中数、收益率）
+        // 保留给调试看，但它们不会被包装成具有验证意义的置信区间。
         let edge: NextRateInterval?
         if let triggerInterval, let controlInterval {
             edge = NextRateInterval(lower: max(-1, triggerInterval.lower - controlInterval.upper),
@@ -122,9 +130,7 @@ enum NextEvidenceEngine {
         // 判定顺序很重要：先看样本，再看能不能否定，最后才看是不是候选。
         // 反过来写就会出现「40 天也敢宣布规律」的老毛病。
         let state: NextEvidenceState
-        if eligible.count < minimumSessions
-            || triggered.count < minimumHoldoutTriggers
-            || controls.count < minimumHoldoutTriggers {
+        if short {
             state = .insufficient
         } else if let edge, edge.upper <= practicalEdge {
             state = .noStableRelationship
@@ -294,8 +300,16 @@ enum NextLeadValidationEngine {
         var buckets: [String: [(lead: Double, follow: Double)]] = [:]
         for point in lead {
             if let cutoff, point.timestamp > cutoff { continue }
+            let day = dayKey(point.timestamp)
             guard let previous = NextCrossMarketAlignment.lastPoint(atOrBefore: point.timestamp.addingTimeInterval(-windowSeconds),
-                                                                   in: lead) else { continue }
+                                                                   in: lead),
+                  // 硬口径：领先窗口的两端必须落在**同一个交易日**。
+                  // 跨日的窗口量到的是隔夜跳空，不是「当天内领先→跟随」的关系。
+                  // 混进来的后果很具体：实测里 10 个极端日各自在自己次日制造一次
+                  // 隔夜跳空，于是方向性交易日被凭空翻倍成 20 天，
+                  // 单日跳空还会被当成高贡献日，直接破坏防伪相关与集中度口径。
+                  // 「分钟数据很多 ≠ 独立证据很多」，隔夜跳空正是最典型的假证据。
+                  dayKey(previous.timestamp) == day else { continue }
             guard let leadChange = NextCrossMarketAlignment.changePercent(from: previous.value, to: point.value) else { continue }
             guard let exit = NextCrossMarketAlignment.firstPoint(atOrAfter: point.timestamp, in: follow,
                                                                 tolerance: tolerance) else { continue }
@@ -330,7 +344,11 @@ enum NextLeadValidationEngine {
         // 分母排除「领先市场几乎没动」的日子，因为那种日子本来就没有方向可跟。
         let directional = pairs.filter { abs($0.leadChange) >= triggerThreshold }
         let directionalHits = directional.filter { ($0.leadChange > 0) == ($0.followChange > 0) }.count
-        let directionalDays = directional.count
+        // 方向性交易日**必须**是独立交易日的数量：同一个交易日无论产生多少个
+        // 领先窗口、前瞻窗口、分钟观测或重复信号，在这里最多只能贡献 1 天。
+        // 按观测条数计数会让单日极端事件凭空变成"大量独立证据"，
+        // 这是跨市场模型最容易自己骗自己的地方。
+        let directionalDays = Set(directional.map { $0.day }).count
         let directionalShare = pairs.isEmpty ? 0 : Double(directionalDays) / Double(pairs.count)
         let directionalWinRate = directional.isEmpty ? nil : Double(directionalHits) / Double(directional.count)
 
@@ -361,9 +379,18 @@ enum NextLeadValidationEngine {
         // 集中度与「去掉极值后还成不成立」。
         // 用 |领先变动 × 跟随变动| 度量单日对相关性的贡献：它同时要求两边都动，
         // 单边跳空（只有一边动）不会被误算成高贡献日。
+        // 集中度回答的问题是：当前所谓预测能力，有多大比例其实来自最强的单个交易日？
+        // 单看"样本条数"会被稀释（300 天里 1 天极端，条数占比只有 1/300），
+        // 单看"效果"又会漏掉那种只靠某一天刷出大量观测的情况。
+        // 所以两个口径都算，取**更保守（更高）**的那一项。
+        let observationCounts = pairs.map { Double($0.observations) }
+        let totalObservations = observationCounts.reduce(0, +)
+        let observationShare = totalObservations > 0
+            ? (observationCounts.max() ?? 0) / totalObservations : 1
         let weights = pairs.map { abs($0.leadChange * $0.followChange) }
         let totalWeight = weights.reduce(0, +)
-        let concentrationShare = totalWeight > 0 ? (weights.max() ?? 0) / totalWeight : 1
+        let effectShare = totalWeight > 0 ? (weights.max() ?? 0) / totalWeight : 1
+        let concentrationShare = max(observationShare, effectShare)
         // 去掉前 5%（最多 3 天，至少 1 天）。不能只去 1 天：一天异常往往连着两三天。
         let dropCount = min(3, max(1, pairs.count / 20))
         let ranked = pairs.indices.sorted { weights[$0] > weights[$1] }
@@ -391,6 +418,11 @@ enum NextLeadValidationEngine {
         } else if concentrationShare > maximumSingleDayShare {
             tier = .rejected
             blockNote = String(format: "没有稳定领先关系：单日最大贡献占 %.0f%%，超过 %.0f%%——这条关系实际上只是某一天的关系", concentrationShare * 100, maximumSingleDayShare * 100)
+        } else if concentrationShare >= maximumSingleDayShare {
+            // 恰好踩在 50%：证据确实集中在那一天，但还没到"明确就是某一天的关系"。
+            // 处理方式是**不否定、也绝不晋升**——踩线不算过关，只能停在中期。
+            tier = .provisional
+            blockNote = String(format: "单日最大贡献恰好占 %.0f%%，踩在门槛线上：不否定，但也不晋升为候选——必须先证明这条关系不是靠那一天撑起来的", concentrationShare * 100)
         } else if (correlationWithoutTopDays ?? 0) < minimumCorrelationWithoutTopDays {
             tier = .rejected
             blockNote = "没有稳定领先关系：去掉贡献最大的 \(dropCount) 天后相关性从 \(String(format: "%.2f", correlation ?? 0)) 降到 \(String(format: "%.2f", correlationWithoutTopDays ?? 0))，低于 \(String(format: "%.2f", minimumCorrelationWithoutTopDays))——原相关性靠少数几天撑着"
