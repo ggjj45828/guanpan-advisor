@@ -226,9 +226,14 @@ struct LocalPreferences: Codable {
     @Published private(set) var intradayFreshness: [String: NextSampleFreshness] = [:]
     /// 121 条件化领先：按领先市场当天的状态分组，看关系在哪种状态下才算数。
     @Published private(set) var conditionalLeads: [String: [NextConditionalLead]] = [:]
-    /// 125 汇率序列（按市场代码存）。**目前没有接入数据源**，
-    /// 所以 `fxContext` 会明确返回「未接入」，而不是假设汇率为 0。
+    /// 125 汇率序列（按市场代码存）。数据来自 NAS 直连采集的 USD/CNY 买卖价中点；
+    /// NAS 没连上或还没采到时为空，`fxContext` 会明确返回「未接入」，
+    /// 而不是假设汇率为 0。
     @Published private(set) var fxSeries: [String: [NextFXPoint]] = [:]
+    /// 汇率最近一次读取成功的时刻（与跨市场一样做节流）。
+    private var fxFetchedAt: Date?
+    /// 汇率读取失败的原因。只用于展示，**不产生任何兜底汇率值**。
+    @Published private(set) var fxReadError: String?
     /// 132 分时段画像：开盘/上午/午后/尾盘各自的关系表现。
     @Published private(set) var sessionProfiles: [String: [NextSessionProfile]] = [:]
     /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
@@ -938,6 +943,7 @@ struct LocalPreferences: Codable {
                                                 nasResearchLines: researchLines, newsLines: [],
                                                 profileLines: NextProfileEngine.promptLines(profile: profile),
                                                 crossMarketLines: crossMarketNotes,
+                                                fxLines: fxLines,
                                                 now: Date())
     }
 
@@ -1250,6 +1256,48 @@ struct LocalPreferences: Codable {
             guard preferences.nasBaseURL == base else { return }
             crossMarketArchive = nil
             crossMarketNotes = ["跨市场：读取 NAS 归档失败（\(error.localizedDescription)），本次不参与任何判断"]
+        }
+    }
+
+    /// 125 汇率上下文：从 NAS 读 USD/CNY 买卖价中点序列。
+    /// 只存原始观测（中点 + 源时间戳 + 收到时刻 + 来源名称）；
+    /// 来源名称未验证的行在 `NextFXFeed` 解析层就已被丢掉，不会进到本机。
+    /// 读取失败只记状态，**不写任何兜底值**——没有就是没有。
+    func refreshFX(force: Bool = false) async {
+        let base = preferences.nasBaseURL
+        guard !base.isEmpty, nasLinkState.isOnline else { return }
+        if !force, let last = fxFetchedAt, Date().timeIntervalSince(last) < 30 * 60 { return }
+        do {
+            let points = try await NextNASService.readFXSeries(baseURL: base)
+            guard preferences.nasBaseURL == base else { return }
+            var series = fxSeries
+            // USD/CNY 归到它对应的海外市场（美国），与 NextFXPair.usdCny.market 一致。
+            series[NextCrossMarket.unitedStates.rawValue] = points
+            if fxSeries != series { fxSeries = series }
+            fxFetchedAt = Date()
+            fxReadError = nil
+        } catch {
+            guard preferences.nasBaseURL == base else { return }
+            // 失败时不清空已有归档：旧归档还带着时间戳，手机端自己会判过期。
+            fxReadError = "汇率：读取 NAS 归档失败（\(error.localizedDescription)），本次不参与决策上下文"
+        }
+    }
+
+    /// 125 汇率上下文行：给统一决策上下文（在线 AI）用。
+    /// **来源名称未验证的汇率不会出现在这些行里**——有汇率数字也不许进决策上下文。
+    var fxLines: [String] {
+        let markets = fxSeries.keys.compactMap { NextCrossMarket(rawValue: $0) }
+            .sorted { $0.rawValue < $1.rawValue }
+        if markets.isEmpty {
+            return ["汇率：NAS 尚未提供 USD/CNY 汇率序列，本次不进入决策上下文（不会假设汇率为 0）"]
+        }
+        return markets.map { market in
+            let context = fxContext(for: market)
+            guard context.entersDecisionContext else {
+                let reason = context.decisionContextGateNote ?? context.note
+                return "汇率：\(reason)（本次不进入决策上下文）"
+            }
+            return "汇率：\(context.note) · \(context.planEligibility.note)"
         }
     }
 

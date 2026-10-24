@@ -144,6 +144,9 @@ struct ThemeHomeScreen: View {
             await model.refreshNASLink()
             // 通了才去拿跨市场归档（15 分钟节流）；没通就是空，界面如实显示「暂无」。
             await model.refreshCrossMarket()
+            // 125 汇率上下文：拿 NAS 直连采集的 USD/CNY 买卖价中点（30 分钟节流）。
+            // 失败只记状态，不写兜底值；来源名称未验证的行在解析层就被丢掉。
+            await model.refreshFX()
             // 归档到手后，对持仓逐只算领先关系与 30/60/120 日滚动有效性（6 小时节流）。
             // 算不出来就保持空，详情页显示「暂无稳定领先关系」，不编来源。
             await model.refreshCrossMarketStudies(

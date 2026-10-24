@@ -512,6 +512,25 @@ enum NextNASService {
         }
         return try NextCrossMarketFeed.parse(data)
     }
+
+    /// 读 NAS 归档的 USD/CNY 买卖价中点序列（125 汇率上下文）。
+    ///
+    /// 只搬**原始观测**（中点 + 源时间戳 + 收到时刻 + 来源名称），不搬任何结论。
+    /// 来源名称未验证的行在解析层就会被丢掉——有数字也不许进手机。
+    /// `days` 默认 30 个自然日：USD/CNY 一天看一次就够，攒够 20 个交易日即可算平均干扰度。
+    static func readFXSeries(baseURL: String, days: Int = 30,
+                             session: URLSession = .shared) async throws -> [NextFXPoint] {
+        var components = URLComponents(url: try validateURL(baseURL)
+            .appendingPathComponent("v1").appendingPathComponent("fx").appendingPathComponent("series"),
+                                       resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
+        guard let url = components?.url else { throw NextError.invalid("NAS 汇率地址无效") }
+        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 20))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NextError.invalid("NAS 汇率读取失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
+        }
+        return try NextFXFeed.parse(data)
+    }
 }
 
 private extension NextBook { func validated() throws -> NextBook { try validate(); return self } }
