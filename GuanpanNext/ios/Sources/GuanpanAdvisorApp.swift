@@ -684,6 +684,9 @@ private struct InstrumentDetailScreen: View {
                     HStack { Button { Task { await model.refreshInstrument(code) } } label: { Label("刷新行情与分时", systemImage: "arrow.clockwise").font(.caption.weight(.semibold)) }; Spacer(); NavigationLink(value: GPRoute.chart(code)) { Label("全屏分析", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.semibold)) }.accessibilityIdentifier("chart.fullscreen") }.tint(p.forest)
                 }
                 WorthBuyPanel(code: code)
+                // 141 外部市场影响：只写「验证过的领先关系」或「暂无稳定领先关系」。
+                // 放在行情图表之后，是因为它是解释「为什么会这样」的背景，不是操作建议。
+                GPAbroadImpactSection(impact: model.abroadImpact(for: code))
                 EditorialSection(title: "交易盘口", trailing: model.rules[code]?.isVerified == true ? "规则已验证" : "规则待验证", accent: p.chartViolet) {
                     // 不再强解包：盘口字典随时可能因刷新被清空，`!` 会直接把卡片点崩。
                     if let snapshot = model.orderBooks[code], model.rules[code]?.isVerified == true {

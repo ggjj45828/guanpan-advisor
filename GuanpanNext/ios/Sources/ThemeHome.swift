@@ -17,6 +17,8 @@ struct HomeSnapshot {
     let cashPercent: Double
     /// NAS 连通状态：五套主题共用这一个结论，不再有第二处「地址非空 = 在线」的判断。
     let nasState: NextNASLinkState
+    /// 跨市场脉搏：五套主题共用同一份结论与同一张卡，避免某套主题把「已收盘」写成「在线」。
+    let crossPulse: NextCrossMarketPulse
     let actionableCount: Int
     let profileTags: [String]
     let openPlanCount: Int
@@ -96,6 +98,7 @@ struct HomeSnapshot {
                             quotes: quotes, totalEquity: equity, pnlAmount: costBasis > 0 ? marketValue - costBasis : nil,
                             pnlPercent: pnl, cashPercent: cashPercent,
                             nasState: model.nasLinkState,
+                            crossPulse: NextCrossMarketPulseBuilder.build(archive: model.crossMarketArchive, now: Date()),
                             actionableCount: items.filter(\.isActionable).count,
                             profileTags: model.profile.styleTags,
                             openPlanCount: model.candidatePlans.filter { $0.state.isOpen }.count,
@@ -936,6 +939,8 @@ private struct EditorialHome: View {
                     .background(p.paperAlt, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(p.chartGold.opacity(0.3), lineWidth: 0.8))
                 HomeIndexBoard(style: .chips)
+                // 140 跨市场脉搏：五套主题共用同一张卡与同一份结论
+                GPCrossMarketPulseCard(pulse: snapshot.crossPulse)
                 aiCard
                 sectionTitle("今日最重要机会", accent: p.chartGold)
                 LeadOpportunityCard(snapshot: snapshot, style: .editorial)
@@ -1055,6 +1060,8 @@ private struct ModernHome: View {
                 }
                 aiHero
                 HomeIndexBoard(style: .cards)
+                // 140 跨市场脉搏：五套主题共用同一张卡与同一份结论
+                GPCrossMarketPulseCard(pulse: snapshot.crossPulse)
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: true)
                 LeadOpportunityCard(snapshot: snapshot, style: .modern)
                 newsRow
@@ -1171,6 +1178,8 @@ private struct DashboardHome: View {
             VStack(alignment: .leading, spacing: 12) {
                 tabHeader
                 HomeIndexBoard(style: .tiles)
+                // 140 跨市场脉搏：五套主题共用同一张卡与同一份结论
+                GPCrossMarketPulseCard(pulse: snapshot.crossPulse)
                 aiHero
                 opportunityBoard
                 HoldingsSummaryCard(snapshot: snapshot, showsRing: false)
@@ -1344,6 +1353,8 @@ private struct MagazineHome: View {
                 }
                 observationCard
                 HomeIndexBoard(style: .cards)
+                // 140 跨市场脉搏：五套主题共用同一张卡与同一份结论
+                GPCrossMarketPulseCard(pulse: snapshot.crossPulse)
                 HStack(spacing: 6) {
                     Image(systemName: "sparkle").font(.system(size: 11, weight: .semibold)).foregroundStyle(p.primary)
                     Text("今日重点机会").font(.system(size: 13, weight: .semibold, design: .serif)).foregroundStyle(p.ink)
@@ -1488,6 +1499,8 @@ private struct PuzzleHome: View {
                 }
                 // 指数板：拼图主题以前完全没有指数信息，用户要看大盘得自己切到行情页。
                 HomeIndexBoard(style: .tiles)
+                // 140 跨市场脉搏：五套主题共用同一张卡与同一份结论
+                GPCrossMarketPulseCard(pulse: snapshot.crossPulse)
                 HStack(spacing: 10) {
                     positionTile(snapshot.positions.first, tone: tones[2], toneIndex: 2)
                     positionTile(snapshot.positions.count > 1 ? snapshot.positions[1] : nil, tone: tones[3], toneIndex: 3)

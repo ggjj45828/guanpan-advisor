@@ -11,11 +11,20 @@ import Foundation
 struct NextCrossMarketArchive: Equatable {
     /// 市场 → 该市场本地日期（"yyyy-MM-dd"）→ 升序点。
     let byMarket: [NextCrossMarket: [String: [NextMarketPoint]]]
+    /// 市场 → 该日最后一个源涨跌幅。首页要显示「今天涨多少」必须用源的这个数，
+    /// 用我们自己算的相邻点差会把隔夜跳空算进日内。
+    var dayChange: [NextCrossMarket: [String: Double]] = [:]
     /// 服务端报告的行数。用来交叉校验解析有没有漏行。
     let reportedRows: Int
 
     var totalPoints: Int {
         byMarket.values.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.count } }
+    }
+
+    /// 最新一天源给的涨跌幅。
+    func latestChangePercent(_ market: NextCrossMarket) -> Double? {
+        guard let days = dayChange[market], let latest = days.keys.sorted().last else { return nil }
+        return days[latest]
     }
 
     /// 某市场全部点（跨日、升序）。
@@ -69,6 +78,7 @@ enum NextCrossMarketFeed {
             throw FeedError.malformed("缺少 markets 字段")
         }
         var byMarket: [NextCrossMarket: [String: [NextMarketPoint]]] = [:]
+        var dayChange: [NextCrossMarket: [String: Double]] = [:]
         for (key, value) in markets {
             guard let market = NextCrossMarket(rawValue: key) else { continue }
             guard let days = value as? [String: Any] else { continue }
@@ -76,15 +86,19 @@ enum NextCrossMarketFeed {
             for (day, rawPoints) in days {
                 guard let rows = rawPoints as? [[String: Any]] else { continue }
                 var points: [NextMarketPoint] = []
+                var lastChange: Double?
                 for row in rows {
                     guard let stampText = row["timestamp"] as? String,
                           let stamp = NextCrossMarketFeed.date(from: stampText),
                           let price = NextCrossMarketFeed.double(row["price"]),
                           price > 0 else { continue }
                     points.append(NextMarketPoint(timestamp: stamp, value: price))
+                    if let change = NextCrossMarketFeed.double(row["changePercent"]) { lastChange = change }
                 }
                 if !points.isEmpty {
-                    grouped[day] = points.sorted { $0.timestamp < $1.timestamp }
+                    let sorted = points.sorted { $0.timestamp < $1.timestamp }
+                    grouped[day] = sorted
+                    if let lastChange { dayChange[market, default: [:]][day] = lastChange }
                 }
             }
             if !grouped.isEmpty { byMarket[market] = grouped }
@@ -93,7 +107,7 @@ enum NextCrossMarketFeed {
         if byMarket.isEmpty, reported > 0 {
             throw FeedError.malformed("服务端有 \(reported) 行，但一行都没解析出来")
         }
-        return NextCrossMarketArchive(byMarket: byMarket, reportedRows: reported)
+        return NextCrossMarketArchive(byMarket: byMarket, dayChange: dayChange, reportedRows: reported)
     }
 
     /// 该市场本地日期键。日期必须按各市场自己的时区切：

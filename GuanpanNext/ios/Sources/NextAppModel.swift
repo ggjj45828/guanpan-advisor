@@ -1109,6 +1109,9 @@ struct LocalPreferences: Codable {
     /// 跨市场「数据够不够」的说明行。进决策上下文时原样交出去，不做美化。
     @Published private(set) var crossMarketNotes: [String] = []
     private var crossMarketFetchedAt: Date?
+    /// 每只标的分市场算出来的领先关系。117 的批量统计跑完后写这里；
+    /// 没跑过就是空——界面因此显示「暂无稳定领先关系」，而不是编一个来源。
+    private var ledLagStudies: [String: [NextLeadLagStudy]] = [:]
 
     /// 拉 NAS 归档的跨市场快照。节流 15 分钟：这份数据是分钟级攒出来的，
     /// 每分钟去问一次只会白白走隧道，结论也不会变。
@@ -1140,6 +1143,22 @@ struct LocalPreferences: Codable {
     static func crossMarketNotes(from archive: NextCrossMarketArchive,
                                  minimumDays: Int = NextCrossMarketFeed.minimumReplayDays) -> [String] {
         archive.decisionContextNotes(minimumDays: minimumDays)
+    }
+
+    /// 首页「跨市场脉搏」。每次读都按当前时间重算：开闭状态与数据年龄会随时间变，
+    /// 缓存住就会出现「已经收盘了，界面还写着交易中」。
+    var crossMarketPulse: NextCrossMarketPulse {
+        NextCrossMarketPulseBuilder.build(archive: crossMarketArchive, now: Date())
+    }
+
+    /// 每只标的已经验证出来的领先关系（117 跑完才有内容）。空数组就是「暂无稳定领先关系」，
+    /// 界面据此显示，而不是拿实时涨幅硬凑一个理由。
+    var crossMarketStudies: [String: [NextLeadLagStudy]] { ledLagStudies }
+
+    /// 持仓/标的详情里的「外部市场影响」。
+    func abroadImpact(for code: String) -> NextHoldingAbroadImpact {
+        NextHoldingAbroadImpactBuilder.impact(code: code, studies: crossMarketStudies[code] ?? [],
+                                              pulse: crossMarketPulse)
     }
 
     /// 轻量连通性检测：**只请求很小的 `/health`**，绝不碰账本接口。
