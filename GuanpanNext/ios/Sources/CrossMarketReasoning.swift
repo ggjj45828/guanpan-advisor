@@ -4,7 +4,7 @@ import Foundation
 //
 // 一条「领先关系」最容易骗人的地方不是算错，而是**只在某一段时间成立**：
 // 拿 120 日数据算出一个漂亮的相关性，最近一个月其实早就没什么关系了。
-// 所以这里同时算三个窗口，并且把「近 20 日已经失效」明确降权 —— 而不是
+// 所以这里同时算三个窗口，并且把「近 30 日已经失效」明确降权 —— 而不是
 // 用长窗口的好看数字去覆盖短窗口的坏消息。
 
 enum NextRollingVerdict: Equatable {
@@ -12,6 +12,9 @@ enum NextRollingVerdict: Equatable {
     case insufficient(String)
     /// 长窗口曾经成立，但最近的窗口已经不成立。只能当背景，不得据此行动。
     case degraded(recentDays: Int, longerDays: Int, reason: String)
+    /// 最近的窗口**样本本身就不够**，没法判断它是衰减了还是没变。
+    /// 这不是坏消息，也不是好消息，是不确定——所以既不惩罚到 0.35，也不给满分。
+    case unverified(recentDays: Int, longerDays: Int, reason: String)
     /// 最近的窗口也成立。weight 表示可依赖程度（0…1）。
     case usable(days: Int, weight: Double)
 }
@@ -23,19 +26,31 @@ struct NextRollingValidity: Equatable {
     let studies: [Int: NextLeadLagStudy]
     let verdict: NextRollingVerdict
 
-    /// 方向性权重。降级与不足都必须是 0.5 以下 —— 让它无法被当成正式信号。
+    /// 方向性权重。降级与不足都必须是 1.0 以下 —— 让它无法被当成正式信号。
     var weight: Double {
         switch verdict {
         case .insufficient: return 0
         case .degraded: return 0.35
+        case .unverified: return 0.5
         case let .usable(_, weight): return weight
         }
     }
 
     /// 只有「最近的窗口也成立」才允许进入行动计划。
+    /// unverified 同样不允许：那只是「不知道」，不是「可以」。
     var allowsAction: Bool {
         if case .usable = verdict { return true }
         return false
+    }
+
+    /// 不让行动时说清是哪一种原因。把「数据不够」写成「关系衰减」是误导。
+    var blockReason: String {
+        switch verdict {
+        case .insufficient: return "没有任何窗口达到统计门槛"
+        case .degraded: return "领先关系在最近窗口已衰减"
+        case .unverified: return "近期样本不足，无法确认关系仍然有效"
+        case .usable: return ""
+        }
     }
 
     var note: String {
@@ -44,6 +59,8 @@ struct NextRollingValidity: Equatable {
             return "\(lead.displayName) 对 \(followCode) 的滚动有效性：暂无（\(reason)）"
         case let .degraded(recent, longer, reason):
             return "\(lead.displayName) 对 \(followCode) 近 \(recent) 日已不成立（\(longer) 日窗口曾成立，\(reason)），权重降为 \(NextRollingValidity.percent(weight))，只能当背景"
+        case let .unverified(recent, longer, reason):
+            return "\(lead.displayName) 对 \(followCode) 近 \(recent) 日样本不足（\(reason)），只能用 \(longer) 日窗口的结论，权重 \(NextRollingValidity.percent(weight))"
         case let .usable(days, weight):
             return "\(lead.displayName) 对 \(followCode) 的领先关系在 \(days) 日窗口内仍成立，权重 \(NextRollingValidity.percent(weight))"
         }
@@ -56,7 +73,9 @@ struct NextRollingValidity: Equatable {
 
 enum NextRollingValidityEngine {
     /// 三个窗口固定写在代码里：短窗口抓「最近还灵不灵」，长窗口抓「历史上灵不灵」。
-    static let windows = [20, 60, 120]
+    /// 148 起短窗口从 20 日改成 30 日：20 个自然日大约只有 14 个交易日，
+    /// 永远够不到 20 个独立交易日的样本门槛，那个窗口就只是个装饰品。
+    static let windows = [30, 60, 120]
 
     /// 把三个窗口的 study 汇成一个结论。这是 133 的核心判定，与取数分开，便于测试。
     static func aggregate(lead: NextCrossMarket, followCode: String,
@@ -66,13 +85,29 @@ enum NextRollingValidityEngine {
             return study.best != nil
         }
         guard let shortest = usableDays.min(), let longest = usableDays.max() else {
-            let reason = studies.isEmpty
-                ? "还没有任何窗口的统计"
-                : "20/60/120 日窗口都没达到样本 \(NextLeadLagEngine.minimumSamples) 个且相关 \(NextLeadLagStudy.percent(NextLeadLagEngine.minimumCorrelation, digits: 0)) 的门槛"
+            // 一个窗口都没过。原因不能一律写成「样本不足」——
+            // 有时候是数据太短，有时候是关系确实不存在，这两种要说清楚。
+            let reason: String
+            if studies.isEmpty {
+                reason = "还没有任何窗口的统计"
+            } else if let recent = studies[windows[0]], case let .insufficient(detail) = recent.verdict {
+                reason = detail
+            } else {
+                reason = "\(windows[0])/\(windows[1])/\(windows[2]) 日窗口都没达到独立交易日与显著性门槛"
+            }
             return NextRollingValidity(lead: lead, followCode: followCode, studies: studies,
                                        verdict: .insufficient(reason))
         }
         guard shortest == windows[0] else {
+            let recent = studies[windows[0]]
+            // 短窗口没有结论，可能是「衰减」，也可能只是「天数不够」。
+            // 把数据长度问题说成关系衰减，会让用户以为策略变差了，这是误导。
+            if let recent, case let .insufficient(detail) = recent.verdict,
+               NextLeadLagEngine.isSampleLimited(detail) {
+                return NextRollingValidity(
+                    lead: lead, followCode: followCode, studies: studies,
+                    verdict: .unverified(recentDays: windows[0], longerDays: longest, reason: detail))
+            }
             // 短窗口不成立而长窗口成立：典型的关系衰减，必须写出来并降权。
             return NextRollingValidity(
                 lead: lead, followCode: followCode, studies: studies,
@@ -226,12 +261,17 @@ enum NextReasoningChainBuilder {
         }
 
         // ③ 领先关系：只认 usable 的 study，不认「有个对象存在」。
+        // 148 起这一环分两层看：统计过关只是「值得跟踪」，前瞻复现达标才「可以当信号」。
+        // 未达标时刻意用 background 而不是 blocked：它不该掐断整条链，
+        // 因为下游 decide() 会把方向性动作降级为网格，那才是正确的处置。
         let usableStudies = studies.filter { $0.best != nil }
         if let best = usableStudies.first {
+            let gate: NextReasoningStep.Gate = best.eligibleForTradingSignal ? .pass : .background
+            let tail = best.eligibleForTradingSignal ? best.replication.note : best.signalEligibilityNote
             steps.append(NextReasoningStep(
                 stage: "③ 领先关系",
-                detail: best.summary,
-                gate: .pass))
+                detail: "\(best.summary) · \(tail)",
+                gate: gate))
         } else if studies.isEmpty {
             steps.append(NextReasoningStep(
                 stage: "③ 领先关系",
@@ -248,7 +288,7 @@ enum NextReasoningChainBuilder {
         if rollings.isEmpty {
             steps.append(NextReasoningStep(
                 stage: "④ 滚动有效性",
-                detail: "还没有做 20/60/120 日滚动检验",
+                detail: "还没有做 30/60/120 日滚动检验",
                 gate: .background))
         } else if let best = rollings.max(by: { $0.weight < $1.weight }), best.allowsAction {
             steps.append(NextReasoningStep(
@@ -256,11 +296,11 @@ enum NextReasoningChainBuilder {
                 detail: best.note,
                 gate: .pass))
         } else {
-            let note = rollings.min(by: { $0.weight < $1.weight })?.note ?? "滚动检验未通过"
+            let reference = rollings.min(by: { $0.weight < $1.weight })
             steps.append(NextReasoningStep(
                 stage: "④ 滚动有效性",
-                detail: note,
-                gate: .blocked("领先关系在最近窗口已衰减")))
+                detail: reference?.note ?? "滚动检验未通过",
+                gate: .blocked(reference?.blockReason ?? "滚动检验未通过")))
         }
 
         // ⑤ 本地确认：海外证据本身永远不能变成 confirmed。

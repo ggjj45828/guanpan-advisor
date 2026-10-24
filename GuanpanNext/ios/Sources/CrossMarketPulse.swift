@@ -211,7 +211,7 @@ enum NextHoldingAbroadImpactBuilder {
         if let ranking, ranking.hasEvidence { lines.append(ranking.summary) }
         for study in usable.prefix(2) {
             guard let best = study.best else { continue }
-            lines.append("\(study.lead.displayName) 领先约 \(best.minutes) 分钟（样本 \(best.sampleCount)，相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2))）")
+            lines.append("\(study.lead.displayName) 领先约 \(best.minutes) 分钟（独立 \(best.independentDays) 个交易日，相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2))，复现 \(study.replication.confirmedCount)/\(NextSignalReplicationEngine.minimumConfirmed)）")
         }
         for rolling in rollings where rolling.weight > 0 {
             lines.append(rolling.note)

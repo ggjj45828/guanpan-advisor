@@ -10,10 +10,11 @@ final class NextLeadSourceRankingTests: XCTestCase {
 
     private func study(_ lead: NextCrossMarket, code: String = "513520", minutes: Int = 15,
                        correlation: Double, sameDirection: Double) -> NextLeadLagStudy {
-        let window = NextLeadLagWindow(minutes: minutes, sampleCount: 60, correlation: correlation,
-                                       sameDirectionRate: sameDirection, meanFollowReturn: 0.10,
-                                       medianFollowReturn: 0.08, positiveRatio: 0.55,
-                                       maxAdverseReturn: -0.30, stability: 0.80)
+        let window = NextLeadLagWindow(minutes: minutes, sampleCount: 60, independentDays: 40,
+                                       correlation: correlation, sameDirectionRate: sameDirection,
+                                       wilsonLowerBound: 0.66, bonferroniP: 0.007, holdoutDays: 12,
+                                       meanFollowReturn: 0.10, medianFollowReturn: 0.08,
+                                       positiveRatio: 0.55, maxAdverseReturn: -0.30, stability: 0.80)
         return NextLeadLagStudy(lead: lead, followCode: code,
                                 verdict: .usable(best: window, windows: [window],
                                                  periodDays: 60,

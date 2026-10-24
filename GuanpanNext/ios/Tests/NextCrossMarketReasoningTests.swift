@@ -10,10 +10,11 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     private let stamp = Date(timeIntervalSince1970: 1_790_000_000)
 
     private func window(minutes: Int = 15) -> NextLeadLagWindow {
-        NextLeadLagWindow(minutes: minutes, sampleCount: 45, correlation: 0.42,
-                          sameDirectionRate: 0.61, meanFollowReturn: 0.12,
-                          medianFollowReturn: 0.10, positiveRatio: 0.58,
-                          maxAdverseReturn: -0.42, stability: 0.75)
+        NextLeadLagWindow(minutes: minutes, sampleCount: 45, independentDays: 38,
+                          correlation: 0.42, sameDirectionRate: 0.61,
+                          wilsonLowerBound: 0.69, bonferroniP: 0.005, holdoutDays: 11,
+                          meanFollowReturn: 0.12, medianFollowReturn: 0.10,
+                          positiveRatio: 0.58, maxAdverseReturn: -0.42, stability: 0.75)
     }
 
     private func usableStudy(_ code: String = "510300") -> NextLeadLagStudy {
@@ -23,8 +24,17 @@ final class NextCrossMarketReasoningTests: XCTestCase {
                                                  periodDays: 60, lastValidated: stamp))
     }
 
+    /// 「关系确实不成立」——相关性与稳定度不达标，不是样本长度问题。
     private func weakStudy(_ code: String = "510300") -> NextLeadLagStudy {
-        NextLeadLagStudy(lead: .japan, followCode: code, verdict: .insufficient("样本不足"))
+        NextLeadLagStudy(lead: .japan, followCode: code,
+                         verdict: .insufficient("相关性 0.08% 低于门槛，可能只是同涨同跌"))
+    }
+
+    /// 「数据根本不够」——独立交易日不到门槛。
+    /// 它和上面的区别必须在界面上看得出来：一个是坏消息，一个是不确定。
+    private func sampleLimitedStudy(_ code: String = "510300") -> NextLeadLagStudy {
+        NextLeadLagStudy(lead: .japan, followCode: code,
+                         verdict: .insufficient("独立交易日只有 8 天，门槛 20 天（同一天里的 60 个分钟配对数不算独立证据）"))
     }
 
     private func pulse(usable: Bool, days: Int) -> NextCrossMarketPulse {
@@ -39,13 +49,13 @@ final class NextCrossMarketReasoningTests: XCTestCase {
 
     // MARK: - 133
 
-    func test_rollingWindowsAreTwentySixtyOneTwenty() {
-        XCTAssertEqual(NextRollingValidityEngine.windows, [20, 60, 120],
-                       "窗口固定 20/60/120 日：短窗口看现在，长窗口看历史")
+    func test_rollingWindowsAreThirtySixtyOneTwenty() {
+        XCTAssertEqual(NextRollingValidityEngine.windows, [30, 60, 120],
+                       "窗口固定 30/60/120 日：短窗口看现在，长窗口看历史。20 自然日只有 14 个交易日，够不到样本门槛")
     }
 
     func test_rollingWithoutUsableStudySaysInsufficient() {
-        let studies = [20: weakStudy(), 60: weakStudy(), 120: weakStudy()]
+        let studies = [30: weakStudy(), 60: weakStudy(), 120: weakStudy()]
         let rolling = NextRollingValidityEngine.aggregate(lead: .japan, followCode: "510300", studies: studies)
         XCTAssertFalse(rolling.allowsAction)
         XCTAssertEqual(rolling.weight, 0, "没有任何窗口成立时权重必须是 0")
@@ -53,7 +63,7 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     }
 
     func test_rollingAllWindowsUsableGetsFullWeight() {
-        let studies = [20: usableStudy(), 60: usableStudy(), 120: usableStudy()]
+        let studies = [30: usableStudy(), 60: usableStudy(), 120: usableStudy()]
         let rolling = NextRollingValidityEngine.aggregate(lead: .japan, followCode: "510300", studies: studies)
         guard case let .usable(days, weight) = rolling.verdict else {
             return XCTFail("三个窗口都成立应判可用")
@@ -64,26 +74,43 @@ final class NextCrossMarketReasoningTests: XCTestCase {
     }
 
     func test_rollingLostRecentWindowIsDegraded() {
-        // 60/120 日成立、近 20 日不成立 —— 典型的关系衰减
-        let studies = [20: weakStudy(), 60: usableStudy(), 120: usableStudy()]
+        // 60/120 日成立、近 30 日不成立，且原因是关系本身不达标 —— 典型的关系衰减
+        let studies = [30: weakStudy(), 60: usableStudy(), 120: usableStudy()]
         let rolling = NextRollingValidityEngine.aggregate(lead: .japan, followCode: "510300", studies: studies)
         guard case let .degraded(recent, longer, _) = rolling.verdict else {
-            return XCTFail("近 20 日失效必须判降级，不能被长窗口的好看数字盖掉")
+            return XCTFail("近 30 日失效必须判降级，不能被长窗口的好看数字盖掉")
         }
-        XCTAssertEqual(recent, 20)
+        XCTAssertEqual(recent, 30)
         XCTAssertEqual(longer, 120)
+        XCTAssertEqual(rolling.weight, 0.35, accuracy: 0.001)
         XCTAssertFalse(rolling.allowsAction, "降级不允许进入行动计划")
-        XCTAssertLessThanOrEqual(rolling.weight, 0.5)
-        XCTAssertTrue(rolling.note.contains("近 20 日"))
+        XCTAssertTrue(rolling.note.contains("近 30 日"))
+    }
+
+    func test_rollingRecentWindowOnlyLacksSamplesIsNotCalledDecay() {
+        // 短窗口「没结论」不等于「关系衰减」：前者是数据不够，后者是坏消息。
+        // 把两者混为一谈，用户会以为策略变差了，实际只是还没攒够天数。
+        let studies = [30: sampleLimitedStudy(), 60: usableStudy(), 120: usableStudy()]
+        let rolling = NextRollingValidityEngine.aggregate(lead: .japan, followCode: "510300", studies: studies)
+        guard case let .unverified(recent, longer, _) = rolling.verdict else {
+            return XCTFail("样本不足不能判成衰减")
+        }
+        XCTAssertEqual(recent, 30)
+        XCTAssertEqual(longer, 120)
+        XCTAssertGreaterThan(rolling.weight, 0.35, "数据不够不该按衰减惩罚")
+        XCTAssertLessThan(rolling.weight, 1.0, "但也不能给满分")
+        XCTAssertFalse(rolling.allowsAction, "「不知道」不等于「可以」，仍然不许行动")
+        XCTAssertTrue(rolling.note.contains("样本不足"), rolling.note)
+        XCTAssertFalse(rolling.note.contains("已不成立"), "不能把数据长度问题说成关系失效")
     }
 
     func test_rollingOnlyShortWindowUsableGetsReducedWeight() {
-        let studies = [20: usableStudy(), 60: weakStudy(), 120: weakStudy()]
+        let studies = [30: usableStudy(), 60: weakStudy(), 120: weakStudy()]
         let rolling = NextRollingValidityEngine.aggregate(lead: .japan, followCode: "510300", studies: studies)
         guard case let .usable(days, weight) = rolling.verdict else {
-            return XCTFail("近 20 日成立应判可用，但要降权")
+            return XCTFail("近 30 日成立应判可用，但要降权")
         }
-        XCTAssertEqual(days, 20)
+        XCTAssertEqual(days, 30)
         XCTAssertLessThan(weight, 1.0, "只有一个窗口成立不能给满权重")
         XCTAssertTrue(rolling.allowsAction)
     }

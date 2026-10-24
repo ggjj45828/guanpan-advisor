@@ -170,8 +170,17 @@ enum NextCrossMarketLoop {
 
         // 129：Risk Guard。权重用 133 的滚动结论，没有滚动信息就按中性处理。
         let bestWeight = rollings.map(\.weight).max() ?? 0.5
+        // 148：能不能做方向性动作，取决于「有没有一条关系通过预注册前瞻复现」，
+        // 而不是取决于哪条关系的数字最漂亮。
+        let eligibleStudy = studies.first { $0.eligibleForTradingSignal }
+        let reference = studies.max { lhs, rhs in
+            abs(lhs.best?.correlation ?? 0) < abs(rhs.best?.correlation ?? 0)
+        }
         let gate = decide(judged: judged, chain: chain, execution: execution,
-                          weight: bestWeight, signal: signal, explanation: &explanation)
+                          weight: bestWeight, signal: signal,
+                          signalEligible: eligibleStudy != nil,
+                          replicationNote: eligibleStudy == nil ? reference?.signalEligibilityNote : nil,
+                          explanation: &explanation)
 
         return NextLoopOutcome(code: code, at: now, gate: gate, signal: signal,
                                hypothesis: judged, chain: chain, explanation: explanation)
@@ -235,6 +244,8 @@ enum NextCrossMarketLoop {
                        execution: NextExecutionFilter?,
                        weight: Double,
                        signal: NextLoopSignal?,
+                       signalEligible: Bool = false,
+                       replicationNote: String? = nil,
                        explanation: inout [String]) -> NextCrossGate {
         // 按链条的固定顺序判定：断在哪一环，就说哪一环，绝不把执行层说成数据不足。
         if let broken = chain.firstBreak {
@@ -260,9 +271,16 @@ enum NextCrossMarketLoop {
             return .noTrade(reason: "执行层拦截：\(execution.verdict)")
         }
         let label = signal?.kind.label ?? "跨市场"
+        // 148：权重只是「这条关系有多稳」，不是「它有没有被未来验证过」。
+        // 两者都满足才允许方向性动作；历史拟合得再漂亮，没有前瞻兑现也只做网格。
+        guard signalEligible else {
+            let note = replicationNote ?? "领先关系还没有通过预注册前瞻复现"
+            explanation.append("方向与执行都通过，但\(note)：只做网格，不做方向性做T")
+            return .grid(reason: "前瞻复现未达标：\(note)")
+        }
         if weight >= 1.0 {
-            explanation.append("方向与执行都通过，领先关系权重 \(NextRollingValidity.percent(weight))：允许做T，仓位仍按你自己的上限")
-            return .doT(reason: "\(label) 已由 A股 确认")
+            explanation.append("方向、执行与前瞻复现都通过，领先关系权重 \(NextRollingValidity.percent(weight))：允许做T，仓位仍按你自己的上限")
+            return .doT(reason: "\(label) 已由 A股 确认且前瞻复现已达标")
         }
         explanation.append("已确认但领先关系权重只有 \(NextRollingValidity.percent(weight))：只做网格，不做方向性加仓")
         return .grid(reason: "领先关系不够稳（权重 \(NextRollingValidity.percent(weight))），只做网格")

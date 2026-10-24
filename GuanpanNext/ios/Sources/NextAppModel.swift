@@ -130,6 +130,7 @@ struct LocalPreferences: Codable {
             ("decision-history-v1.json", try encoder.encode(archive.decisionHistory)),
             ("nas-research-v1.json", try encoder.encode(archive.nasResearch)),
             ("decision-memory-v1.json", try encoder.encode(archive.decisionMemory)),
+            ("signal-replication-v1.json", try encoder.encode(archive.signalReplications)),
             ("dividend-history-v1.json", try encoder.encode(archive.dividendEvents)),
             ("patient-limit-plans-v1.json", try encoder.encode(archive.patientLimitPlans)),
             ("candidate-plans-v1.json", try encoder.encode(archive.candidatePlans)),
@@ -181,6 +182,8 @@ struct LocalPreferences: Codable {
     @Published var suggestions: [NextSuggestionRecord] { didSet { reportSave(repository.save(suggestions, filename: "ai-suggestions-v1.json")) } }
     /// AI 决策记忆：每条建议「当时」的行情/持仓/NAS/新闻/画像/依据/风险/有效期，加上改判轨迹与复盘。
     @Published var decisionMemory: [NextDecisionRecord] { didSet { reportSave(repository.save(decisionMemory, filename: "decision-memory-v1.json")) } }
+    /// 预注册前瞻复现。落盘是必须的：这些计数跨天累加，丢了就等于把验证历史清零。
+    @Published var signalReplications: [NextSignalReplication] { didSet { reportSave(repository.save(signalReplications, filename: "signal-replication-v1.json")) } }
     /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
     @Published var nasNews: [String: [NextNewsInput]] { didSet { reportSave(repository.save(nasNews, filename: "nas-news-v1.json")) } }
     @Published var newsStatus: [String: String] = [:]
@@ -279,6 +282,7 @@ struct LocalPreferences: Codable {
         self.decisions = repository.load([NextDecision].self, filename: "decision-history-v1.json", fallback: [])
         self.nasResearch = repository.load([String: NextNASResearch].self, filename: "nas-research-v1.json", fallback: [:])
         self.decisionMemory = repository.load([NextDecisionRecord].self, filename: "decision-memory-v1.json", fallback: [])
+        self.signalReplications = repository.load([NextSignalReplication].self, filename: "signal-replication-v1.json", fallback: [])
         self.nasNews = repository.load([String: [NextNewsInput]].self, filename: "nas-news-v1.json", fallback: [:])
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
@@ -1127,7 +1131,7 @@ struct LocalPreferences: Codable {
     /// 每只标的分市场算出来的领先关系。117 的批量统计跑完后写这里；
     /// 没跑过就是空——界面因此显示「暂无稳定领先关系」，而不是编一个来源。
     private var ledLagStudies: [String: [NextLeadLagStudy]] = [:]
-    /// 每只标的的 20/60/120 日滚动有效性（133）。与 `ledLagStudies` 同批算出。
+    /// 每只标的的 30/60/120 日滚动有效性（133）。与 `ledLagStudies` 同批算出。
     private var ledLagRollings: [String: [NextRollingValidity]] = [:]
     private var studiesFetchedAt: Date?
 
@@ -1288,6 +1292,10 @@ struct LocalPreferences: Codable {
         }
         var studies: [String: [NextLeadLagStudy]] = [:]
         var rollings: [String: [NextRollingValidity]] = [:]
+        // 148：登记先在本地副本上累加，最后一次性写回。
+        // 每登记一条就赋值一次 @Published 会在几十次循环里反复落盘，没必要。
+        var replications = signalReplications
+        let now = Date()
         for code in targets {
             guard let local = try? await NextNASService.readMinuteSeries(baseURL: base, code: code, days: 120),
                   local.count > 1 else { continue }
@@ -1296,12 +1304,31 @@ struct LocalPreferences: Codable {
             for market in NextCrossMarketPulseBuilder.overseas {
                 let overseas = archive.points(market)
                 guard overseas.count > 1 else { continue }
-                perMarket.append(NextLeadLagEngine.study(
+                let raw = NextLeadLagEngine.study(
                     lead: market, leadSeries: overseas, followCode: code,
-                    followSeries: local, lastValidated: Date()))
+                    followSeries: local, lastValidated: now)
+                var study = raw
+                // 只有统计门槛**全部**通过的窗口才允许预注册。
+                // 这里面没有「先记着玩玩」的余地：登记本身就是一次承诺。
+                if let best = raw.best, best.passesStatisticalBar {
+                    // 先结算过去已经登记过的那些天，再登记今天。
+                    // 顺序不能反：先登记今天会让「今天」进入结算范围，而今天还没收盘。
+                    replications = NextSignalReplicationEngine.settle(
+                        replications, market: market,
+                        leadSeries: overseas, followSeries: local, at: now)
+                    replications = NextSignalReplicationEngine.register(
+                        replications, lead: market, followCode: code,
+                        minutes: best.minutes, windowDays: nil, at: now)
+                    if let record = NextSignalReplicationEngine.find(
+                        replications, lead: market, followCode: code,
+                        minutes: best.minutes, windowDays: nil) {
+                        study = raw.with(replication: record)
+                    }
+                }
+                perMarket.append(study)
                 let windows = NextRollingValidityEngine.studies(
                     lead: market, leadSeries: overseas, followCode: code,
-                    followSeries: local, lastValidated: Date())
+                    followSeries: local, lastValidated: now)
                 perRolling.append(NextRollingValidityEngine.aggregate(
                     lead: market, followCode: code, studies: windows))
             }
@@ -1312,6 +1339,7 @@ struct LocalPreferences: Codable {
         guard preferences.nasBaseURL == base else { return }
         ledLagStudies = studies
         ledLagRollings = rollings
+        if replications != signalReplications { signalReplications = replications }
         studiesFetchedAt = Date()
     }
 

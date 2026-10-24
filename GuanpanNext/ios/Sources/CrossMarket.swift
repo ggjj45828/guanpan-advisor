@@ -186,17 +186,44 @@ enum NextCrossMarketAlignment {
 
 /// 一个领先窗口的完整统计。刻意不只存一个相关系数：
 /// 相关系数会被趋势段放大，胜率/中位收益/最大不利波动才回答「能不能用」。
+///
+/// 148 起样本单位改成**独立交易日**。原因很硬：同一天里的分钟观测彼此高度相关，
+/// 80 根 5 分钟 K 线看上去有 80 个样本，真实的独立信息量大概只有 1 天。
+/// 按分钟计数会让任何两条曲线在单日里都「显著」，这是假信心的主要来源。
 struct NextLeadLagWindow: Equatable {
     let minutes: Int
+    /// 分钟级配对数量。**不再是证据门槛**，只作为「够不够算相关系数」的技术底线。
     let sampleCount: Int
+    /// 独立交易日数量。这是唯一被承认的样本单位。
+    let independentDays: Int
     let correlation: Double
+    /// 分钟级同向率，只用于展示。
     let sameDirectionRate: Double
+    /// 日级同向率的 Wilson 95% 置信下界，n 取独立交易日数。
+    /// 用它而不是点估计：8 个窗口里挑最高的那个，点估计天然偏高。
+    let wilsonLowerBound: Double
+    /// 相关性 Fisher z 检验后乘以窗口数的 Bonferroni 校正 p 值。
+    let bonferroniP: Double
+    /// 留出段（按时间最后 1/3）的独立交易日数。前段拟合、后段必须还有样本。
+    let holdoutDays: Int
     let meanFollowReturn: Double
     let medianFollowReturn: Double
     let positiveRatio: Double
     let maxAdverseReturn: Double
     /// 前后两段子样本相关系数同号的比例（0…1）。用来识别「只在某一段成立」。
     let stability: Double
+
+    /// 统计层门槛：全部通过才叫「值得登记前瞻复现」。
+    /// 注意它**不等于**可以交易——那只由 `NextLeadLagStudy.eligibleForTradingSignal` 决定。
+    var passesStatisticalBar: Bool {
+        independentDays >= NextLeadLagEngine.minimumIndependentDays
+            && sampleCount >= NextLeadLagEngine.minimumPairs
+            && abs(correlation) >= NextLeadLagEngine.minimumCorrelation
+            && stability >= NextLeadLagEngine.minimumStability
+            && wilsonLowerBound >= NextLeadLagEngine.minimumWilsonLowerBound
+            && bonferroniP <= NextLeadLagEngine.maximumBonferroniP
+            && holdoutDays >= NextLeadLagEngine.minimumHoldoutDays
+    }
 }
 
 enum NextLeadLagVerdict: Equatable {
@@ -208,16 +235,55 @@ struct NextLeadLagStudy: Equatable {
     let lead: NextCrossMarket
     let followCode: String
     let verdict: NextLeadLagVerdict
+    /// 预注册前瞻复现进度。默认 `.none`（没登记过），因此默认不具备交易资格。
+    let replication: NextSignalReplication
+
+    init(lead: NextCrossMarket, followCode: String, verdict: NextLeadLagVerdict,
+         replication: NextSignalReplication = .none) {
+        self.lead = lead
+        self.followCode = followCode
+        self.verdict = verdict
+        self.replication = replication
+    }
+
     var best: NextLeadLagWindow? {
         if case let .usable(best, _, _, _) = verdict { return best }
         return nil
     }
+
+    /// 统计门槛是否通过。通过只代表「这条关系值得继续跟踪」。
+    var passesStatisticalBar: Bool { best?.passesStatisticalBar == true }
+
+    /// 是否能作为方向性交易信号。**默认 False**：
+    /// 历史统计再漂亮也不算授权，必须有预注册之后发生的前瞻兑现。
+    var eligibleForTradingSignal: Bool {
+        guard passesStatisticalBar else { return false }
+        return NextSignalReplicationEngine.allowsTradingSignal(replication)
+    }
+
+    /// 没通过时给人看的一句话，指出差在统计还是差在前瞻。
+    var signalEligibilityNote: String {
+        guard passesStatisticalBar else {
+            return "统计门槛未通过，暂无稳定领先关系"
+        }
+        if eligibleForTradingSignal {
+            return "前瞻复现已达标（\(replication.confirmedCount) 次兑现），可作为信号使用"
+        }
+        return NextSignalReplicationEngine.blockReason(replication)
+    }
+
+    /// 回填复现进度，其余字段不动。
+    func with(replication newValue: NextSignalReplication) -> NextLeadLagStudy {
+        NextLeadLagStudy(lead: lead, followCode: followCode, verdict: verdict, replication: newValue)
+    }
+
     var summary: String {
         switch verdict {
         case let .insufficient(reason):
             return "暂无稳定领先关系（\(reason)）"
         case let .usable(best, _, days, _):
-            return "\(lead.displayName) 领先 \(best.minutes) 分钟：样本 \(best.sampleCount) · 相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2)) · 同向 \(NextLeadLagStudy.percent(best.sameDirectionRate, digits: 0)) · 近 \(days) 日"
+            let p = String(format: "%.3f", best.bonferroniP)
+            return "\(lead.displayName) 领先 \(best.minutes) 分钟：独立 \(best.independentDays) 日 · 相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2)) · 同向下界 \(NextLeadLagStudy.percent(best.wilsonLowerBound, digits: 0)) · p校正 \(p) · 近 \(days) 日"
         }
     }
     static func percent(_ value: Double, digits: Int) -> String {
@@ -226,58 +292,126 @@ struct NextLeadLagStudy: Equatable {
 }
 
 enum NextLeadLagEngine {
-    /// 最小样本量与最低证据门槛。样本不足时**必须**返回「暂无稳定领先关系」，
-    /// 不允许用 3 个样本算出一个好看的数字再当预测能力。
-    static let minimumSamples = 30
+    // 148：证据门槛全部改成「独立交易日」口径。
+    /// 技术底线：配对太少连相关系数都不该算。
+    static let minimumPairs = 30
+    /// 证据门槛：至少 20 个独立交易日。30 个自然日大约只有 20 个交易日，
+    /// 所以这条线基本要求「至少一个月的真实数据」，单日分时永远过不了。
+    static let minimumIndependentDays = 20
     static let minimumCorrelation = 0.20
     static let minimumStability = 0.6
+    /// 日级同向率的 Wilson 95% 下界。0.55 意味着「即便按最悲观估计，也比掷硬币好」。
+    static let minimumWilsonLowerBound = 0.55
+    /// Bonferroni 校正后的显著性门槛。默认比较 8 个窗口，等于把单次门槛压到 0.006。
+    static let maximumBonferroniP = 0.05
+    /// 留出段至少要有 5 个独立交易日，否则「后段还成立」这句话没有证据。
+    static let minimumHoldoutDays = 5
+    /// 默认窗口数，用于 Bonferroni 校正。调用方传了就按传入的算。
+    static let defaultWindowCount = 8
+
+    static var shanghai: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? TimeZone(identifier: "UTC")!
+        return calendar
+    }
 
     static func study(lead: NextCrossMarket, leadSeries: [NextMarketPoint],
                       followCode: String, followSeries: [NextMarketPoint],
                       windowsMinutes: [Int] = [0, 5, 10, 15, 30, 45, 60, 90],
                       observedFrom: Date? = nil,
-                      lastValidated: Date) -> NextLeadLagStudy {
+                      lastValidated: Date,
+                      replication: NextSignalReplication = .none) -> NextLeadLagStudy {
         let leadSorted = leadSeries.sorted { $0.timestamp < $1.timestamp }
         let followSorted = followSeries.sorted { $0.timestamp < $1.timestamp }
         guard leadSorted.count >= 2, followSorted.count >= 2 else {
             return NextLeadLagStudy(lead: lead, followCode: followCode,
                                     verdict: .insufficient("领先或跟随序列样本不足"))
         }
+        let comparisonCount = max(1, windowsMinutes.count)
         var results: [NextLeadLagWindow] = []
         for minutes in windowsMinutes.sorted() {
             guard let window = window(lead: leadSorted, follow: followSorted, minutes: minutes,
-                                      observedFrom: observedFrom) else { continue }
+                                      observedFrom: observedFrom,
+                                      comparisonCount: comparisonCount) else { continue }
             results.append(window)
         }
-        guard let best = results.filter({ $0.sampleCount >= minimumSamples })
-            .max(by: { abs($0.correlation) < abs($1.correlation) }) else {
+        // 先按全部统计门槛筛。挑不出任何一条时，把「最接近及格」的那条的短板说出来，
+        // 不能只回一句「样本不足」——那样用户没法知道是缺数据还是关系真的不存在。
+        let passing = results.filter(\.passesStatisticalBar)
+        guard let best = passing.max(by: { abs($0.correlation) < abs($1.correlation) }) else {
+            let closest = results.max { lhs, rhs in
+                score(lhs) < score(rhs)
+            }
+            let reason = closest.map { whyNot($0) } ?? "没有任何窗口算出有效配对"
             return NextLeadLagStudy(lead: lead, followCode: followCode,
-                                    verdict: .insufficient("最长窗口有效样本不足 \(minimumSamples) 个"))
-        }
-        guard abs(best.correlation) >= minimumCorrelation else {
-            return NextLeadLagStudy(lead: lead, followCode: followCode,
-                                    verdict: .insufficient("相关性 \(NextLeadLagStudy.percent(best.correlation, digits: 2)) 低于门槛，可能只是同涨同跌"))
-        }
-        guard best.stability >= minimumStability else {
-            return NextLeadLagStudy(lead: lead, followCode: followCode,
-                                    verdict: .insufficient("前后两段方向不一致（稳定度 \(NextLeadLagStudy.percent(best.stability, digits: 0))），不当作稳定关系"))
+                                    verdict: .insufficient(reason), replication: replication)
         }
         // 多窗口一致性：最佳窗口若孤立（相邻窗口都远弱），更可能是挑选偏差。
         let neighbours = results.filter { abs($0.minutes - best.minutes) == 5 || abs($0.minutes - best.minutes) == 10 }
         if !neighbours.isEmpty,
            neighbours.allSatisfy({ abs($0.correlation) < abs(best.correlation) * 0.4 }) {
             return NextLeadLagStudy(lead: lead, followCode: followCode,
-                                    verdict: .insufficient("只有单一窗口吻合、相邻窗口不支持，疑似多重比较挑出来的"))
+                                    verdict: .insufficient("只有单一窗口吻合、相邻窗口不支持，疑似多重比较挑出来的"),
+                                    replication: replication)
         }
         let spanDays = max(1, Int((lastValidated.timeIntervalSince(leadSorted.first!.timestamp)) / 86_400))
         return NextLeadLagStudy(lead: lead, followCode: followCode,
                                 verdict: .usable(best: best, windows: results, periodDays: spanDays,
-                                                 lastValidated: lastValidated))
+                                                 lastValidated: lastValidated),
+                                replication: replication)
+    }
+
+    /// 及格项数，用来在全部不及格时挑出「最接近」的一条做解释。
+    private static func score(_ window: NextLeadLagWindow) -> Int {
+        var value = 0
+        if window.independentDays >= minimumIndependentDays { value += 1 }
+        if window.sampleCount >= minimumPairs { value += 1 }
+        if abs(window.correlation) >= minimumCorrelation { value += 1 }
+        if window.stability >= minimumStability { value += 1 }
+        if window.wilsonLowerBound >= minimumWilsonLowerBound { value += 1 }
+        if window.bonferroniP <= maximumBonferroniP { value += 1 }
+        if window.holdoutDays >= minimumHoldoutDays { value += 1 }
+        return value
+    }
+
+    /// 说清短板。顺序按「最根本的缺什么」排：样本量永远排在显著性前面。
+    static func whyNot(_ window: NextLeadLagWindow) -> String {
+        if window.independentDays < minimumIndependentDays {
+            return "独立交易日只有 \(window.independentDays) 天，门槛 \(minimumIndependentDays) 天（同一天里的 \(window.sampleCount) 个分钟配对数不算独立证据）"
+        }
+        if window.holdoutDays < minimumHoldoutDays {
+            return "留出段只有 \(window.holdoutDays) 个交易日，不到 \(minimumHoldoutDays) 天，无法验证后段是否仍成立"
+        }
+        if abs(window.correlation) < minimumCorrelation {
+            return "相关性 \(NextLeadLagStudy.percent(window.correlation, digits: 2)) 低于门槛，可能只是同涨同跌"
+        }
+        if window.bonferroniP > maximumBonferroniP {
+            return "Bonferroni 校正后 p = \(String(format: "%.3f", window.bonferroniP)) 不显著（\(defaultWindowCount) 个窗口的多重比较已扣除）"
+        }
+        if window.wilsonLowerBound < minimumWilsonLowerBound {
+            return "日级同向率 \(NextLeadLagStudy.percent(window.sameDirectionRate, digits: 0))，但 Wilson 95% 下界只有 \(NextLeadLagStudy.percent(window.wilsonLowerBound, digits: 0))，低于 \(NextLeadLagStudy.percent(minimumWilsonLowerBound, digits: 0))"
+        }
+        if window.stability < minimumStability {
+            return "前后两段方向不一致（稳定度 \(NextLeadLagStudy.percent(window.stability, digits: 0))），不当作稳定关系"
+        }
+        return "统计门槛未通过"
+    }
+
+    /// 这条「不足」是**数据长度不够**，还是**关系确实不成立**？
+    /// 两者对用户的含义完全相反：前者是「再等几天就有结论」，后者是「别指望它」。
+    /// 判定靠原因文案，因为 insufficient 的文案只在本文件产生，属于内部契约。
+    static func isSampleLimited(_ reason: String) -> Bool {
+        reason.contains("独立交易日只有")
+            || reason.contains("留出段只有")
+            || reason.contains("样本不足")
+            || reason.contains("没有任何窗口算出有效配对")
+            || reason.contains("序列样本不足")
     }
 
     /// 单窗口统计。返回 nil 表示这个窗口一个有效配对都没有。
     static func window(lead: [NextMarketPoint], follow: [NextMarketPoint],
-                       minutes: Int, observedFrom: Date?) -> NextLeadLagWindow? {
+                       minutes: Int, observedFrom: Date?,
+                       comparisonCount: Int = NextLeadLagEngine.defaultWindowCount) -> NextLeadLagWindow? {
         let windowSeconds = Double(minutes) * 60
         let tolerance = max(windowSeconds, 60) + 60
         var leadChanges: [Double] = []
@@ -308,14 +442,73 @@ enum NextLeadLagEngine {
         let median = sortedFollow[sortedFollow.count / 2]
         let mean = followChanges.reduce(0, +) / Double(followChanges.count)
         let stability = splitStability(pairs)
+
+        // 独立交易日：按北京时间自然日归组。
+        let grouped = Dictionary(grouping: pairs) { shanghai.startOfDay(for: $0.leadTime) }
+        let days = grouped.keys.sorted()
+        let independentDays = days.count
+        // 日级同向：当天领先净变化与跟随净变化同号，才算这一天「支持」这条关系。
+        var dailyAgree = 0
+        for day in days {
+            let group = grouped[day] ?? []
+            let leadNet = group.reduce(0.0) { $0 + $1.leadChange }
+            let followNet = group.reduce(0.0) { $0 + $1.followChange }
+            if leadNet != 0, followNet != 0, (leadNet > 0) == (followNet > 0) { dailyAgree += 1 }
+        }
+        let lowerBound = wilsonLowerBound(successes: dailyAgree, trials: independentDays)
+        let p = fisherTwoSidedP(r: correlation, n: independentDays)
+        let adjustedP = min(1, p * Double(max(1, comparisonCount)))
+        // 留出段：按时间最后 1/3 的配对覆盖到几个独立交易日。
+        let ordered = pairs.sorted { $0.leadTime < $1.leadTime }
+        let holdoutStart = ordered.count >= 6 ? ordered.count * 2 / 3 : ordered.count
+        let holdoutPairs = Array(ordered.suffix(from: holdoutStart))
+        let holdoutDays = Set(holdoutPairs.map { shanghai.startOfDay(for: $0.leadTime) }).count
+
         return NextLeadLagWindow(minutes: minutes, sampleCount: pairs.count,
+                                 independentDays: independentDays,
                                  correlation: correlation,
                                  sameDirectionRate: pairs.isEmpty ? 0 : Double(sameDirection) / Double(pairs.count),
+                                 wilsonLowerBound: lowerBound,
+                                 bonferroniP: adjustedP,
+                                 holdoutDays: holdoutDays,
                                  meanFollowReturn: mean,
                                  medianFollowReturn: median,
                                  positiveRatio: Double(positive) / Double(followChanges.count),
                                  maxAdverseReturn: sortedFollow.first ?? 0,
                                  stability: stability)
+    }
+
+    /// Wilson 区间下界。小样本时比 p̂ 低很多，这正是我们要的保守性。
+    static func wilsonLowerBound(successes: Int, trials: Int, z: Double = 1.96) -> Double {
+        guard trials > 0 else { return 0 }
+        let n = Double(trials)
+        let p = Double(successes) / n
+        let denominator = 1 + z * z / n
+        let centre = p + z * z / (2 * n)
+        let margin = z * (p * (1 - p) / n + z * z / (4 * n * n)).squareRoot()
+        return max(0, (centre - margin) / denominator)
+    }
+
+    /// 相关系数的双尾显著性：Fisher z 变换 + 正态近似。
+    /// n 用独立交易日数，所以「一天里多少根 K 线」不会把 p 值压低。
+    static func fisherTwoSidedP(r: Double, n: Int) -> Double {
+        guard n > 3 else { return 1 }
+        let clamped = max(-0.999_999, min(0.999_999, r))
+        // 用 log 展开而不是 atanh：两者等价，但 log 在所有平台都不需要额外导入。
+        let fisherZ = 0.5 * log((1 + clamped) / (1 - clamped))
+        let z = fisherZ * Double(n - 3).squareRoot()
+        return 1 - NextLeadLagEngine.erf(abs(z) / Double(2).squareRoot())
+    }
+
+    /// Abramowitz & Stegun 7.1.26，绝对误差 < 1.5e-7。够用了，不值得为此引入依赖。
+    static func erf(_ x: Double) -> Double {
+        let sign: Double = x < 0 ? -1 : 1
+        let ax = abs(x)
+        let t = 1 / (1 + 0.3275911 * ax)
+        let a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741
+        let a4 = -1.453152027, a5 = 1.061405429
+        let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1)
+        return sign * (1 - poly * t * exp(-ax * ax))
     }
 
     /// 前后两段相关系数是否同号。只在某一段成立的关系，不能当稳定关系用。

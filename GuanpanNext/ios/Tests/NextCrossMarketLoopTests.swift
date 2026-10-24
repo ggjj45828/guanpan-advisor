@@ -31,14 +31,25 @@ final class NextCrossMarketLoopTests: XCTestCase {
                                     minimumDays: 30, lunchNote: nil)
     }
 
-    private func usableStudy(_ code: String = "513520") -> NextLeadLagStudy {
-        let window = NextLeadLagWindow(minutes: 15, sampleCount: 60, correlation: 0.45,
-                                       sameDirectionRate: 0.62, meanFollowReturn: 0.1,
-                                       medianFollowReturn: 0.08, positiveRatio: 0.56,
-                                       maxAdverseReturn: -0.3, stability: 0.8)
+    /// 统计门槛全部通过、且前瞻复现已兑现 3 次的领先关系。
+    /// 148 之前「有个 window」就够；现在统计通过只是准入门槛，
+    /// 没有预注册兑现记录的 study 一律拿不到做T授权。
+    private func usableStudy(_ code: String = "513520", replicated: Bool = true) -> NextLeadLagStudy {
+        let window = NextLeadLagWindow(minutes: 15, sampleCount: 60, independentDays: 40,
+                                       correlation: 0.45, sameDirectionRate: 0.62,
+                                       wilsonLowerBound: 0.70, bonferroniP: 0.004, holdoutDays: 12,
+                                       meanFollowReturn: 0.1, medianFollowReturn: 0.08,
+                                       positiveRatio: 0.56, maxAdverseReturn: -0.3, stability: 0.8)
+        let days = ["2026-10-21", "2026-10-22", "2026-10-23"]
+        let replication = replicated
+            ? NextSignalReplication(lead: NextCrossMarket.japan.rawValue, followCode: code,
+                                    minutes: 15, windowDays: nil,
+                                    registeredDays: days, confirmedDays: days, refutedDays: [])
+            : NextSignalReplication.none
         return NextLeadLagStudy(lead: .japan, followCode: code,
                                 verdict: .usable(best: window, windows: [window],
-                                                 periodDays: 60, lastValidated: Date(timeIntervalSince1970: 1_790_000_000)))
+                                                 periodDays: 60, lastValidated: Date(timeIntervalSince1970: 1_790_000_000)),
+                                replication: replication)
     }
 
     private func fullWeight(_ code: String = "513520") -> NextRollingValidity {

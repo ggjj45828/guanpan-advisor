@@ -101,10 +101,11 @@ final class NextCrossMarketPulseTests: XCTestCase {
     }
 
     func test_holdingImpactReportsLeadWhenStudyIsUsable() {
-        let window = NextLeadLagWindow(minutes: 15, sampleCount: 120, correlation: 0.34,
-                                       sameDirectionRate: 0.61, meanFollowReturn: 0.12,
-                                       medianFollowReturn: 0.09, positiveRatio: 0.58,
-                                       maxAdverseReturn: -0.8, stability: 1)
+        let window = NextLeadLagWindow(minutes: 15, sampleCount: 120, independentDays: 45,
+                                       correlation: 0.34, sameDirectionRate: 0.61,
+                                       wilsonLowerBound: 0.68, bonferroniP: 0.006, holdoutDays: 15,
+                                       meanFollowReturn: 0.12, medianFollowReturn: 0.09,
+                                       positiveRatio: 0.58, maxAdverseReturn: -0.8, stability: 1)
         let study = NextLeadLagStudy(lead: .japan, followCode: "513100",
                                      verdict: .usable(best: window, windows: [window], periodDays: 60,
                                                       lastValidated: shanghai("2026-10-23T15:00:00+08:00")))

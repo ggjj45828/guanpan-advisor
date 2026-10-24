@@ -72,6 +72,55 @@ final class NextCrossMarketTests: XCTestCase {
     // MARK: - 117/134 Lead-Lag：有真实关系才给结论
 
     func testLeadLagFindsRelationOnlyWhenFollowReallyLagsLead() {
+        // 148：样本单位改成独立交易日后，单日 80 根 K 线不再能证明任何关系。
+        // 这里构造 24 个交易日、每天 40 根，滞后关系仍然是 5 分钟。
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let base = utc(2026, 9, 22, 1, 30)          // 09:30 北京时间
+        var dayStarts: [Date] = []
+        var cursor = base
+        while dayStarts.count < 24 {
+            let weekday = calendar.component(.weekday, from: cursor)
+            if weekday != 1 && weekday != 7 { dayStarts.append(cursor) }
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor)!
+        }
+        var lead: [NextMarketPoint] = []
+        var follow: [NextMarketPoint] = []
+        var leadValue = 100.0
+        var followValue = 100.0
+        var previousChange = 0.0
+        var index = 0
+        for dayStart in dayStarts {
+            for _ in 0..<40 {
+                let stamp = dayStart.addingTimeInterval(Double(index % 40) * 300)
+                let change = sin(Double(index) * 0.2) * 0.3
+                leadValue *= (1 + change / 100)
+                lead.append(NextMarketPoint(timestamp: stamp, value: leadValue))
+                // 跟随者用的是**上一根**领先变化：领先 5 分钟。
+                follow.append(NextMarketPoint(timestamp: stamp, value: followValue))
+                followValue *= (1 + previousChange / 100)
+                previousChange = change
+                index += 1
+            }
+        }
+        let end = dayStarts.last!.addingTimeInterval(40 * 300)
+        let study = NextLeadLagEngine.study(lead: .korea, leadSeries: lead, followCode: "512480",
+                                            followSeries: follow, lastValidated: end)
+        guard case let .usable(best, windows, _, _) = study.verdict else {
+            return XCTFail("构造出的领先关系应被识别：\(study.summary)")
+        }
+        XCTAssertGreaterThan(best.correlation, 0.7, "相关系数应明显为正")
+        XCTAssertGreaterThanOrEqual(best.independentDays, NextLeadLagEngine.minimumIndependentDays,
+                                    "证据单位必须是独立交易日")
+        XCTAssertTrue(best.passesStatisticalBar, "应通过全部统计门槛")
+        XCTAssertTrue(windows.contains { $0.minutes == 5 }, "至少测试了 5 分钟窗口")
+        XCTAssertTrue(study.summary.contains("领先"))
+        XCTAssertTrue(study.summary.contains("独立"), "摘要必须交代独立交易日数，不能只报分钟样本")
+    }
+
+    func testLeadLagRefusesSingleDayEvenWithManyMinutePairs() {
+        // 单日 80 根 5 分钟 K 线：分钟配对足够多，但只有 1 个独立交易日。
+        // 这正是 148 要堵的洞——旧口径会给出一条「显著」的假关系。
         let start = utc(2026, 10, 23, 1, 0)
         var lead: [NextMarketPoint] = []
         var follow: [NextMarketPoint] = []
@@ -83,33 +132,40 @@ final class NextCrossMarketTests: XCTestCase {
             let change = sin(Double(index) * 0.2) * 0.3
             leadValue *= (1 + change / 100)
             lead.append(NextMarketPoint(timestamp: stamp, value: leadValue))
-            // 跟随者用的是**上一根**领先变化：领先 5 分钟。
             follow.append(NextMarketPoint(timestamp: stamp, value: followValue))
             followValue *= (1 + previousChange / 100)
             previousChange = change
         }
         let study = NextLeadLagEngine.study(lead: .korea, leadSeries: lead, followCode: "512480",
                                             followSeries: follow, lastValidated: start.addingTimeInterval(80 * 300))
-        guard case let .usable(best, windows, _, _) = study.verdict else {
-            return XCTFail("构造出的领先关系应被识别：\(study.summary)")
-        }
-        XCTAssertGreaterThan(best.correlation, 0.7, "相关系数应明显为正")
-        XCTAssertGreaterThanOrEqual(best.sampleCount, NextLeadLagEngine.minimumSamples)
-        XCTAssertTrue(windows.contains { $0.minutes == 5 }, "至少测试了 5 分钟窗口")
-        XCTAssertTrue(study.summary.contains("领先"))
+        if case .usable = study.verdict { XCTFail("单日分钟配对不足以证明领先关系") }
+        XCTAssertTrue(study.summary.contains("独立交易日只有 1 天"), study.summary)
     }
 
     func testLeadLagRefusesToInventRelationFromUnrelatedSeries() {
-        let start = utc(2026, 10, 23, 1, 0)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let base = utc(2026, 9, 22, 1, 30)
+        var dayStarts: [Date] = []
+        var cursor = base
+        while dayStarts.count < 24 {
+            let weekday = calendar.component(.weekday, from: cursor)
+            if weekday != 1 && weekday != 7 { dayStarts.append(cursor) }
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor)!
+        }
         var lead: [NextMarketPoint] = []
         var follow: [NextMarketPoint] = []
-        for index in 0..<80 {
-            let stamp = start.addingTimeInterval(Double(index) * 300)
-            lead.append(NextMarketPoint(timestamp: stamp, value: 100 + sin(Double(index) * 0.2) * 2))
-            follow.append(NextMarketPoint(timestamp: stamp, value: 50 + cos(Double(index) * 1.7) * 3))
+        var index = 0
+        for dayStart in dayStarts {
+            for _ in 0..<40 {
+                let stamp = dayStart.addingTimeInterval(Double(index % 40) * 300)
+                lead.append(NextMarketPoint(timestamp: stamp, value: 100 + sin(Double(index) * 0.2) * 2))
+                follow.append(NextMarketPoint(timestamp: stamp, value: 50 + cos(Double(index) * 1.7) * 3))
+                index += 1
+            }
         }
         let study = NextLeadLagEngine.study(lead: .japan, leadSeries: lead, followCode: "512480",
-                                            followSeries: follow, lastValidated: start)
+                                            followSeries: follow, lastValidated: base)
         if case .usable = study.verdict { XCTFail("无关序列不允许生成领先关系") }
         XCTAssertTrue(study.summary.contains("暂无稳定领先关系"), study.summary)
         XCTAssertNil(study.best)

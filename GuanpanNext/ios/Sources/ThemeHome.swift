@@ -144,7 +144,7 @@ struct ThemeHomeScreen: View {
             await model.refreshNASLink()
             // 通了才去拿跨市场归档（15 分钟节流）；没通就是空，界面如实显示「暂无」。
             await model.refreshCrossMarket()
-            // 归档到手后，对持仓逐只算领先关系与 20/60/120 日滚动有效性（6 小时节流）。
+            // 归档到手后，对持仓逐只算领先关系与 30/60/120 日滚动有效性（6 小时节流）。
             // 算不出来就保持空，详情页显示「暂无稳定领先关系」，不编来源。
             await model.refreshCrossMarketStudies(
                 for: model.book.positions.filter { $0.units > 0 }.map(\.code))

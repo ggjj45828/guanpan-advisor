@@ -1270,10 +1270,14 @@ struct NextAppArchive: Codable, Equatable {
     var suggestions: [NextSuggestionRecord] = []
     /// AI 决策记忆：当时依据 + 改判轨迹 + 复盘。备份要带走，否则换机后 AI 就没记忆了。
     var decisionMemory: [NextDecisionRecord] = []
+    /// 预注册前瞻复现记录：只有「登记之后」发生的行情才算验证。
+    /// 这是跨市场关系能不能变成交易信号的唯一凭据，必须跟着备份走，
+    /// 否则换机就等于把过去的验证全部清零、又从「零次兑现」重新开始。
+    var signalReplications: [NextSignalReplication] = []
     /// 五套视觉主题（nil = 跟随场景）。备份要带走，换机后外观一致。
     var appTheme: AppTheme?
     var theme: NextTheme = .light
-    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, decisionMemory, profile, suggestions, appTheme, theme }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, book, goal, watch, navigation, cachedQuotes, chartData, instrumentRules, orderBooks, notifications, audits, decisionHistory, nasResearch, dividendEvents, patientLimitPlans, candidatePlans, decisionMemory, profile, suggestions, appTheme, theme, signalReplications }
     init() {}
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1294,6 +1298,7 @@ struct NextAppArchive: Codable, Equatable {
         patientLimitPlans = try values.decodeIfPresent([NextPatientLimitPlan].self, forKey: .patientLimitPlans) ?? []
         candidatePlans = try values.decodeIfPresent([NextCandidatePlan].self, forKey: .candidatePlans) ?? []
         decisionMemory = try values.decodeIfPresent([NextDecisionRecord].self, forKey: .decisionMemory) ?? []
+        signalReplications = try values.decodeIfPresent([NextSignalReplication].self, forKey: .signalReplications) ?? []
         profile = try values.decodeIfPresent(NextInvestorProfile.self, forKey: .profile) ?? NextInvestorProfile()
         suggestions = try values.decodeIfPresent([NextSuggestionRecord].self, forKey: .suggestions) ?? []
         appTheme = try values.decodeIfPresent(AppTheme.self, forKey: .appTheme)
