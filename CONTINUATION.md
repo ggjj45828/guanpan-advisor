@@ -74,12 +74,17 @@
 2. **（高）B1 端到端实机链**：需真机 + NAS 真实部署后跑一遍全链（持仓→行情→NAS→新闻→画像→策略→风控→计划→AI→成交→复盘）。
 3. **（中）J7 组件命名归拢**：低风险整理，随 D4 一并做。
 4. **（中）⚠️ 外部项**：K5 真机推送 / D1 多源 / G3 部分成交 / NAS 部署 / J8 极端字号 —— 需真机或部署环境。
-5. **（收尾）r30 三件套交付**：#31 重打交付包（前提是 D4/真机验证完成后再定）。
+5. **（收尾）r31 三件套已重打（2026-10-24 17:30）**：`deliverable/GuanpanAdvisor-source-r31.zip`（`git archive HEAD`，含 23 处入口去重后的源码）+ `deliverable/nas-advisor-deploy-r31.zip`（15 文件，已核验：`researchOwner` 在、`research_loop` 不在、`classic.html` 不在）；旧 r29/r30 四个 zip 已删，只留 r31（IPA 仍是 CI r29 产物，等新一轮 CI 出了再替换）。
 
 ## 7. 已提交改动（本轮相关）
 
 | Commit | 内容 |
 |---|---|
+| fe77acc | 首页入口去重：删同屏重复的「AI 指导」chip 与「今日市场观察·更多」；审计清单改诚实版 |
+| ee2470e | 新增首页重导向入口审计清单（`REDIRECT-CARDS-AUDIT.md`） |
+| ed934e8 | NAS 取消后台研究（删 research_loop）+ 模型输出排版重写 + 拆 market.html AI 入口 + 删 classic.html + 3 处闪退隐患 |
+| d415071 | 日 K 图表改直连优先（NAS 仅兜底/补超长历史） |
+| a5769e4 | NAS↔手机穿透流量平衡（NAS 不再额外拉实时报价，分时归档保留；日 K 累积 1000 天；手机直连优先） |
 | af56b7c | 退役旧 30001 服务：全树端口统一 8786，删旧服务代码目录，改写双服务叙述为单一服务 |
 | eef86d7 | 修复 CI 第 5 处错误：NextChainScenarioTests 的 scan() 实参顺序（research 在 profile 前） |
 | a3f22cc | 端口 8789→8786 全量替换（含 GuanpanNext 源码/部署/文档 + 本地副本） |
