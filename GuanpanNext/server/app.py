@@ -13,7 +13,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 import news
-from domain import Conflict, InvalidData, NextDatabase, convert_legacy_web_book
+from domain import (Conflict, InvalidData, NextDatabase, convert_legacy_web_book,
+                     strict_iso_date)
 from market import (fetch_indices, fetch_tencent_quotes, fetch_tencent_daily, fetch_dividend_events, fetch_kline,
                     fetch_quotes, fetch_daily,
                     symbol_for, DIVIDEND_RULES_VERSION as dividend_rules_version)
@@ -144,6 +145,24 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     return self.reply(200, {"source": "NAS cross-market snapshot archive",
                                             "markets": crossmarket.group_series(rows),
                                             "rows": len(rows)})
+                except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
+            if path.startswith("/v1/research/preregister"):
+                # 预注册未来样本研究（指令七）：只登记未来窗口 + 不可变指纹，
+                # 不建计划、不改账本、不发信号。列表/读取都带 notTradingSignal 标注。
+                try:
+                    if path == "/v1/research/preregister":
+                        return self.reply(200, {"studies": database.list_preregisters(),
+                                                "notTradingSignal": True,
+                                                "note": "预注册未来样本研究：只登记未来观察窗口与不可变指纹，不是交易信号。"})
+                    study_id = path.rsplit("/", 1)[-1]
+                    as_of = parse_qs(parsed.query).get("asOf", [None])[0]
+                    if as_of:
+                        try: strict_iso_date(as_of)
+                        except ValueError: return self.reply(400, {"error": "invalid asOf date"})
+                    study = database.get_preregister(study_id, as_of=as_of)
+                    if study is None:
+                        return self.reply(404, {"error": "study not found", "notTradingSignal": True})
+                    return self.reply(200, study)
                 except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/research/"):
                 try:
@@ -384,6 +403,19 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     code = path.rsplit("/", 1)[-1]; symbol_for(code)
                     database.track_instrument(code, datetime.now(timezone.utc).isoformat())
                     return self.reply(200, {"code": code, "tracked": True})
+                if path == "/v1/research/preregister":
+                    # 预注册：只登记，绝不生成信号/计划/账本写入。
+                    study = database.register_preregister(value)
+                    return self.reply(200, {
+                        **study,
+                        "note": ("这不是交易信号：预注册研究只登记未来观察窗口与不可变指纹，"
+                                 "不创建交易计划、不改真实账本、不生成交易信号。")})
+                if path.startswith("/v1/research/preregister/") and path.endswith("/settle"):
+                    # 结算子路由：只记录结果指纹，同样不建计划/不改账本/不发信号。
+                    study_id = path[len("/v1/research/preregister/"):-len("/settle")].strip("/")
+                    result = database.settle_preregister(study_id, value.get("outcome") or value)
+                    return self.reply(200, {**result,
+                                            "note": "结算仅记录结果指纹；这仍不是交易信号。"})
                 self.reply(404, {"error": "unknown route"})
             except Conflict:
                 self.reply(409, {"error": "revision conflict; no changes saved"})

@@ -2,6 +2,7 @@
 import json
 import re
 import sqlite3
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import uuid
@@ -28,6 +29,23 @@ def strict_iso_date(value):
     if parsed.isoformat() != value:
         raise ValueError("date must use canonical YYYY-MM-DD")
     return parsed
+
+
+def preregister_fingerprint(lead_market, follow_code, lead_minutes, window_days,
+                            frozen_at, window_start, window_end):
+    """假设一旦注册就不可变：指纹由全部假设字段算出，重算不一致即判漂移。
+
+    排序键固定 + separators 紧凑，保证「同一假设永远得到同一指纹」，
+    也保证任何人改了其中任一字段都会让落库指纹与重算指纹对不上
+    （drifted），从而让研究作废，而不是悄悄变成一个能拟合结果的假设。
+    """
+    canonical = json.dumps(
+        {"leadMarket": str(lead_market), "followCode": str(follow_code),
+         "leadMinutes": int(lead_minutes), "windowDays": int(window_days),
+         "frozenAt": str(frozen_at), "windowStart": str(window_start),
+         "windowEnd": str(window_end)},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def validate_book_json(text):
@@ -368,6 +386,29 @@ class NextDatabase:
                     change_percent TEXT, source TEXT, observed_at TEXT NOT NULL,
                     PRIMARY KEY(market, stamp));
                 CREATE INDEX IF NOT EXISTS idx_cross_market_stamp ON cross_market_samples(stamp);
+                -- 预注册的未来样本研究（指令七）。它只做一件事：**登记**一个
+                -- 「未来观察窗口 + 不可变指纹」的假设，绝不下场。
+                -- ① 只登记未来观察窗口：window_start 必须在登记时刻之后，否则就是
+                --    「看了结果再注册」，预注册的意义就没了。
+                -- ② 只登记不可变指纹：fingerprint 由假设字段算出并落库，注册后没有
+                --    任何 UPDATE 路径改这些字段；重算不一致即判 drifted（假设被篡改/漂移）。
+                -- ③ 不创建交易计划、④ 不改真实账本（real_books/twin_accounts 不碰）、
+                -- ⑤ 不允许成为交易信号（不进 signalReplications、不进 CrossMarketLoop 闸门）。
+                -- 这五条用「代码里根本不存在那些副作用」来保证，而不是靠文档提醒。
+                CREATE TABLE IF NOT EXISTS preregistered_studies (
+                    id TEXT PRIMARY KEY,
+                    lead_market TEXT NOT NULL,
+                    follow_code TEXT NOT NULL,
+                    lead_minutes INTEGER NOT NULL,
+                    window_days INTEGER NOT NULL,
+                    frozen_at TEXT NOT NULL,
+                    window_start TEXT NOT NULL,
+                    window_end TEXT NOT NULL,
+                    registered_at TEXT NOT NULL,
+                    immutable_fingerprint TEXT NOT NULL,
+                    settled_at TEXT,
+                    outcome_fingerprint TEXT);
+                CREATE INDEX IF NOT EXISTS idx_preregister_code ON preregistered_studies(follow_code);
             """)
             # 老库升级：`dividend_archive` 早期没有 rules_version 列。
             # 加不上（列已存在）就忽略 —— SQLite 没有 ADD COLUMN IF NOT EXISTS。
@@ -781,6 +822,134 @@ class NextDatabase:
         if not isinstance(body, dict): raise InvalidData("invalid research body")
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO research_runs VALUES (?, ?)", (run_id, json.dumps(body, ensure_ascii=False)))
+
+    # MARK: 预注册的未来样本研究（指令七）
+
+    def register_preregister(self, spec, now=None):
+        """登记一个预注册未来样本研究。五条铁律全在这里卡死：
+
+        ① 窗口必须真正在未来（window_start > 登记日），否则「看了结果再注册」。
+        ② 假设冻结于登记时刻（frozen_at = 登记时刻），注册后无 UPDATE 路径改假设。
+        ③ 不创建交易计划、④ 不碰 real_books / twin_accounts、⑤ 不生成交易信号。
+           本方法只往 preregistered_studies 写一行，对这些表一个字都不碰。
+        """
+        now = now or datetime.now(timezone.utc)
+        if not isinstance(spec, dict): raise InvalidData("invalid preregister spec")
+        study_id = spec.get("id")
+        self.validate_id(study_id)
+        lead_market = spec.get("leadMarket")
+        follow_code = spec.get("followCode")
+        lead_minutes = spec.get("leadMinutes")
+        window_days = spec.get("windowDays")
+        window_start = spec.get("windowStart")
+        window_end = spec.get("windowEnd")
+        if lead_market not in CROSS_MARKETS:
+            raise InvalidData("invalid lead market")
+        if not isinstance(follow_code, str) or re.fullmatch(r"\d{6}", follow_code) is None:
+            raise InvalidData("invalid follow code")
+        if not isinstance(lead_minutes, int) or not (1 <= lead_minutes <= 600):
+            raise InvalidData("invalid lead minutes")
+        if not isinstance(window_days, int) or not (1 <= window_days <= 400):
+            raise InvalidData("invalid window days")
+        try:
+            ws = strict_iso_date(window_start)
+            we = strict_iso_date(window_end)
+        except ValueError:
+            raise InvalidData("invalid window date")
+        if we < ws:
+            raise InvalidData("window end before start")
+        # ① 未来窗口：登记日（UTC）必须严格早于窗口起始日。
+        today = now.astimezone(timezone.utc).date()
+        if ws <= today:
+            raise InvalidData("future observation window must start in the future")
+        frozen_at = now.astimezone(timezone.utc).isoformat()
+        fp = preregister_fingerprint(lead_market, follow_code, lead_minutes,
+                                     window_days, frozen_at, window_start, window_end)
+        with self.connect() as db:
+            # 同一 id 重复注册直接失败：不允许「换个假设覆盖旧注册」来作弊。
+            existing = db.execute("SELECT id FROM preregistered_studies WHERE id=?",
+                                  (study_id,)).fetchone()
+            if existing:
+                raise Conflict("preregister id already exists")
+            db.execute(
+                "INSERT INTO preregistered_studies VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (study_id, lead_market, follow_code, int(lead_minutes), int(window_days),
+                 frozen_at, window_start, window_end, frozen_at, fp, None, None))
+        return {"id": study_id, "fingerprint": fp, "frozenAt": frozen_at,
+                "state": "registered", "notTradingSignal": True}
+
+    def get_preregister(self, study_id, as_of=None):
+        """读回预注册研究，并**重算指纹核对漂移**。
+
+        漂移（drifted）意味着假设字段被改过 —— 此时研究作废，state 直接标
+        drifted，绝不能让它继续被当成有效证据。as_of 用于测试里固定「今天」。
+        """
+        self.validate_id(study_id)
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT lead_market, follow_code, lead_minutes, window_days, frozen_at, "
+                "window_start, window_end, registered_at, immutable_fingerprint, "
+                "settled_at, outcome_fingerprint FROM preregistered_studies WHERE id=?",
+                (study_id,)).fetchone()
+        if not row:
+            return None
+        (lead_market, follow_code, lead_minutes, window_days, frozen_at, window_start,
+         window_end, registered_at, fp, settled_at, outcome_fingerprint) = row
+        recomputed = preregister_fingerprint(lead_market, follow_code, lead_minutes,
+                                             window_days, frozen_at, window_start, window_end)
+        drifted = recomputed != fp
+        as_of_date = strict_iso_date(as_of) if as_of else datetime.now(timezone.utc).date()
+        if settled_at:
+            state = "settled"
+        elif as_of_date < strict_iso_date(window_start):
+            state = "registered"
+        elif as_of_date <= strict_iso_date(window_end):
+            state = "open"
+        else:
+            state = "closed"
+        return {"id": study_id, "leadMarket": lead_market, "followCode": follow_code,
+                "leadMinutes": lead_minutes, "windowDays": window_days,
+                "frozenAt": frozen_at, "windowStart": window_start, "windowEnd": window_end,
+                "registeredAt": registered_at, "fingerprint": fp,
+                "fingerprintDrifted": drifted,
+                "state": ("drifted" if drifted else state),
+                "settledAt": settled_at, "outcomeFingerprint": outcome_fingerprint,
+                "notTradingSignal": True}
+
+    def list_preregisters(self, follow_code=None):
+        with self.connect() as db:
+            if follow_code:
+                rows = db.execute(
+                    "SELECT id, follow_code FROM preregistered_studies WHERE follow_code=?",
+                    (follow_code,)).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT id, follow_code FROM preregistered_studies").fetchall()
+        return [{"id": r[0], "followCode": r[1]} for r in rows]
+
+    def settle_preregister(self, study_id, outcome, now=None):
+        """结算：只把「结果指纹」记下来。绝不做计划/改账本/发信号。
+
+        outcome 是任意可被 JSON 化的观测结论（比如窗口内跟随确认率）。
+        这里只存它的指纹作为不可变记录，不解释、不交易、不下任何信号。
+        """
+        self.validate_id(study_id)
+        if not isinstance(outcome, dict):
+            raise InvalidData("invalid outcome")
+        now = now or datetime.now(timezone.utc)
+        settled_at = now.astimezone(timezone.utc).isoformat()
+        outcome_fp = hashlib.sha256(json.dumps(outcome, ensure_ascii=False,
+                                               sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        with self.connect() as db:
+            row = db.execute("SELECT id FROM preregistered_studies WHERE id=?",
+                             (study_id,)).fetchone()
+            if not row:
+                raise InvalidData("unknown preregistered study")
+            db.execute(
+                "UPDATE preregistered_studies SET settled_at=?, outcome_fingerprint=? WHERE id=?",
+                (settled_at, outcome_fp, study_id))
+        return {"id": study_id, "settledAt": settled_at,
+                "outcomeFingerprint": outcome_fp, "notTradingSignal": True}
 
     def get_research_stats(self, code):
         """长期分时统计缓存。键里带最新分钟戳：归档有新数据就自动失效，不会读到旧结论。"""
