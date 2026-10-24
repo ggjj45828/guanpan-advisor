@@ -123,7 +123,13 @@ enum NextCrossMarketLoop {
                          rollings: [NextRollingValidity] = [],
                          pulse: NextCrossMarketPulse,
                          calendar: NextMarketCalendar = NextMarketCalendar(),
-                         existing: NextCrossHypothesis? = nil) -> NextLoopOutcome {
+                         existing: NextCrossHypothesis? = nil,
+                         // 逐 ETF 长期验证通过的领先市场集合。
+                         // `nil` = 不做这一层要求（测试与旧路径）；非 nil 时即使前瞻复现达标，
+                         // 也必须这条关系在长期验证里走到「候选」才允许方向性做T。
+                         longTermValidatedLeads: Set<NextCrossMarket>? = nil,
+                         // 该标的的长期验证台账（用于解释为什么没升级），可为空。
+                         longTermEntry: NextLeadLedgerEntry? = nil) -> NextLoopOutcome {
         var explanation: [String] = []
         let signal = detectSignal(now: now, overseas: overseas, local: local, pulse: pulse,
                                   calendar: calendar, explanation: &explanation)
@@ -172,14 +178,26 @@ enum NextCrossMarketLoop {
         let bestWeight = rollings.map(\.weight).max() ?? 0.5
         // 148：能不能做方向性动作，取决于「有没有一条关系通过预注册前瞻复现」，
         // 而不是取决于哪条关系的数字最漂亮。
-        let eligibleStudy = studies.first { $0.eligibleForTradingSignal }
+        var eligibleStudy = studies.first { $0.eligibleForTradingSignal }
         let reference = studies.max { lhs, rhs in
             abs(lhs.best?.correlation ?? 0) < abs(rhs.best?.correlation ?? 0)
+        }
+        // 长期验证是第三道门。顺序是「统计 → 前瞻复现 → 长期验证」，
+        // 前两道说这条关系「这段时间可能有用」，第三道才说它「不是几天极值撑起来的」。
+        var longTermNote: String?
+        if let longTermValidatedLeads, let candidate = eligibleStudy,
+           !longTermValidatedLeads.contains(candidate.lead) {
+            eligibleStudy = nil
+            if let entry = longTermEntry? {
+                longTermNote = "逐 ETF 长期验证未通过（\(entry.directionalDays) 个方向性交易日、单日集中度 \(Int(entry.concentrationShare * 100))%）：不能升级为稳定领先关系"
+            } else {
+                longTermNote = "这条关系还没有逐 ETF 长期验证记录（需要 \(NextEvidenceEngine.minimumSessions) 个独立交易日、留出段要跑赢对照组、且不能被单日极值撑起来）"
+            }
         }
         let gate = decide(judged: judged, chain: chain, execution: execution,
                           weight: bestWeight, signal: signal,
                           signalEligible: eligibleStudy != nil,
-                          replicationNote: eligibleStudy == nil ? reference?.signalEligibilityNote : nil,
+                          replicationNote: eligibleStudy == nil ? (longTermNote ?? reference?.signalEligibilityNote) : nil,
                           explanation: &explanation)
 
         return NextLoopOutcome(code: code, at: now, gate: gate, signal: signal,

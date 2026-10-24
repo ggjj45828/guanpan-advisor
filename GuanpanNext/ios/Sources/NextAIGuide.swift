@@ -752,6 +752,12 @@ enum NextTradeTPlanner {
         var evidence: [String] = []
         evidence.append("VWAP ¥\(NextMoney.text(vwap, digits: 3))（今日 \(stats.sampleCount) 点\(stats.vwapIsWeighted ? "，成交量加权" : "，简单均值——缺成交量数据")）")
         evidence.append("今日高低 ¥\(NextMoney.text(dayLow, digits: 3))–¥\(NextMoney.text(dayHigh, digits: 3))，振幅 \(String(format: "%.2f", amplitude))%")
+        // 分时覆盖率：30 点是下限，但 240 分钟里只有 30 点时「今日振幅」的估计是不可靠的。
+        // 这种情况仍然出价（否则等于因为数据暂时不全就禁止一切做T），但必须自曝代表性有限。
+        let minuteCoverage = min(1, Double(stats.sampleCount) / 240)
+        if minuteCoverage < NextPlanDataGate.doTPreferredMinuteCoverage {
+            evidence.append(String(format: "今日分时只覆盖 %.0f%%（%d 点 / 240 分钟），日内统计代表性有限：缺口可能落在波动最大的时段", minuteCoverage * 100, stats.sampleCount))
+        }
         evidence.append("价格穿越 VWAP \(stats.vwapCrossings) 次（日内往返，做T空间来源）")
         evidence.append("NAS 60 日成交量覆盖 \(Int(((caps.nasVolumeCoverage60 ?? 0) * 100).rounded()))%；VWAP 上/下偏离中位数 \(String(format: "%.2f", historicalHighDeviation * 100))% / \(String(format: "%.2f", historicalLowDeviation * 100))%")
         evidence.append("实时盘口价差 \(String(format: "%.3f", liquidity.spreadPercent))%；五档深度买 \(String(format: "%.0f", liquidity.bidDepthLots)) 手 / 卖 \(String(format: "%.0f", liquidity.askDepthLots)) 手（\(orderBook.source)）")
@@ -815,6 +821,22 @@ enum NextGridPlannerResult: Equatable {
 /// 档数、间距、每档份额全部由波动率、历史区间、资金、持仓与手续费推导；
 /// 不适合就明说「不建议网格」，不强行生成买档。
 enum NextGridPlanner {
+    /// 日均振幅（百分点）：(最高 − 最低) ÷ 收盘。缺高低价或一字板的日子跳过。
+    /// 用它而不是 `gridCheck.avgAmplitudePercent`，是为了能分别算「近 20 日」与「近 60 日」，
+    /// 只有两个数都算出来才判断得了波动结构是否在切换。
+    static func averageAmplitude(_ bars: [NextChartSample]) -> Double? {
+        let values: [Double] = bars.compactMap { bar in
+            guard let high = bar.high, let low = bar.low else { return nil }
+            let highValue = NextNum.double(high)
+            let lowValue = NextNum.double(low)
+            let close = NextNum.double(bar.close)
+            guard close > 0, highValue >= lowValue else { return nil }
+            return (highValue - lowValue) / close * 100
+        }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
     static func plan(book: NextBook, quote: NextQuote?, daily: [NextChartSample], gridCheck: NextGridCheck?,
                      rules: NextInstrumentRules?, nasRange: NextNasRange? = nil,
                      orderBook: NextOrderBookSnapshot? = nil,
@@ -871,8 +893,20 @@ enum NextGridPlanner {
         upper = clampedHigh
         lower = clampedLow
         let amplitude = gridCheck.avgAmplitudePercent ?? 1.0
-        // 间距：不低于 0.4%，取「半倍日均振幅」；保证每档往返扣费后仍为正。
-        let spacingPercent = max(0.4, amplitude / 2)
+        // 动态间距的数据护栏：间距来自振幅估计，而振幅估计只在「波动结构没变」时才有意义。
+        // 近 20 日与近 60 日振幅差一倍以上，说明这段行情在切换；此时缩间距等于在切换点上加速下单。
+        let recentAmplitude = NextGridPlanner.averageAmplitude(Array(recent.suffix(20)))
+        let longAmplitude = NextGridPlanner.averageAmplitude(Array(recent))
+        let volatilityUnstable = NextPlanDataGate.amplitudeIsUnstable(recent: recentAmplitude,
+                                                                      long: longAmplitude)
+        var volatilityNotes: [String] = []
+        if volatilityUnstable {
+            volatilityNotes.append("近 20 日振幅 \(NextPlanDataGate.fmt(recentAmplitude))% 与近 \(recent.count) 日 \(NextPlanDataGate.fmt(longAmplitude))% 相差超过一倍：波动结构在切换，间距按更保守的一侧取、不压缩")
+        }
+        // 间距：不低于 0.4%，取「半倍日均振幅」；波动不稳时改用长段振幅的一半。
+        let spacingPercent = NextPlanDataGate.spacing(base: max(0.4, amplitude / 2),
+                                                      longAmplitude: longAmplitude,
+                                                      unstable: volatilityUnstable)
         let rangePercent = NextNum.double((upper - lower) / lower * 100)
         var tierCount = Int(max(2, min(6, (rangePercent / spacingPercent).rounded())))
         var capNotes: [String] = []
@@ -939,7 +973,7 @@ enum NextGridPlanner {
                                     "行情超过 2 分钟未更新",
                                     "日均成交额跌到 0.3 亿以下（流动性不足）"
                                 ],
-                                reasons: gridCheck.reasons + boundNotes + capNotes,
+                                reasons: gridCheck.reasons + boundNotes + capNotes + volatilityNotes,
                                 warnings: gridCheck.warnings, confidence: confidence)
         return .ready(plan)
     }

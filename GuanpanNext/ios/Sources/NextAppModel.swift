@@ -184,6 +184,40 @@ struct LocalPreferences: Codable {
     @Published var decisionMemory: [NextDecisionRecord] { didSet { reportSave(repository.save(decisionMemory, filename: "decision-memory-v1.json")) } }
     /// 预注册前瞻复现。落盘是必须的：这些计数跨天累加，丢了就等于把验证历史清零。
     @Published var signalReplications: [NextSignalReplication] { didSet { reportSave(repository.save(signalReplications, filename: "signal-replication-v1.json")) } }
+    /// 逐 ETF 长期验证台账。落盘是必须的：它是「这条关系到底验证过没有」的唯一凭据，
+    /// 内存里的 study 每次刷新都会重算，台账不会。
+    @Published var leadLedger: NextLeadLedger { didSet { reportSave(repository.save(leadLedger, filename: "lead-ledger-v1.json")) } }
+
+    /// 已通过逐 ETF 长期验证的领先市场。空集是正常状态：
+    /// 要 100 个独立交易日 + 留出段跑赢对照组 + 抗单日极值，目前还没有一条走到。
+    var longTermCandidateLeads: Set<NextCrossMarket> {
+        Set(leadLedger.entries
+            .filter { $0.evidenceState == .candidateRequiresReplication }
+            .compactMap(\.lead))
+    }
+
+    /// 某只 ETF 的长期验证记录（交易日多的排前面）。
+    func longTermValidations(for code: String) -> [NextLeadLedgerEntry] {
+        leadLedger.entries.filter { $0.code == code }.sorted { $0.sessions > $1.sessions }
+    }
+
+    /// 界面用的文案。没有记录时必须承认没有，而不是显示一个空的「已验证」。
+    func longTermValidationLines(for code: String) -> [String] {
+        let records = longTermValidations(for: code)
+        guard !records.isEmpty else {
+            return ["还没有逐 ETF 长期验证记录：要 \(NextEvidenceEngine.minimumSessions) 个独立交易日，留出段的触发组还要跑赢对照组。在此之前不产生方向性做T，只做网格"]
+        }
+        return records.map { entry in
+            let pieces = [
+                "\(entry.lead?.displayName ?? entry.leadRaw) 领先 \(entry.windowMinutes) 分钟",
+                "\(entry.sessions) 个独立交易日",
+                "方向性 \(entry.directionalDays) 天",
+                String(format: "单日集中度 %.0f%%", entry.concentrationShare * 100),
+                entry.evidenceState.label
+            ]
+            return pieces.joined(separator: " · ")
+        }
+    }
     /// 分时样本时效。判定只看**样本时间**，不看接收时间——
     /// 上游完全可能返回「接收时间很新、样本却是昨天」的分时。
     /// 这个值供界面与下游分析读取，不落盘：每次刷新重算即可。
@@ -294,6 +328,7 @@ struct LocalPreferences: Codable {
         self.nasResearch = repository.load([String: NextNASResearch].self, filename: "nas-research-v1.json", fallback: [:])
         self.decisionMemory = repository.load([NextDecisionRecord].self, filename: "decision-memory-v1.json", fallback: [])
         self.signalReplications = repository.load([NextSignalReplication].self, filename: "signal-replication-v1.json", fallback: [])
+        self.leadLedger = repository.load(NextLeadLedger.self, filename: "lead-ledger-v1.json", fallback: NextLeadLedger())
         self.nasNews = repository.load([String: [NextNewsInput]].self, filename: "nas-news-v1.json", fallback: [:])
         self.dividendEvents = repository.load([String: [NextETFDividendEvent]].self, filename: "dividend-history-v1.json", fallback: [:])
         self.patientLimitPlans = repository.load([NextPatientLimitPlan].self, filename: "patient-limit-plans-v1.json", fallback: [])
@@ -1254,7 +1289,11 @@ struct LocalPreferences: Codable {
             volumeRecovered: Self.volumeRecovered(minutes: minutes),
             studies: crossMarketStudies[code] ?? [],
             rollings: ledLagRollings[code] ?? [],
-            pulse: crossMarketPulse)
+            pulse: crossMarketPulse,
+            longTermValidatedLeads: longTermCandidateLeads,
+            longTermEntry: leadLedger.entries
+                .filter { $0.code == code }
+                .max { $0.sessions < $1.sessions })
     }
 
     /// 当日成交量加权均价。没有量数据时退回算术均价，并在调用处按「仅供参照」对待。
@@ -1314,6 +1353,7 @@ struct LocalPreferences: Codable {
         // 148：登记先在本地副本上累加，最后一次性写回。
         // 每登记一条就赋值一次 @Published 会在几十次循环里反复落盘，没必要。
         var replications = signalReplications
+        var ledger = leadLedger
         let now = Date()
         for code in targets {
             guard let local = try? await NextNASService.readMinuteSeries(baseURL: base, code: code, days: 120),
@@ -1344,6 +1384,13 @@ struct LocalPreferences: Codable {
                         study = raw.with(replication: record)
                     }
                 }
+                // 逐 ETF 长期验证：只对通过统计门槛的关系做，避免对噪声做长期推断。
+                // cutoff 取本机分时最后一根：验证只用这个时刻之前的数据，杜绝未来数据。
+                let validation = NextLeadValidationEngine.validate(
+                    code: code, lead: market, leadSeries: overseas, followSeries: local,
+                    windowMinutes: raw.best?.minutes ?? 15,
+                    cutoff: local.last?.timestamp ?? now)
+                ledger.record(validation, at: now)
                 perMarket.append(study)
                 let windows = NextRollingValidityEngine.studies(
                     lead: market, leadSeries: overseas, followCode: code,
@@ -1377,6 +1424,7 @@ struct LocalPreferences: Codable {
         conditionalLeads = conditional
         sessionProfiles = sessionImages
         if replications != signalReplications { signalReplications = replications }
+        if ledger != leadLedger { leadLedger = ledger }
         studiesFetchedAt = Date()
     }
 

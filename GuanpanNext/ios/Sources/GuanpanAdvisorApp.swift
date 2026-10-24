@@ -730,6 +730,13 @@ private struct InstrumentDetailScreen: View {
                             lines: profiles.map(\.summary),
                             identifier: "crossmarket.session")
                     }
+                    // 逐 ETF 长期验证：这条关系到底验证过没有，还是只是这一个月的巧合。
+                    // 没有记录时这张卡照常显示，直接写「还没有记录」，不显示伪造的通过状态。
+                    GPResearchCard(
+                        title: "逐 ETF 长期验证",
+                        subtitle: model.longTermValidations(for: code).isEmpty ? "尚无记录（只做网格，不做方向性做T）" : "留出段对比对照组 + 抗单日极值",
+                        lines: model.longTermValidationLines(for: code),
+                        identifier: "crossmarket.longterm")
                     // 125 汇率上下文：跨境 ETF 的涨跌里有一层汇率，拆开才看得清。
                     // 汇率没接入时这张卡照常显示，写的是「未接入」，而不是假装汇率没变。
                     if let top = model.leadSourceRanking(for: code).top,
