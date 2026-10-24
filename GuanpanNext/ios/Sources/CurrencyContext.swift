@@ -171,16 +171,20 @@ struct NextFXContext: Equatable {
     let market: NextCrossMarket
     let pair: NextFXPair?
     let state: State
-    /// 最新一条的来源（可追溯）。默认 unknown：不填来源就是不来源。
-    let source: NextFXSource = .unknown
+    // 下面五个来源/时间字段**刻意不设默认值**：Swift 会把「带默认值的 let」排除在
+    // 成员逐一构造器之外，而汇率上下文恰恰不允许省略来源——不写就没有。
+    // 任何构造处都必须显式交代来源、时间戳与新鲜度，漏一项就编译不过，
+    // 这正是「来源缺失不得伪装成有效汇率」在类型层面的保证。
+    /// 最新一条的来源（可追溯）。
+    let source: NextFXSource
     /// 源/交易所时间戳：新鲜度只认它；nil 表示源没给时间，不能谈新旧。
-    let exchangeAt: Date? = nil
+    let exchangeAt: Date?
     /// 本机/NAS 收到的时刻：只用于说明「缓存里存了多久」，绝不用于判新旧。
-    let receivedAt: Date? = nil
-    /// 新鲜度（按 exchangeAt 算）。默认 unknown：没有时间戳就没有新鲜度。
-    let freshness: NextFXFreshness = .unknown
-    /// 来源名称（如 "Sina fx"）。默认空串 = 未验证。
-    let sourceName: String = ""
+    let receivedAt: Date?
+    /// 新鲜度（按 exchangeAt 算）。
+    let freshness: NextFXFreshness
+    /// 来源名称（如 "Sina fx"）。空串 = 未验证。
+    let sourceName: String
 
     /// 能不能当作实时值：既要看新鲜度（源时间戳够新），也要看来源可追溯。
     /// 过期或来源不明 → false，绝不许把旧值说成实时。
@@ -337,18 +341,23 @@ enum NextFXContextEngine {
     static func context(market: NextCrossMarket, series: [NextFXPoint],
                         now: Date) -> NextFXContext {
         guard let pair = NextFXPair.pair(for: market) else {
-            return NextFXContext(market: market, pair: nil, state: .notApplicable)
+            return NextFXContext(market: market, pair: nil, state: .notApplicable,
+                                 source: .unknown, exchangeAt: nil, receivedAt: nil,
+                                 freshness: .unknown, sourceName: "")
         }
         let sorted = series.filter { $0.rate > 0 }.sorted { $0.orderingTime < $1.orderingTime }
         guard let last = sorted.last else {
-            return NextFXContext(market: market, pair: pair, state: .missing("没有汇率序列"))
+            return NextFXContext(market: market, pair: pair, state: .missing("没有汇率序列"),
+                                 source: .unknown, exchangeAt: nil, receivedAt: nil,
+                                 freshness: .unknown, sourceName: "")
         }
         // ① 来源必须明确：来源不明的汇率一律不当事实，更不当实时值。
         guard last.source.isTraceable else {
             return NextFXContext(market: market, pair: pair,
                                  state: .suspicious("来源不明，无法当作实时汇率"),
                                  source: last.source, exchangeAt: last.exchangeAt,
-                                 receivedAt: last.receivedAt, freshness: .unknown)
+                                 receivedAt: last.receivedAt, freshness: .unknown,
+                                 sourceName: last.sourceName)
         }
         // ①′ **来源名称必须先验证**：即使有汇率数字，
         //    名字不在登记名单里就一律判可疑——有数字但没有身份证明，等于没有。
