@@ -267,10 +267,13 @@ enum NextReasoningChainBuilder {
         if let hypothesis {
             let detail = "假设「\(hypothesis.statement)」\(hypothesis.state.label)"
                 + (hypothesis.resolution.map { " · \($0)" } ?? "")
+            let gate: NextReasoningStep.Gate = hypothesis.state.allowsPlan
+                ? .pass
+                : .blocked(hypothesis.state.label)
             steps.append(NextReasoningStep(
                 stage: "⑤ 本地确认",
                 detail: detail,
-                gate: hypothesis.state.allowsPlan ? .pass : .blocked(hypothesis.state.label)))
+                gate: gate))
         } else {
             steps.append(NextReasoningStep(
                 stage: "⑤ 本地确认",
@@ -280,10 +283,13 @@ enum NextReasoningChainBuilder {
 
         // ⑥ 执行层：方向对不代表这个价格能买。
         if let execution {
+            let gate: NextReasoningStep.Gate = execution.allowsChasing
+                ? .pass
+                : .blocked("当前价格不适合追")
             steps.append(NextReasoningStep(
                 stage: "⑥ 执行层",
                 detail: execution.verdict,
-                gate: execution.allowsChasing ? .pass : .blocked("当前价格不适合追"))
+                gate: gate))
         } else {
             steps.append(NextReasoningStep(
                 stage: "⑥ 执行层",
