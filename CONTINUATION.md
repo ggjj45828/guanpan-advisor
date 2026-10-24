@@ -1,8 +1,8 @@
 # CONTINUATION.md — 观盘 AI 私人投资顾问（双端：iOS + NAS）
 
 > 本文件依《完整开发、重构、测试与验收总要求》#114/#115 写入：若执行轮次必须结束，把完整状态写于此，下一轮从此续做。
-> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：NAS 取消后台研究）
-> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（80✅/0🟡/2🟠/0❌）。
+> 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：主链拦截器重构 + 125 汇率数据链 + 防伪相关口径收紧）
+> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（主表 80✅/0🟡/2🟠/0❌；116–146 段 13✅/16🟡/2🟠，合计 113 行：93✅/16🟡/4🟠/0❌）。
 
 ---
 
@@ -250,3 +250,54 @@ CI 结果出来后，**先看这三个文件的失败项**，它们全是纯函�
 1. 确认 `b3df7b1` 的 CI：`ci-logs-build` 分支 `ci-logs/<run_id>/build-core-tests.log`。
 2. 126 开盘信息消化 9:30–10:00 仍是 🟠（本轮被打断，尚无线索代码）。
 3. 142 打扰门槛仍是 🟠：依赖 131 的排名，现在可以把「长期验证不过的关系不许打扰」接进去。
+
+## 10. r35 本轮记录：研究不能指挥交易 + 汇率数据链 + 「分钟数据很多 ≠ 独立证据很多」（2026-10-24 深夜）
+
+本段覆盖 HEAD `8221df6` 之后的全部提交（`f55d030`、`2dff65c` 为最后两个）。三件事，每条都对应一条用户裁定，且都落在「宁可漏掉可能有效的关系，也不把伪相关提升为稳定关系」这条红线上。
+
+### 10.1 主链重构：跨市场信号从「计划授权方」改为「风险拦截器」（8ab28ec → 6db1f35）
+
+- `NextCrossGate` 只剩两态：`.clear(reason:)`（不参与）与 `.intercept(reason:)`（暂停 + 要求重算）。删掉 `allowsDirectional`/`allowsAnyPlan`——跨市场信号**永远不自行创建价格、份额或交易方向**。
+- 拦截成立条件：当前有信号 **且** 其领先市场在 `longTermValidatedLeads`（逐 ETF 长期验证 + 预注册前瞻复现）里。未验证的海外波动连拦截的资格都没有。
+- `NextAppModel.applyCrossMarketIntercepts(now:)`：拦截 → 开放计划置 `.paused` + `recomputeRequired`；解除 → 恢复 `.active`。`buildGuidance` 末尾调用，`saveCandidatePlan` 在拦截时以「已暂停 + 需重算」落地。
+- 复盘语义跟着改：intercept 时跌了算 `avoidedLoss`、涨了算 `missedGain`——取消不等于失败，但也不等于成功。
+- 矩阵 128 翻 🟡（Remaining 收敛为「落盘进决策记忆归 143」）；129 的 `scan()` 抑制分支已删除，131 的 Remaining 同步改为「只拦截不注入」。
+
+### 10.2 125 汇率上下文数据链全通（8dbbacc → b5c334d → 097883b → f55d030）
+
+| 层 | 落地 |
+|---|---|
+| NAS 采集 | `server/fx.py`：本机直连采 USD/CNY 买卖价中点，30 分钟一轮；`MAX_AGE_SECONDS=26×3600`、点差 >2% 拒收；**失败只降级，绝不写兜底值** |
+| 时效校验 | 只认源时间戳 `stamp`；过期（`staleSource`）/未来（`sourceInFuture`）/无效价格/`midOutOfRange`（bid ≤ mid ≤ ask）/点差过宽/来源未验证——六类拒收枚举，坏行只丢自己 |
+| 存储 | `domain.py` `fx_samples` 表：pair/stamp/bid/ask/mid/observed_at/source_name + **raw_fields / field_mapping_verified / parser_version**；老库缺列即 DROP 重建 |
+| 出数 | `/v1/fx/series` 回 `rows/counts` + `riskContextOnly: True` + `notTradingSignal: True`，note 写明「不生成价格、份额或交易方向」 |
+| 手机接入 | `NextFXFeed.parse`：`stamp→exchangeAt`、`observedAt→receivedAt`；**来源名称未验证的行直接丢弃**（有数字也不进手机） |
+| 决策上下文 | `NextDecisionContext.fxLines` + 提示词硬约束第 9 条；`entersDecisionContext` = 来源名称已验证 ∧ 可用 ∧ 实时（新鲜度只按 `exchangeAt` 算，**绝不认 `receivedAt`**） |
+
+**来源名称硬边界**：`NextFXSourceName.verified = ["Sina fx"]`，两边（NAS `fx.VERIFIED_SOURCE_NAMES` 与 iOS）一一对应；名字没登记 → 有数字也判可疑、挡在决策上下文外，`decisionContextGateNote` 写明原因。
+
+**新浪字段映射标 provisional**（用户裁定第八点，`f55d030`）：`FIELD_MAPPING_VERIFIED=False` + `PARSER_VERSION=1`；字段顺序是从观测反推的（依据「买价 < 卖价」），未经官方字段定义核实——点差守卫只证明「看起来合理」，不证明字段语义正确。因此：①`rawFields` 整条留档，事后能拿原样核对；②中点只作**低置信度风险上下文**（`isLowConfidence`），未核实前不得成为高置信度交易依据；③`midOutOfRange` 拒收且**绝不做字段交换来「修好」**——认错就拒收，交换会把错误永久固化。
+
+验证：NAS 全套件 **157 项**本机全绿（含 `test_fx.py` 35 项、`test_preregister.py` 16 项）；iOS 侧 `NextFXContextTests` 20+ 项（新增字段映射未核实 → 低置信度、仍 `planEligibility == .never`、feed 透传映射状态与解析器版本等 5 项）。
+
+### 10.3 「分钟数据很多 ≠ 独立证据很多」：防伪相关四口径（4d9c67c → 2dff65c）
+
+CI 曾抓出 4 项 `NextLeadValidationTests` 失败。**根因不是夹具写错，是引擎口径漏了**：夹具每天把价格重置为 100，日界制造 −48.7% 假跳空，隔夜跳空本身满足方向阈值，10 个极端日被虚增成 20 个方向性交易日。按裁定修引擎、不改夹具：
+
+1. **跨日窗口不算当天证据**：`sessionPairs` 要求领先窗口两端同日；隔夜跳空是最典型的假证据。
+2. **directionalDays 按独立交易日去重**：`Set(directional.map(\.day)).count`，同一天多少窗口/观测最多贡献 1 天。
+3. **集中度取双口径更保守项**：`concentrationShare = max(observationShare, effectShare)`；>0.50 判 rejected，恰好 0.50 只停 provisional——不否定、也绝不晋升。
+4. **holdout minimumSessions 是硬门槛**：样本不足时 `short` 先算，**连验证性置信区间都不给**（`NextRateInterval?` 为 nil），状态与区间不再自相矛盾。
+
+`2dff65c` 补了 7 项边界用例把口径钉死（夹具口径先用 Python 干跑逐项核对，并确认 3 项既有用例结论不变）：单日 59 窗口只算 1 session；590 条记录只算 10 个独立交易日；集中度恰好 50%（59/118）→ provisional 踩线；49.6% 但只有 61 天 → 仍不得 candidate；holdout 200/199 行边界（差一天不给区间）；去掉 3 个极端日关系消失 → rejected；cutoff 后的日子一天不算。
+
+### 10.4 测试数据补齐（3c715b3）与 paused UI（8221df6）
+
+- 画像对比两组输入共用同一份 `sharedResearch` 且都 `nasOnline: true`（以前两组各取各的，「对比」变成两个不同前提的比较）；重大新闻样例补 `publishedAt` 与 url；做 T 夹具时间戳改为截至当前时点（不再写到未来）。
+- `NextPlanState.paused` 补界面配色（`AIGuidanceViews.stateTone` → 警示色），与被拦截暂停的计划区分于作废/可执行。
+
+### 10.5 构建状态与接手第一件事
+
+- 本机 Windows 无 Swift 工具链：**iOS 编译与测试只能靠 CI**。最后两个提交 `f55d030`（FX 字段映射）与 `2dff65c`（边界用例）的 run 分别是 `40112444461`（被新 push 按并发规则取消）与 `40113385826`（在跑）。
+- **接手第一件事**：确认 run `40113385826`（sha `2dff65c`）四步全 success——`Core logic tests` / `Build unsigned device app` / `UI navigation and gesture tests` / `Theme screenshots`。若 FX 相关用例失败，先看 `NextFXContextTests` 的 provenanceNote 断言与 `NextFXFeed.parse` 透传。
+- 全绿后：①跑 NAS 157 项本机复现（无需 CI）；②按矩阵 Remaining 推进下一批 Partial（126 开盘信息消化仍是 🟠、142 打扰门槛依赖 131）；③数据侧等 NAS 攒够 30 个交易日后再谈「稳定领先关系」——现在显示「暂无」是正确结果。
