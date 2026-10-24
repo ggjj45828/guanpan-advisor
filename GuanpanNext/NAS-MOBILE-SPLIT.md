@@ -29,7 +29,7 @@
 3. **`server/market.py`**：日 K 拉取上限 640 → 1000（腾讯 param / 东财 lmt）；配合 `domain.put_daily` 的“按日期合并、从不裁剪”，NAS 可累积保存 1000+ 天日 K。
 4. **`ios/Sources/NextAppModel.swift` · `refreshQuotes`**：改为**手机直连优先**（腾讯首源自带 IOPV），NAS 仅在直连全失败时兜底。实时行情不再经 NAS 隧道。
 5. **`ios/Sources/NextAppModel.swift` · `refreshDaily`**：改为**直连优先**，NAS 仅兜底/补超长历史。
-6. **`server/workers.py`**：**删除 `research_loop` 与 `research_factors`**，`start_workers` 线程只剩 `daily-archive` / `minute-archive` / `dividend-research` 三个采集线程。NAS 不再产出因子与 AI 结论。
+6. **`server/workers.py`**：**删除 `research_loop` 与 `research_factors`**，`start_workers` 线程只剩 `daily-archive` / `minute-archive` / `dividend-archive` 三个采集线程。NAS 不再产出因子与 AI 结论。
 7. **`server/app.py` · `/v1/research/{code}`**：`factors` / `ai` 恒返回 `null`（键保留以兼容旧客户端解码），并新增 `researchOwner: "mobile"`。历史上写入的 `factors-*` / `deepseek-*` 残留记录**不再回传**，避免手机读到与本机规则不一致的过期结论。接口本身保留，作为“手机来问才现算归档统计”的被动通道。
 8. **`server/research.py`**：模块头注明定位＝**被动按需计算**（把分时归档换成窗口统计），不是后台研究员。
 

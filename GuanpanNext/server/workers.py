@@ -133,7 +133,7 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
             time.sleep(60)
 
     def dividend_loop():
-        update("dividend-research", "starting", "dividend collector starting")
+        update("dividend-archive", "starting", "dividend collector starting")
         while True:
             codes = tracked(); failures = []; collected = 0
             for code in codes:
@@ -142,9 +142,9 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                     database.put_dividend_events(code, events, datetime.now(timezone.utc).isoformat())
                     collected += 1
                 except Exception as error: failures.append(f"{code}:{type(error).__name__}")
-            update("dividend-research", "ok" if not failures else "degraded",
+            update("dividend-archive", "ok" if not failures else "degraded",
                    f"{collected}/{len(codes)} codes checked; ETF F10 events separated from qfq/raw estimates; history retained{missing_note(failures)}")
             time.sleep(86400)
 
-    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-research", dividend_loop)):
+    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-archive", dividend_loop)):
         threading.Thread(target=target, name=name, daemon=True).start()

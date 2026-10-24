@@ -27,7 +27,7 @@
 4. **矩阵回写三提交**：a3f22cc（端口 8789→8786 全树）、eef86d7（CI 第 5 处编译错 scan() 实参顺序）、af56b7c（退役旧 30001 服务）。
 5. **NAS↔手机 穿透流量平衡（详见 `GuanpanNext/NAS-MOBILE-SPLIT.md`）**：实时归手机直连（零隧道）、NAS 只归档、不推实时给手机。代码：①`worker.minute_loop` 去实时报价拉取（分时归档保留）；②日 K 上限 640→1000 + `put_daily` 合并不裁剪（累积 1000+ 天）；③`refreshQuotes` 直连优先（腾讯首源含 IOPV），NAS 仅兜底；④`refreshDaily` 亦直连优先、NAS 仅兜底/补超长历史。<br>**待 Mac/真机验证**：IOPV 不丢（`NextCore.swift:301`）、直连优先无编译错、穿透流量下降。
 6. **NAS 取消后台研究（回应「研究就交给手机」）**：
-   - `server/workers.py`：删除 `research_loop` + `research_factors`，`start_workers` 线程仅剩 `daily-archive` / `minute-archive` / `dividend-research`（全部是**采集**，不是研究）。
+   - `server/workers.py`：删除 `research_loop` + `research_factors`，`start_workers` 线程仅剩 `daily-archive` / `minute-archive` / `dividend-archive`（全部是**采集**，不是研究）。
    - `server/app.py` · `/v1/research/{code}`：`factors`/`ai` 恒 `null`（键保留以兼容旧客户端解码）、新增 `researchOwner: "mobile"`；历史 `factors-*`/`deepseek-*` 残留**不再回传**（否则手机读到与本机规则不一致的过期结论）。接口本身保留＝「手机来问才现算归档统计」的被动通道。
    - `server/research.py`：头注明「被动按需计算，不是后台研究员」；`put_research`/`get_research`/`get_research_stats` 保留（测试与按需缓存）。
    - 文案统一为「NAS 长期归档 / 数据归档」：`ThemeHome.swift` 两处、`GuanpanAdvisorApp.swift`（统一 AI 说明）、`DeepSeekMobile.swift`（系统提示）、`NextCandidatePlans.swift`（dataState + 上下文标签）、`NASService.swift`/`NextAppModel.swift`/`NextCore.swift` 错误与状态文案、`server/web/index.html`、`server/news.py`、`server/app.py` 注释。
