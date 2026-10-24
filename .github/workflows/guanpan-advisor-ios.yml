@@ -13,7 +13,7 @@ on:
       - '.github/workflows/guanpan-advisor-ios.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -44,6 +44,23 @@ jobs:
         run: |
           set -o pipefail
           swift test --parallel 2>&1 | tee build-core-tests.log
+
+      # 失败时把完整构建/测试日志推回 ci-logs 分支：artifact 下载需要认证，
+      # 而分支内容可以免认证拉取，失败定位不必等人工给 token。
+      - name: Publish failure logs to ci-logs branch
+        if: failure()
+        run: |
+          git config user.name "ci-log"
+          git config user.email "ci-log@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B ci-logs origin/main
+          mkdir -p "ci-logs/$GITHUB_RUN_ID"
+          cp GuanpanNext/ios/build-core-tests.log "ci-logs/$GITHUB_RUN_ID/" 2>/dev/null || true
+          cp GuanpanNext/ios/build-device.log "ci-logs/$GITHUB_RUN_ID/" 2>/dev/null || true
+          cp GuanpanNext/ios/build-ui-tests.log "ci-logs/$GITHUB_RUN_ID/" 2>/dev/null || true
+          git add -f ci-logs/
+          git commit -m "ci logs run $GITHUB_RUN_ID" || echo "nothing to commit"
+          git push origin HEAD:refs/heads/ci-logs --force
 
       - name: Build unsigned device app
         working-directory: GuanpanNext/ios
@@ -155,7 +172,22 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/Sim \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tail -40
+            2>&1 | tee build-sim.log | tail -40
+
+      # 失败日志同 build job 推回 ci-logs 分支：screenshots job 同样在 Build for
+      # simulator 步失败，artifact 需认证，分支内容可免认证拉取。
+      - name: Publish failure logs to ci-logs branch
+        if: failure()
+        run: |
+          git config user.name "ci-log"
+          git config user.email "ci-log@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B ci-logs origin/main
+          mkdir -p "ci-logs/$GITHUB_RUN_ID"
+          cp GuanpanNext/ios/build-sim.log "ci-logs/$GITHUB_RUN_ID/" 2>/dev/null || true
+          git add -f ci-logs/
+          git commit -m "ci logs run $GITHUB_RUN_ID" || echo "nothing to commit"
+          git push origin HEAD:refs/heads/ci-logs --force
 
       - name: Capture theme screenshots
         working-directory: GuanpanNext/ios
