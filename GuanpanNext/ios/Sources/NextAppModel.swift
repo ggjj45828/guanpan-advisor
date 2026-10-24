@@ -188,6 +188,10 @@ struct LocalPreferences: Codable {
     /// 上游完全可能返回「接收时间很新、样本却是昨天」的分时。
     /// 这个值供界面与下游分析读取，不落盘：每次刷新重算即可。
     @Published private(set) var intradayFreshness: [String: NextSampleFreshness] = [:]
+    /// 121 条件化领先：按领先市场当天的状态分组，看关系在哪种状态下才算数。
+    @Published private(set) var conditionalLeads: [String: [NextConditionalLead]] = [:]
+    /// 132 分时段画像：开盘/上午/午后/尾盘各自的关系表现。
+    @Published private(set) var sessionProfiles: [String: [NextSessionProfile]] = [:]
     /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
     @Published var nasNews: [String: [NextNewsInput]] { didSet { reportSave(repository.save(nasNews, filename: "nas-news-v1.json")) } }
     @Published var newsStatus: [String: String] = [:]
@@ -1302,6 +1306,8 @@ struct LocalPreferences: Codable {
         }
         var studies: [String: [NextLeadLagStudy]] = [:]
         var rollings: [String: [NextRollingValidity]] = [:]
+        var conditional: [String: [NextConditionalLead]] = [:]
+        var sessionImages: [String: [NextSessionProfile]] = [:]
         // 148：登记先在本地副本上累加，最后一次性写回。
         // 每登记一条就赋值一次 @Published 会在几十次循环里反复落盘，没必要。
         var replications = signalReplications
@@ -1345,10 +1351,28 @@ struct LocalPreferences: Codable {
             guard !perMarket.isEmpty else { continue }
             studies[code] = perMarket
             rollings[code] = perRolling
+            // 121/132：只对**最强**的那个领先市场做分组画像。
+            // 对每个市场都做会让维度爆炸（4 状态 × 4 时段 × 8 窗口），
+            // 而且弱关系的分组结论本来就没有意义。
+            if let strongest = perMarket.filter({ $0.best != nil }).max(by: {
+                abs($0.best?.correlation ?? 0) < abs($1.best?.correlation ?? 0)
+            }) {
+                let overseas = archive.points(strongest.lead)
+                if overseas.count > 1 {
+                    conditional[code] = NextConditionalLeadEngine.studies(
+                        lead: strongest.lead, leadSeries: overseas, followCode: code,
+                        followSeries: local, lastValidated: now)
+                    sessionImages[code] = NextSessionProfileEngine.studies(
+                        lead: strongest.lead, leadSeries: overseas, followCode: code,
+                        followSeries: local, lastValidated: now)
+                }
+            }
         }
         guard preferences.nasBaseURL == base else { return }
         ledLagStudies = studies
         ledLagRollings = rollings
+        conditionalLeads = conditional
+        sessionProfiles = sessionImages
         if replications != signalReplications { signalReplications = replications }
         studiesFetchedAt = Date()
     }

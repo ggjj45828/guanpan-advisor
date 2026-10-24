@@ -320,7 +320,8 @@ enum NextLeadLagEngine {
                       windowsMinutes: [Int] = [0, 5, 10, 15, 30, 45, 60, 90],
                       observedFrom: Date? = nil,
                       lastValidated: Date,
-                      replication: NextSignalReplication = .none) -> NextLeadLagStudy {
+                      replication: NextSignalReplication = .none,
+                      includePair: ((Date) -> Bool)? = nil) -> NextLeadLagStudy {
         let leadSorted = leadSeries.sorted { $0.timestamp < $1.timestamp }
         let followSorted = followSeries.sorted { $0.timestamp < $1.timestamp }
         guard leadSorted.count >= 2, followSorted.count >= 2 else {
@@ -332,7 +333,8 @@ enum NextLeadLagEngine {
         for minutes in windowsMinutes.sorted() {
             guard let window = window(lead: leadSorted, follow: followSorted, minutes: minutes,
                                       observedFrom: observedFrom,
-                                      comparisonCount: comparisonCount) else { continue }
+                                      comparisonCount: comparisonCount,
+                                      includePair: includePair) else { continue }
             results.append(window)
         }
         // 先按全部统计门槛筛。挑不出任何一条时，把「最接近及格」的那条的短板说出来，
@@ -409,9 +411,13 @@ enum NextLeadLagEngine {
     }
 
     /// 单窗口统计。返回 nil 表示这个窗口一个有效配对都没有。
+    /// - Parameter includePair: 只统计时间戳满足条件的配对点（条件化领先 121 与时间段画像 132 用）。
+    ///   刻意放在「配对生成」这一层过滤，而不是先切片序列：
+    ///   序列切片会破坏 t → t+窗口 的配对关系，得到的相关系数没有意义。
     static func window(lead: [NextMarketPoint], follow: [NextMarketPoint],
                        minutes: Int, observedFrom: Date?,
-                       comparisonCount: Int = NextLeadLagEngine.defaultWindowCount) -> NextLeadLagWindow? {
+                       comparisonCount: Int = NextLeadLagEngine.defaultWindowCount,
+                       includePair: ((Date) -> Bool)? = nil) -> NextLeadLagWindow? {
         let windowSeconds = Double(minutes) * 60
         let tolerance = max(windowSeconds, 60) + 60
         var leadChanges: [Double] = []
@@ -419,6 +425,7 @@ enum NextLeadLagEngine {
         var pairs: [(leadTime: Date, leadChange: Double, followChange: Double)] = []
         for point in lead {
             if let floor = observedFrom, point.timestamp < floor { continue }
+            if let includePair, !includePair(point.timestamp) { continue }
             guard let previous = NextCrossMarketAlignment.lastPoint(atOrBefore: point.timestamp.addingTimeInterval(-windowSeconds),
                                                                    in: lead) else { continue }
             guard let leadChange = NextCrossMarketAlignment.changePercent(from: previous.value, to: point.value) else { continue }
