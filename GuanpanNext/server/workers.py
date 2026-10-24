@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
 import calendar_cn
 from crossmarket import fetch_snapshots, archive_rows, should_sample
+import fx
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 # 演示标的**默认不再常驻采集**。以前这四个代码被无条件并进采集集合，
@@ -79,7 +80,8 @@ def attach_quote_iopv(rows, quote):
     return rows
 
 
-def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute, cross_fetcher=fetch_snapshots):
+def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute, cross_fetcher=fetch_snapshots,
+                  fx_fetcher=fx.fetch_snapshots, fx_archive=fx.archive_rows):
     """Each loop owns its own timer and failure handling; sync APIs never stop them."""
     def tracked():
         with database.connect() as connection:
@@ -217,6 +219,35 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                    f"{collected}/{len(codes)} codes checked; ETF F10 events separated from qfq/raw estimates; history retained{missing_note(failures)}")
             time.sleep(86400)
 
+    def fx_loop():
+        """125 汇率采集：USD/CNY 买卖价中点，带时间戳，**过期即拒收**。
+
+        三条克制（与 cross_loop 一致，都是为了防止把旧值当新值）：
+        1. 只采登记的 USD/CNY 一个交易对，且只取买卖价中点；
+        2. 源时间戳缺失/过期/在未来/来源名称未验证 → `fx.archive_rows` 直接丢掉，不落库；
+        3. 采集失败只降级记录，不写任何兜底值——没有就是没有。
+        """
+        update("fx-archive", "starting", "fx collector starting")
+        while True:
+            try:
+                samples = fx_fetcher()
+                rows, dropped = fx_archive(samples, now=datetime.now(timezone.utc))
+                if rows:
+                    result = database.put_fx_samples(rows, datetime.now(timezone.utc).isoformat())
+                    detail = f"{result['accepted']} USD/CNY mid sample(s) archived; next attempt in 30m"
+                    if dropped:
+                        detail += "; rejected " + ", ".join(
+                            sorted({f"{d['pair']}:{d['reason']}" for d in dropped}))[:200]
+                    update("fx-archive", "ok", detail)
+                else:
+                    reasons = ", ".join(sorted({f"{d['pair']}:{d['reason']}" for d in dropped})) or "no samples parsed"
+                    update("fx-archive", "degraded", f"no fresh sample: {reasons}"[:500])
+            except Exception as error:  # noqa: BLE001 - 采集失败不能影响其它线程
+                # 采集失败降级：只记失败，不写任何兜底值。
+                update("fx-archive", "degraded", f"fetch failed: {type(error).__name__}: {error}"[:500])
+            time.sleep(1800)
+
     for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop),
-                         ("cross-market", cross_loop), ("dividend-archive", dividend_loop)):
+                         ("cross-market", cross_loop), ("dividend-archive", dividend_loop),
+                         ("fx-archive", fx_loop)):
         threading.Thread(target=target, name=name, daemon=True).start()

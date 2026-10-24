@@ -20,6 +20,13 @@ class Conflict(Exception):
 # 这里不 import crossmarket，避免「数据层依赖采集层」——采集层依赖数据层才对。
 CROSS_MARKETS = ("japan", "korea", "hongKong", "unitedStates")
 
+# 125 汇率上下文允许的交易对。刻意只登记 USD/CNY 一个：
+# 采不到的货币对宁可让手机端显示「未接入」，也不拿没验证过的源凑数。
+FX_PAIRS = ("USDCNY",)
+# 被承认的**来源名称**。来源名称未验证的汇率一律不许落库、也不许进入手机决策上下文。
+# 与 fx.VERIFIED_SOURCE_NAMES 保持一致；这里不 import fx，避免数据层依赖采集层。
+FX_VERIFIED_SOURCE_NAMES = ("Sina fx",)
+
 
 def strict_iso_date(value):
     """Accept only canonical Gregorian YYYY-MM-DD dates used by the iOS wire models."""
@@ -409,6 +416,17 @@ class NextDatabase:
                     settled_at TEXT,
                     outcome_fingerprint TEXT);
                 CREATE INDEX IF NOT EXISTS idx_preregister_code ON preregistered_studies(follow_code);
+                -- 125 汇率上下文：USD/CNY 买卖价中点。存的是「源几点几分报的价」，
+                -- 以及「我们几点几分收到的」——两个都存，新鲜度只认前者。
+                -- 主键用 (pair, stamp)：同一时刻重复采到不会写两行。
+                -- 它只进入风险上下文，本表不派生任何价格/份额/方向。
+                CREATE TABLE IF NOT EXISTS fx_samples (
+                    pair TEXT NOT NULL, stamp TEXT NOT NULL,
+                    bid TEXT NOT NULL, ask TEXT NOT NULL, mid TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    PRIMARY KEY(pair, stamp));
+                CREATE INDEX IF NOT EXISTS idx_fx_stamp ON fx_samples(stamp);
             """)
             # 老库升级：`dividend_archive` 早期没有 rules_version 列。
             # 加不上（列已存在）就忽略 —— SQLite 没有 ADD COLUMN IF NOT EXISTS。
@@ -416,6 +434,18 @@ class NextDatabase:
                 db.execute("ALTER TABLE dividend_archive ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
+            # 老库升级：`fx_samples` 早期版本没有 source_name 列。
+            # 这张表没有历史数据可留，缺列就直接重建——保证「来源名称」字段一定有值，
+            # 否则老库里存着没有来源的汇率，等于把未验证的值伪装成有效汇率。
+            fx_columns = {row[1] for row in db.execute("PRAGMA table_info(fx_samples)")}
+            if fx_columns and "source_name" not in fx_columns:
+                db.execute("DROP TABLE fx_samples")
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS fx_samples ("
+                    "pair TEXT NOT NULL, stamp TEXT NOT NULL,"
+                    "bid TEXT NOT NULL, ask TEXT NOT NULL, mid TEXT NOT NULL,"
+                    "observed_at TEXT NOT NULL, source_name TEXT NOT NULL,"
+                    "PRIMARY KEY(pair, stamp))")
             # 已退役/改名的后台任务（2026-10-24）：NAS 改为纯数据仓库，`factor-research`
             # 研究线程已删除；`dividend-research` 已改名为 `dividend-archive`（它只是分红
             # 采集器，不该挂 research 的名字）。旧库里的心跳行若留着，`worker_health()`
@@ -810,6 +840,93 @@ class NextDatabase:
                 "SELECT market, COUNT(*), MIN(stamp), MAX(stamp) FROM cross_market_samples GROUP BY market"
             ).fetchall()
         return {row[0]: {"samples": row[1], "firstAt": row[2], "lastAt": row[3]} for row in rows}
+
+    # MARK: 125 汇率上下文（USD/CNY 买卖价中点）
+
+    def put_fx_samples(self, rows, fetched_at):
+        """写 USD/CNY 中点样本。只做校验与去重，**不派生任何交易结论**。
+
+        校验口径：pair 必须在登记表里，stamp 必须是带时区的 ISO 时间，
+        bid/ask/mid 必须是正的有限数且 bid <= ask。任一不合法整行丢弃。
+        过期样本在进入这里之前就已被 fx.archive_rows 拒收。
+        """
+        if not isinstance(rows, list):
+            raise InvalidData("invalid fx rows")
+        accepted, rejected = 0, 0
+        with self.connect() as db:
+            for row in rows:
+                if not isinstance(row, dict):
+                    rejected += 1
+                    continue
+                pair = row.get("pair")
+                stamp = row.get("stamp")
+                if pair not in FX_PAIRS:
+                    rejected += 1
+                    continue
+                if not isinstance(stamp, str) or "T" not in stamp:
+                    rejected += 1
+                    continue
+                try:
+                    bid = Decimal(str(row.get("bid")))
+                    ask = Decimal(str(row.get("ask")))
+                    mid = Decimal(str(row.get("mid")))
+                except (InvalidOperation, ValueError):
+                    rejected += 1
+                    continue
+                if (not bid.is_finite() or not ask.is_finite() or not mid.is_finite()
+                        or bid <= 0 or ask <= 0 or mid <= 0 or bid > ask):
+                    rejected += 1
+                    continue
+                # 来源名称未验证 → 落库就拒。没有登记过的名字，数字再合理也不算有效汇率。
+                source_name = row.get("sourceName")
+                if source_name not in FX_VERIFIED_SOURCE_NAMES:
+                    rejected += 1
+                    continue
+                db.execute(
+                    "INSERT OR REPLACE INTO fx_samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (pair, stamp, str(bid), str(ask), str(mid),
+                     str(row.get("observedAt") or fetched_at), source_name))
+                accepted += 1
+        return {"accepted": accepted, "rejected": rejected, "fetchedAt": fetched_at}
+
+    def get_fx_samples(self, pair=None, days=None, since=None):
+        """按交易对取中点样本（升序）。days 表示「最近 N 个自然日」。"""
+        if pair is not None and pair not in FX_PAIRS:
+            raise InvalidData("invalid fx pair")
+        clauses, args = [], []
+        if pair:
+            clauses.append("pair=?")
+            args.append(pair)
+        if since:
+            try:
+                date.fromisoformat(since)
+            except (ValueError, TypeError):
+                raise InvalidData("invalid since date")
+            clauses.append("stamp >= ?")
+            args.append(since)
+        elif days:
+            if not isinstance(days, int) or days <= 0 or days > 400:
+                raise InvalidData("invalid fx window")
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+            clauses.append("stamp >= ?")
+            args.append(cutoff)
+        sql = "SELECT pair, stamp, bid, ask, mid, observed_at, source_name FROM fx_samples"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY stamp"
+        with self.connect() as db:
+            rows = db.execute(sql, tuple(args)).fetchall()
+        return [{"pair": row[0], "stamp": row[1], "bid": row[2], "ask": row[3],
+                 "mid": row[4], "observedAt": row[5], "sourceName": row[6]} for row in rows]
+
+    def fx_counts(self):
+        """每个交易对各存了多少行、覆盖到哪天 —— 用于「数据够不够解释涨跌」。"""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT pair, COUNT(*), MIN(stamp), MAX(stamp), MIN(observed_at), MAX(observed_at) "
+                "FROM fx_samples GROUP BY pair").fetchall()
+        return {row[0]: {"samples": row[1], "firstAt": row[2], "lastAt": row[3],
+                         "firstObservedAt": row[4], "lastObservedAt": row[5]} for row in rows}
 
     def get_research(self, run_id):
         self.validate_id(run_id)

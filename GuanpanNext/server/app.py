@@ -22,6 +22,7 @@ from workers import start_workers
 import research
 import diagnose
 import crossmarket
+import fx
 
 WEB_ROOT = Path(__file__).with_name("web")
 
@@ -146,6 +147,34 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                                             "markets": crossmarket.group_series(rows),
                                             "rows": len(rows)})
                 except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
+            if path.startswith("/v1/fx/"):
+                # 125 汇率上下文：只回原始观测（USD/CNY 买卖价中点 + 源时间戳）。
+                # 三条不许越界的规矩在返回体里直接写明：
+                #   ① 它只进入风险上下文，用来解释涨跌；
+                #   ② 不创建价格/份额/交易方向（返回体里根本没有这些字段）；
+                #   ③ 没有源时间戳的样本在采集阶段就已被拒收，这里不会补一条假值。
+                try:
+                    query = parse_qs(parsed.query)
+                    pair = query.get("pair", [None])[0]
+                    days_text = query.get("days", [""])[0]
+                    try:
+                        days = int(days_text) if days_text else None
+                    except (TypeError, ValueError):
+                        raise InvalidData("days 必须是整数")
+                    rows = database.get_fx_samples(pair=pair, days=days)
+                    return self.reply(200, {
+                        "pairs": list(fx.PAIRS.keys()),
+                        "verifiedSourceNames": list(fx.VERIFIED_SOURCE_NAMES),
+                        "rows": rows,
+                        "counts": database.fx_counts(),
+                        "source": "Sina fx (direct fetch by NAS)",
+                        # 明确标注：这是风险上下文，不是交易信号，也没有价格/份额/方向。
+                        "riskContextOnly": True,
+                        "notTradingSignal": True,
+                        "note": ("汇率只作风险上下文：用来把标的涨跌与汇率影响分开；"
+                                 "它不生成价格、份额或交易方向，也不单独触发做T或网格。")})
+                except (InvalidData, ValueError) as error:
+                    return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/research/preregister"):
                 # 预注册未来样本研究（指令七）：只登记未来窗口 + 不可变指纹，
                 # 不建计划、不改账本、不发信号。列表/读取都带 notTradingSignal 标注。
