@@ -1162,7 +1162,15 @@ struct LocalPreferences: Codable {
     func abroadImpact(for code: String) -> NextHoldingAbroadImpact {
         NextHoldingAbroadImpactBuilder.impact(code: code, studies: crossMarketStudies[code] ?? [],
                                               pulse: crossMarketPulse,
-                                              rollings: ledLagRollings[code] ?? [])
+                                              rollings: ledLagRollings[code] ?? [],
+                                              ranking: leadSourceRanking(for: code))
+    }
+
+    /// 131 领先来源排名：同一只标的对多个市场都有统计时，先说「谁最值得看」。
+    func leadSourceRanking(for code: String) -> NextLeadSourceRanking {
+        NextLeadSourceRanker.rank(code: code,
+                                  studies: crossMarketStudies[code] ?? [],
+                                  rollings: ledLagRollings[code] ?? [])
     }
 
     /// 145 完整推理链：把「海外数据 → 归档深度 → 领先关系 → 滚动有效性 → 本地确认 → 执行层」

@@ -211,7 +211,7 @@
 | 128 | 假设→确认→执行 | 🟡 | `NextCrossHypothesis` + `NextHypothesisJudge`：海外证据不能直接转 confirmed，必须 A股站上 VWAP/低点抬高/量能恢复 | 未确认→rejected 且 allowsPlan=false；确认→confirmed | 接实时循环与决策记忆 |
 | 129 | 信号进入做T/网格 | 🟠 | 未接入（计划生成仍走原链路） | — | 在 scan 前注入 crossMarket 结论并影响策略；前置条件 117 还没在真实 30 日数据上出结论 |
 | 130 | 跨市场进入统一 DecisionContext | 🟡 | `NextDecisionContext` 新增 `crossMarketLines` + 提示词新增「【跨市场（日韩/港股/美股）】」段与硬约束第 8 条（无稳定领先关系时禁止据此推荐）；`makeDecisionContext` 从 `refreshCrossMarket()` 的 NAS 归档生成说明行；`NextNASService.readCrossMarketSeries` 走 `/v1/cross/series` | `NextCrossMarketFeedTests`：日韩不足 30 天必须输出「暂无稳定领先关系 + 不得据此产生午后假设」；两端都够 30 天时不再出现该禁止语 | 实时信号对象（`NextCrossHypothesis`/背离/执行过滤）还没进上下文——那属于 128/129 的实时循环 |
-| 131 | 每只 ETF 的领先来源排名 | 🟠 | 未实现 | — | 由 117 的窗口统计聚合排序 |
+| 131 | 每只 ETF 的领先来源排名 | 🟡 | `NextLeadSourceRanker`：综合分 = \|相关系数\| × 同向率 × 133 滚动权重，**不按相关系数单独排序**（相关系数会被趋势段放大）；同一市场只取最好窗口；未做滚动检验时按 0.5 中性权重并在文案里写明。排名第一行接进 141 的「外部市场影响」 | `NextLeadSourceRankingTests` 4 项：无证据→明说暂无来源、相关 0.90 但同向 0.50 必须输给相关 0.60/同向 0.95、已衰减的高相关来源必须被降级（权重 0.35）、别的标的 study 不算数且 limit 生效 | 排名只影响展示顺序，尚未参与 142 的打扰门槛与 129 的策略注入 |
 | 132 | 时间段画像 | 🟠 | 未实现 | — | 按时段切分 117 |
 | 133 | 滚动有效性（20/60/120 日） | 🟡 | `CrossMarketReasoning.swift`：`NextRollingValidityEngine` 同时算三个窗口（`tail` 按天数截尾，不互相借样本），`aggregate` 分三态：都成立给权重 1.0/0.8/0.6；**近 20 日失效而长窗口成立 → 判 `degraded`、权重 0.35、`allowsAction=false`**，长窗口的好看数字不许盖掉短窗口的坏消息 | `NextCrossMarketReasoningTests` 6 项：窗口固定 20/60/120、全不足→权重 0 且明说暂无、全成立→1.0、近 20 日失效→降级且 note 写「近 20 日」、只有短窗口成立→降权但允许、`tail` 切片 21/61/121 点 | 权重目前只进 141 文案与 145 链条，尚未回灌到 129 的做T/网格仓位系数 |
 | 134 | 防伪相关 | 🟡 | 门槛：样本≥30、|相关|≥0.20、稳定度≥0.6、相邻窗口不得孤峰 | 无关序列必须输出「暂无稳定领先关系」 | 多重比较校正可继续加强 |
@@ -220,7 +220,7 @@
 | 137 | 市场日历 | 🟡 | `NextMarketCalendar`：周末/时段/午休/节假日注入点 | 节假日注入后返回 holiday | 节假日表需按交易所公告注入（不内置过期表） |
 | 138 | 数据新鲜度 | 🟡 | `NextCrossMarketFreshness`：来源/时间/年龄/市场状态，过期或休市权重归零 | 45 分钟 → usable=false、weight=0；休市 → 提示 | 接真实数据源时间戳 |
 | 139 | AI 最终表达 | 🟠 | 文案片段已在各结构 note 中 | — | 接入手机 AI 输出层 |
-| 140 | 首页「跨市场脉搏」 | 🟡 | `CrossMarketPulse.swift`（Core）：每市场算开闭状态/最新观测时刻/相对昨日的源涨跌幅/是否可用（休市或 >30 分钟一律 usable=false）；A股午休时附「午休期间日韩·港股各动多少 pp」。`GPCrossMarketPulseCard` 一张卡复用到五套首页（插在 `HomeIndexBoard` 之后，五处同源同文案） | `NextCrossMarketPulseTests` 7 项：无归档不编价、收盘不可用且说「最后 HH:mm」、盘中新鲜可用、过期转 warn、副标题只数够 30 天的市场、午休提示只在午休出现 | 需要真机/截图确认五套主题下的排版与字号（CI 已出截图，待逐张核对） |
+| 140 | 首页「跨市场脉搏」 | 🟡 | `CrossMarketPulse.swift`（Core）：每市场算开闭状态/最新观测时刻/相对昨日的源涨跌幅/是否可用（休市或 >30 分钟一律 usable=false）；A股午休时附「午休期间日韩·港股各动多少 pp」。`GPCrossMarketPulseCard` 一张卡复用到五套首页（插在 `HomeIndexBoard` 之后，五处同源同文案） | `NextCrossMarketPulseTests` 7 项：无归档不编价、收盘不可用且说「最后 HH:mm」、盘中新鲜可用、过期转 warn、副标题只数够 30 天的市场、午休提示只在午休出现 | 五套主题排版已按 CI 截图逐张核对（run 40088834396 工件）：无挤压、无截断；据此把空状态从三行压到两行（小屏少占两行）。有真实数据时的行内布局（价格/涨跌幅/数据年龄三列）仍需等 NAS 攒到数据后再核一次 |
 | 141 | 持仓详情「外部市场影响」 | 🟡 | `GPAbroadImpactSection` 接在标的详情「行情图表」之后：只显示**已验证**的领先关系（来自 117 的 study），没有就写「暂无稳定领先关系」+ 归档天数原因；**已接 133 的滚动结论**——长窗口成立但近 20 日衰减时，额外写一行「已衰减，按暂无处理」并把徽章置为「暂无稳定关系」 | `NextCrossMarketPulseTests` 3 项：无 study 时承认没有关系、有 usable study 时报「领先约 15 分钟」、别的标的的 study 不算数 | 等 117 在真实 30 日数据上产出 study；截图确认排版 |
 | 142 | 与画像结合（打扰门槛） | 🟠 | 未实现 | — | 依赖 131 |
 | 143 | 与决策记忆结合 | 🟠 | 未实现 | — | 记录假设→确认→执行→结果 |

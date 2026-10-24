@@ -300,3 +300,75 @@ enum NextReasoningChainBuilder {
         return NextReasoningChain(code: code, steps: steps)
     }
 }
+
+// MARK: - 131 领先来源排名
+//
+// 一只 ETF 可能同时对日经、对纳指都有统计。问题是「谁更值得看」。
+// 这里不按相关系数单独排序：相关性会被趋势段放大，所以综合分里必须带上
+// 同向率（能不能真的同涨同跌）和 133 的滚动权重（现在还灵不灵）。
+// 没有滚动结论时给 0.5 的中性权重并在文案里写明「未做滚动检验」，不假装满分。
+
+struct NextLeadSourceRanking: Equatable {
+    struct Entry: Equatable {
+        let lead: NextCrossMarket
+        let minutes: Int
+        let correlation: Double
+        let sameDirectionRate: Double
+        let sampleCount: Int
+        /// 133 的权重；没做过滚动检验时是 0.5（中性，不奖不罚）。
+        let rollingWeight: Double
+        let rollingKnown: Bool
+
+        /// 综合分：|相关| × 同向率 × 滚动权重。范围 0…1。
+        var score: Double { abs(correlation) * max(0, min(1, sameDirectionRate)) * rollingWeight }
+    }
+
+    let code: String
+    let entries: [Entry]
+
+    var top: Entry? { entries.first }
+    var hasEvidence: Bool { !entries.isEmpty }
+
+    var summary: String {
+        guard let top else { return "暂无稳定领先来源：没有任何市场通过样本与相关性门槛" }
+        let head = "最值得看的是\(top.lead.displayName)：领先约 \(top.minutes) 分钟 · 同向 \(NextLeadLagStudy.percent(top.sameDirectionRate, digits: 0)) · 综合 \(String(format: "%.2f", top.score))"
+        return top.rollingKnown ? head : head + "（未做滚动检验，权重按中性计）"
+    }
+}
+
+enum NextLeadSourceRanker {
+    /// 同一市场有多个窗口时只取最好的那一个，否则同一来源会重复占位。
+    static func rank(code: String, studies: [NextLeadLagStudy],
+                     rollings: [NextRollingValidity], limit: Int = 4) -> NextLeadSourceRanking {
+        var weights: [NextCrossMarket: NextRollingValidity] = [:]
+        for rolling in rollings where rolling.followCode == code {
+            if let existing = weights[rolling.lead], existing.weight >= rolling.weight { continue }
+            weights[rolling.lead] = rolling
+        }
+        var entries: [Entry] = []
+        for study in studies where study.followCode == code {
+            guard let best = study.best else { continue }
+            let rolling = weights[study.lead]
+            let entry = Entry(
+                lead: study.lead,
+                minutes: best.minutes,
+                correlation: best.correlation,
+                sameDirectionRate: best.sameDirectionRate,
+                sampleCount: best.sampleCount,
+                rollingWeight: rolling?.weight ?? 0.5,
+                rollingKnown: rolling != nil)
+            // 同一来源已经在列表里且分数更高就跳过（study 顺序不保证）。
+            if let index = entries.firstIndex(where: { $0.lead == entry.lead }) {
+                if entries[index].score >= entry.score { continue }
+                entries[index] = entry
+            } else {
+                entries.append(entry)
+            }
+        }
+        entries.sort { lhs, rhs in
+            if lhs.score == rhs.score { return lhs.minutes < rhs.minutes }
+            return lhs.score > rhs.score
+        }
+        return NextLeadSourceRanking(code: code, entries: Array(entries.prefix(max(1, limit))))
+    }
+}

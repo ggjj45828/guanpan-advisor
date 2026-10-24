@@ -203,9 +203,12 @@ enum NextHoldingAbroadImpactBuilder {
     /// 没有就不写——但绝不能因为「长窗口好看」把已经衰减的关系说成有效。
     static func impact(code: String, studies: [NextLeadLagStudy],
                        pulse: NextCrossMarketPulse,
-                       rollings: [NextRollingValidity] = []) -> NextHoldingAbroadImpact {
+                       rollings: [NextRollingValidity] = [],
+                       ranking: NextLeadSourceRanking? = nil) -> NextHoldingAbroadImpact {
         let usable = studies.filter { $0.followCode == code && $0.best != nil }
         var lines: [String] = []
+        // 131 的排名放最前：先说「谁最值得看」，再逐条给证据。
+        if let ranking, ranking.hasEvidence { lines.append(ranking.summary) }
         for study in usable.prefix(2) {
             guard let best = study.best else { continue }
             lines.append("\(study.lead.displayName) 领先约 \(best.minutes) 分钟（样本 \(best.sampleCount)，相关 \(NextLeadLagStudy.percent(best.correlation, digits: 2))）")
