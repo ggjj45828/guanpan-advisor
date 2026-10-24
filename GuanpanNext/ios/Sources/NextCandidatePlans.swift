@@ -200,6 +200,7 @@ enum NextOpportunityScanner {
                      goal: NextGoal, nasAvailable: Bool, profile: NextInvestorProfile? = nil,
                      research: [String: NextNASResearch] = [:],
                      news: [String: [NextNewsInput]] = [:],
+                     crossGates: [String: NextCrossGate] = [:],
                      now: Date) -> NextDailyGuidance {
         let total = book.total(using: quotes)
         var items: [NextGuidanceItem] = []
@@ -239,12 +240,23 @@ enum NextOpportunityScanner {
             var gridPlan: NextGridPlannerResult?
             var riskNotes: [String] = []
             var headline = strategy.kind.rawValue
+            // 129：跨市场闭环的闸门。没有归档时这里没有值，行为与以前完全一致；
+            // 有值且判为「不交易」时，**不生成计划**——不是加一句提示，而是根本不出价。
+            let crossGate = crossGates[position.code]
+            if let crossGate {
+                riskNotes.append("跨市场闭环：\(crossGate.label) · \(crossGate.reason)")
+            }
             // 画像上限与 NAS 长期统计一起进计划：这是硬约束，不是提示。
             let caps = NextPlanCaps.make(profile: profile, nasStats: nasStats, book: book,
                                          code: position.code,
                                          lotSize: rules[position.code]?.lotSize ?? 100, now: now)
 
             switch strategy.kind {
+            case .tTrade where crossGate.map({ !$0.allowsDirectional }) == true:
+                // 跨市场没过（不交易 / 只做网格）：做T计划直接不生成，headline 写清原因。
+                headline = "不交易 · 跨市场未通过"
+            case .grid where crossGate.map({ !$0.allowsAnyPlan }) == true:
+                headline = "不交易 · 跨市场未通过"
             case .tTrade:
                 var result = NextTradeTPlanner.plan(kind: .reverse, book: book, quote: quote, daily: bars,
                                                     intraday: minutes, rules: rules[position.code],

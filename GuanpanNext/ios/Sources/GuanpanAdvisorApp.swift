@@ -708,6 +708,10 @@ private struct InstrumentDetailScreen: View {
                 // 放在行情图表之后，是因为它是解释「为什么会这样」的背景，不是操作建议。
                 VStack(alignment: .leading, spacing: 8) {
                     GPAbroadImpactSection(impact: model.abroadImpact(for: code))
+                    // 闭环：今天这条链最后决定了什么（做T / 只做网格 / 不交易）。
+                    if let loop = model.crossLoops[code] {
+                        GPLoopCard(outcome: loop)
+                    }
                     // 145 推理链：把「哪一步站得住、哪一步断了」摊开写，不跳步。
                     GPReasoningChainCard(chain: model.reasoningChain(for: code))
                     // 146 研究入口：用户自己挑一天回放，看那条经验到底站不站得住。

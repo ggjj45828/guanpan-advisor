@@ -719,9 +719,24 @@ struct LocalPreferences: Codable {
         // 「可用」必须是真的有归档统计，不能只看填了 NAS 地址：填了地址但 NAS 没连上
         // 或归档还没攒够时，dataState 说「可用」就是骗人。
         let nasHasStats = nasResearch.values.contains { $0.minuteStats != nil }
-        return NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
-                                           rules: rules, goal: goal, nasAvailable: nasHasStats,
-                                           profile: profile, research: nasResearch, news: nasNews, now: now)
+        // 129：先跑闭环，再把闸门交给计划扫描。这一步必须在 scan 之前：
+        // 闭环判「不交易」时，scan 里根本不该生成做T/网格计划。
+        var gates: [String: NextCrossGate] = [:]
+        var loops: [String: NextLoopOutcome] = [:]
+        for position in book.positions where position.units > 0 {
+            let minutes = intraday[position.code] ?? []
+            guard minutes.count > 1 else { continue }
+            if let outcome = crossLoop(for: position.code, minutes: minutes) {
+                gates[position.code] = outcome.gate
+                loops[position.code] = outcome
+            }
+        }
+        let guidance = NextOpportunityScanner.scan(book: book, quotes: quoteMap, daily: daily, intraday: intraday,
+                                                   rules: rules, goal: goal, nasAvailable: nasHasStats,
+                                                   profile: profile, research: nasResearch, news: nasNews,
+                                                   crossGates: gates, now: now)
+        if crossLoops != loops { crossLoops = loops }
+        return guidance
     }
 
     /// 计划状态自动迁移：过期、行情过期、价格突破作废线，都自动标记并留一条提醒。
@@ -1183,6 +1198,77 @@ struct LocalPreferences: Codable {
             studies: crossMarketStudies[code] ?? [],
             rollings: ledLagRollings[code] ?? [],
             hypothesis: nil)
+    }
+
+    // MARK: - 闭环（118/122/123/128/129/139/143/144）
+
+    /// 每只标的最新一次闭环结论。界面与决策上下文都读这里，不各自重算。
+    @Published private(set) var crossLoops: [String: NextLoopOutcome] = [:]
+
+    /// 跑一次闭环：信号 → 假设 → A股 确认 → Risk Guard → 做T/网格/不交易。
+    ///
+    /// 只对有 NAS 归档、且本机真有分时的标的运行；没有数据就返回 nil，
+    /// 计划生成因此维持原样——**不拿「没有数据」冒充「不交易」**。
+    func crossLoop(for code: String, minutes: [NextChartSample]) -> NextLoopOutcome? {
+        guard let archive = crossMarketArchive, archive.totalPoints > 0 else { return nil }
+        let now = Date()
+        var overseas: [NextCrossMarket: [NextMarketPoint]] = [:]
+        for market in NextCrossMarketPulseBuilder.overseas {
+            let today = NextCrossMarketLoop.todayPoints(archive.points(market), market: market, now: now)
+            if !today.isEmpty { overseas[market] = today }
+        }
+        guard !overseas.isEmpty else { return nil }
+        let local: [NextMarketPoint] = minutes.compactMap { sample in
+            let value = NextNum.double(sample.close)
+            return value > 0 ? NextMarketPoint(timestamp: sample.timestamp, value: value) : nil
+        }
+        guard local.count > 1 else { return nil }
+        return NextCrossMarketLoop.evaluate(
+            code: code,
+            name: NextNameBook.resolve(code),
+            now: now,
+            overseas: overseas,
+            local: local,
+            vwap: Self.vwap(minutes: minutes),
+            volumeRecovered: Self.volumeRecovered(minutes: minutes),
+            studies: crossMarketStudies[code] ?? [],
+            rollings: ledLagRollings[code] ?? [],
+            pulse: crossMarketPulse)
+    }
+
+    /// 当日成交量加权均价。没有量数据时退回算术均价，并在调用处按「仅供参照」对待。
+    static func vwap(minutes: [NextChartSample]) -> Double? {
+        var weighted = 0.0
+        var volume = 0.0
+        var plain = 0.0
+        var count = 0.0
+        for sample in minutes {
+            let price = NextNum.double(sample.close)
+            guard price > 0 else { continue }
+            plain += price
+            count += 1
+            let v = NextNum.double(sample.volume ?? 0)
+            if v > 0 {
+                weighted += price * v
+                volume += v
+            }
+        }
+        if volume > 0 { return weighted / volume }
+        return count > 0 ? plain / count : nil
+    }
+
+    /// 量能是否恢复：当日最后 30 分钟的量能不低于当日平均每 30 分钟的量。
+    /// 数据不足就返回 false（宁可判未恢复，也不让假设因为缺数据而被「确认」）。
+    static func volumeRecovered(minutes: [NextChartSample]) -> Bool {
+        guard minutes.count >= 12 else { return false }
+        let volumes = minutes.map { NextNum.double($0.volume ?? 0) }
+        guard volumes.contains(where: { $0 > 0 }) else { return false }
+        let tailCount = min(30, volumes.count)
+        let tail = volumes.suffix(tailCount)
+        let tailAvg = tail.reduce(0, +) / Double(tail.count)
+        let overallAvg = volumes.reduce(0, +) / Double(volumes.count)
+        guard overallAvg > 0 else { return false }
+        return tailAvg >= overallAvg
     }
 
     /// 117 + 133 的批量计算：拿每只标的的 NAS 多日分钟线，与海外归档按市场逐一配对。

@@ -212,6 +212,53 @@ struct GPReasoningChainCard: View {
     }
 }
 
+// MARK: - 闭环（129/139）
+//
+// 一张卡回答「今天这条链走到了哪、最后决定做什么」。
+// 「不交易」是正式结论，和「做T」一样占一个位置，不用灰字当免责声明。
+
+struct GPLoopCard: View {
+    @Environment(\.gp) private var p
+    let outcome: NextLoopOutcome
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("跨市场闭环")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+                Spacer(minLength: 4)
+                Text(outcome.gate.label)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(gateColor)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(gateColor.opacity(0.12), in: Capsule())
+            }
+            Text(outcome.gate.reason)
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(p.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(outcome.explanation.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(size: 10.5)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous)
+            .stroke(p.line.opacity(0.5), lineWidth: 0.8))
+        .accessibilityIdentifier("crossmarket.loop")
+    }
+
+    private var gateColor: Color {
+        switch outcome.gate {
+        case .doT: return p.risk
+        case .grid: return p.primary
+        case .noTrade: return p.muted
+        }
+    }
+}
+
 // MARK: - 146 历史回放验证器（研究工具，不是模拟账户）
 //
 // 这个页面只说一件事：把某一天 12:50 之前能看到的证据交给规则，等 13:00 之后的真实行情出来，
