@@ -296,10 +296,13 @@ final class NextDecisionMemoryTests: XCTestCase {
     }
 
     private func oscillatingMinutes() -> [NextChartSample] {
-        (0..<60).map { index in
+        let count = 60
+        return (0..<count).map { index in
             // 09:30 起每分钟一条，价格在 1.38–1.42 之间来回，保证 VWAP 与高低点都成立。
+            // **时间戳截至当前时点**：以前整段被放在 now 之后，生产代码按
+            // 「不读未来行情」正确过滤完只剩开头一个点，分时统计因此为空。
             let price = Decimal(string: String(format: "%.3f", index % 2 == 0 ? 1.386 : 1.414))!
-            return NextChartSample(timestamp: now.addingTimeInterval(Double(index) * 60),
+            return NextChartSample(timestamp: now.addingTimeInterval(Double(index - (count - 1)) * 60),
                                    open: price,
                                    high: price * Decimal(string: "1.002")!,
                                    low: price * Decimal(string: "0.998")!,

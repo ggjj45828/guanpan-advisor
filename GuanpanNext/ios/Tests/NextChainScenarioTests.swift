@@ -40,10 +40,16 @@ final class NextChainScenarioTests: XCTestCase {
     }
 
     /// 分时夹具：在 [low, high] 之间按 given 序列走，用来控制「穿越 VWAP 次数」。
+    /// **时间戳截至当前时点**：最后一个点落在 `now`，之前的是已经走出来的历史。
+    /// 以前整段被放在 `now` 之后（now+1min … now+59min），而生产代码按
+    /// 「不读未来行情」正确地把 `timestamp > now` 的点全部过滤掉，
+    /// 于是只剩开头那一个点——做T/网格的分时统计因此永远为空，计划出不来。
+    /// 这是夹具的错，不是生产代码的错，所以改夹具而不是放宽生产侧的过滤。
     private func minutes(_ prices: [Double]) -> [NextChartSample] {
-        prices.enumerated().map { index, value in
+        let count = prices.count
+        return prices.enumerated().map { index, value in
             let price = Decimal(string: String(format: "%.4f", value))!
-            return NextChartSample(timestamp: now.addingTimeInterval(Double(index) * 60),
+            return NextChartSample(timestamp: now.addingTimeInterval(Double(index - (count - 1)) * 60),
                                    open: price, high: price, low: price, close: price,
                                    iopv: nil, volume: 10_000)
         }
@@ -64,15 +70,22 @@ final class NextChainScenarioTests: XCTestCase {
                                      asks: asks.map { NextBookLevel(price: Decimal(string: String(format: "%.3f", $0.0))!, units: $0.1) })
     }
 
+    /// `nasOnline` 与 `research` 是两件事，必须分开传：
+    ///   * `research` = 本机**已缓存**的研究（可能来自上一次在线，早就过期了）；
+    ///   * `nasOnline` = 决策这一刻 NAS 是否真的连得上。
+    /// 以前写成 `nasAvailable: !research.isEmpty`，等于「有缓存」就冒充「此刻在线」，
+    /// 于是 `dataState` 会说出「NAS 长期归档可用」这种假话——
+    /// 断网时明明只能用缓存，却被当成在线。
     private func scan(_ scanBook: NextBook, quote q: NextQuote, daily: [NextChartSample],
                       intraday: [NextChartSample], research: [String: NextNASResearch] = [:],
                       news: [String: [NextNewsInput]] = [:],
                       profile: NextInvestorProfile? = nil,
-                      orderBooks: [String: NextOrderBookSnapshot] = [:]) -> NextDailyGuidance {
+                      orderBooks: [String: NextOrderBookSnapshot] = [:],
+                      nasOnline: Bool = false) -> NextDailyGuidance {
         NextOpportunityScanner.scan(book: scanBook, quotes: [code: q], daily: [code: daily],
                                     intraday: [code: intraday], rules: [code: rules()],
                                     orderBooks: orderBooks,
-                                    goal: NextGoal(), nasAvailable: !research.isEmpty,
+                                    goal: NextGoal(), nasAvailable: nasOnline,
                                     profile: profile, research: research, news: news, now: now)
     }
 
@@ -130,7 +143,8 @@ final class NextChainScenarioTests: XCTestCase {
         let closes = oscillatingCloses()
         let intraday = minutes((0..<60).map { [1.386, 1.412, 1.387, 1.413, 1.388, 1.414][$0 % 6] })
         let guidance = scan(book(), quote: quote(price: 1.400), daily: bars(closes),
-                            intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
+                            intraday: intraday, research: [code: research()],
+                            orderBooks: [code: orderBook()], nasOnline: true)
         let item = try! XCTUnwrap(guidance.items.first)
         XCTAssertEqual(item.state, .wideRange, item.whyToday.joined(separator: " | "))
         XCTAssertEqual(item.strategy, .tTrade)
@@ -184,9 +198,11 @@ final class NextChainScenarioTests: XCTestCase {
         let intraday = minutes((0..<60).map { 1.390 + Double($0) * 0.0003 })
         // 同一段区间，只把日均振幅从 1.2% 调到 1.8%：档数与间距都必须跟着变。
         let narrow = scan(book(), quote: quote(price: 1.400), daily: bars(oscillatingCloses(), bandPercent: 0.6),
-                          intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
+                          intraday: intraday, research: [code: research()],
+                          orderBooks: [code: orderBook()], nasOnline: true)
         let wide = scan(book(), quote: quote(price: 1.400), daily: bars(oscillatingCloses(), bandPercent: 0.9),
-                        intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
+                        intraday: intraday, research: [code: research()],
+                        orderBooks: [code: orderBook()], nasOnline: true)
         let item = try! XCTUnwrap(narrow.items.first)
         XCTAssertEqual(item.strategy, .grid, item.whyToday.joined(separator: " | "))
         guard case let .ready(planNarrow)? = item.gridPlan else {
@@ -237,7 +253,11 @@ final class NextChainScenarioTests: XCTestCase {
     func testScenarioE_MajorNewsRetractsGridPlanInTheSameConclusion() {
         let closes = oscillatingCloses()
         let intraday = minutes((0..<60).map { 1.390 + Double($0) * 0.0003 })
-        let news = [code: [NextNewsInput(title: "159941 公告：因重大事项停牌", source: "测试源")]]
+        // 发布时间必须给全：缺了它，这条新闻在"发布时间未知"的默认路径上也能命中规则，
+        // 等于绕过了「新闻新鲜度」这条真实规则，测的就不是产品行为了。
+        let news = [code: [NextNewsInput(title: "159941 公告：因重大事项停牌", source: "测试源",
+                                         publishedAt: "2026-10-16 09:35",
+                                         url: "https://example.invalid/159941-halt")]]
         let guidance = scan(book(), quote: quote(price: 1.400), daily: bars(closes),
                             intraday: intraday, news: news)
         let item = try! XCTUnwrap(guidance.items.first)
@@ -261,11 +281,15 @@ final class NextChainScenarioTests: XCTestCase {
                                           basis: ["用户设定"], updatedAt: now))
         let closes = oscillatingCloses()
         let intraday = minutes((0..<60).map { [1.386, 1.412, 1.387, 1.413, 1.388, 1.414][$0 % 6] })
+        // 对比测试必须**只**让被测变量（画像）不同：两组共用同一份 NAS 研究实例，
+        // 否则各自新建一份，差异就说不清是画像造成的还是研究数据不同造成的。
+        // 两组也都显式声明 NAS 在线——在线状态一致，对比才成立。
+        let sharedResearch = [code: research()]
         let plain = scan(book(), quote: quote(price: 1.400), daily: bars(closes), intraday: intraday,
-                         research: [code: research()], orderBooks: [code: orderBook()])
+                         research: sharedResearch, orderBooks: [code: orderBook()], nasOnline: true)
         let withProfile = scan(book(), quote: quote(price: 1.400), daily: bars(closes),
-                               intraday: intraday, research: [code: research()],
-                               profile: profile, orderBooks: [code: orderBook()])
+                               intraday: intraday, research: sharedResearch,
+                               profile: profile, orderBooks: [code: orderBook()], nasOnline: true)
         let a = try! XCTUnwrap(plain.items.first)
         let b = try! XCTUnwrap(withProfile.items.first)
         guard case let .ready(pa) = a.tPlan!, case let .ready(pb) = b.tPlan! else {
