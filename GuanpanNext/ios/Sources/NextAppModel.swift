@@ -1730,6 +1730,14 @@ struct LocalPreferences: Codable {
         } catch { }
     }
 
+    /// 127 尾盘→次日观察。**只读研究**：按需算，不产生任何计划、不进闸门。
+    /// 有分时用真实尾盘口径，没有就退化为收盘位置代理——这一点由报告自己写明。
+    func closeToOpenStudy(for code: String) -> NextCloseToOpenStudy? {
+        guard let daily = chartData["\(code):day"], daily.samples.count > 1 else { return nil }
+        let minute = chartData[code]?.samples ?? []
+        return NextCloseToOpenEngine.study(code: code, daily: daily.samples, minute: minute)
+    }
+
     /// 缓存里的分时还能不能当「今天的」用。
     /// 盘前隔夜时它必然是上一个交易日的 —— 这不是数据坏了，是时间不对，必须排除。
     static func intradayIsCurrent(_ dataset: NextChartDataset, now: Date) -> Bool {
