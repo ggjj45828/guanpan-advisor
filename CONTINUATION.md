@@ -185,3 +185,23 @@
 
 **做 140 / 141（首页「跨市场脉搏」与持仓「外部市场影响」）**：数据已经在库里，先把「谁在开、几点、多久没更新、今天修没修复」如实显示出来，比继续堆统计更有用；顺手把 146 的研究工具入口（选日期 → 12:50 冻结 → 放出行情）接上，等数据攒够就能直接跑。
 
+### 9.6 r33 交付三件套（2026-10-24 19:05，替代 r32）
+
+CI run **40087006052**（sha `2b55b2ef`）**两个 job 全部 success**，逐 step 核对：
+`Core logic tests` ✅ / `Build unsigned device app` ✅ / `Package unsigned IPA` ✅ /
+`UI navigation and gesture tests on available simulator` ✅ / `Upload IPA` ✅；
+`Theme screenshots` job：`Build for simulator` ✅ / `Capture theme screenshots` ✅ / `Upload screenshots` ✅。
+这是本批 Swift 改动（`CrossMarketFeed.swift`、120 午后统计、决策上下文跨市场段、12 条新用例）唯一的编译与执行证据。
+
+| 产物 | 大小 | 校验 |
+|---|---|---|
+| `deliverable/GuanpanAdvisor-unsigned-r33.ipa` | 6,133,602 B | `sha256 248445265cd8df553917350c3f5539f5d9fd1a7daa4d0c1f6f98728fc09a4fc6`；`Payload/GuanpanAdvisor.app`、Mach-O 12,754,304 B（比 r32 增 58 KB，即新模块）、可执行位 `0755`、图标 2 个齐；`com.guanpan.advisor.ios` 3.6.0 (build 25)、`MinimumOSVersion 17.0` |
+| `deliverable/GuanpanAdvisor-source-r33.zip` | 1,425,141 B | 89 entries，`git archive` 口径导出自 HEAD `203a87d9`（含 `server/crossmarket.py`、`ios/Sources/CrossMarketFeed.swift`） |
+| `deliverable/nas-advisor-deploy-r33.zip` | 88,944 B | 17 文件，比 r32 多 `server/crossmarket.py`；README-NAS.md 已补跨市场归档章节 |
+
+口径说明：IPA 由 sha `2b55b2ef` 构建；源码包为 HEAD `203a87d9`，两者差异仅是服务端采样窗口重构与文档——**不改变 App 二进制**。
+旧产物（r32 三件、`ci_40083895049`、旧 `nas-advisor-deploy` 目录）已删除，交付目录现在只有 r33 三件。
+GitHub 侧旧 workflow run 已全部删除（33 个 → 只剩 `40087006052`）。
+
+> 代理备注：本轮 `127.0.0.1:57149` 多次 `CONNECT tunnel failed 502`；`api.github.com` 可直连（`--noproxy '*'`），`github.com` git 端点必须走代理。推送靠「循环重试 + `git ls-remote` 与本地 HEAD 比对」判定成功，不靠 push 的退出码。
+
