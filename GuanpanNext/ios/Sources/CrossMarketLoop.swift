@@ -55,34 +55,31 @@ struct NextLoopSignal: Equatable {
 // MARK: 决定
 
 enum NextCrossGate: Equatable {
-    /// 允许做 T：海外证据 + A股 确认 + 执行层都过了，且领先关系权重满。
-    case doT(reason: String)
-    /// 只允许网格：方向被确认过，但领先关系不够稳，不做方向性加仓。
-    case grid(reason: String)
-    /// 不交易：正式结论。带原因，界面照抄。
-    case noTrade(reason: String)
+    /// 跨市场不参与：没有「已验证领先关系 + 当前信号」的组合，其他引擎照常决定计划。
+    /// 跨市场信号既不授权、也不拦截。
+    case clear(reason: String)
+    /// 跨市场风险拦截：信号来自已通过逐 ETF 长期验证 + 预注册前瞻复现的领先关系，
+    /// 但按边界它**只**作为保守风险拦截器——暂停该标的已有候选计划并要求重算；
+    /// 它不自行创建价格、份额或交易方向。
+    case intercept(reason: String)
 
     var reason: String {
         switch self {
-        case let .doT(reason), let .grid(reason), let .noTrade(reason): return reason
+        case let .clear(reason), let .intercept(reason): return reason
         }
     }
 
-    var allowsDirectional: Bool {
-        if case .doT = self { return true }
+    /// 仅这一项对主链有「拦截」副作用：true 时主链暂停该标的已有候选计划并要求重算。
+    /// 跨市场信号永远不做 plan 的「授权方」。
+    var isInterceptor: Bool {
+        if case .intercept = self { return true }
         return false
-    }
-
-    var allowsAnyPlan: Bool {
-        if case .noTrade = self { return false }
-        return true
     }
 
     var label: String {
         switch self {
-        case .doT: return "可做T"
-        case .grid: return "只做网格"
-        case .noTrade: return "不交易"
+        case .clear: return "跨市场不参与"
+        case .intercept: return "风险拦截 · 暂停并需重算"
         }
     }
 }
@@ -139,9 +136,9 @@ enum NextCrossMarketLoop {
             let chain = NextReasoningChainBuilder.build(
                 code: code, name: name, pulse: pulse, studies: studies,
                 rollings: rollings, hypothesis: nil, execution: execution)
-            explanation.append("跨市场今天没有达到门槛的信号：不交易，且不生成任何计划")
+            explanation.append("跨市场今天没有达到门槛的信号：不参与计划决策，不生成任何计划")
             return NextLoopOutcome(code: code, at: now,
-                                   gate: .noTrade(reason: "没有达到门槛的跨市场信号"),
+                                   gate: .clear(reason: "没有达到门槛的跨市场信号"),
                                    signal: nil, hypothesis: nil, chain: chain, explanation: explanation)
         }
 
@@ -162,7 +159,7 @@ enum NextCrossMarketLoop {
                 code: code, name: name, pulse: pulse, studies: studies,
                 rollings: rollings, hypothesis: nil, execution: execution)
             return NextLoopOutcome(code: code, at: now,
-                                   gate: .noTrade(reason: "没有达到门槛的跨市场信号"),
+                                   gate: .clear(reason: "没有达到门槛的跨市场信号"),
                                    signal: nil, hypothesis: nil, chain: chain, explanation: explanation)
         }
         if let signal { explanation.append("假设「\(signal.kind.statement)」，证据：\(signal.evidence)") }
@@ -176,28 +173,31 @@ enum NextCrossMarketLoop {
 
         // 129：Risk Guard。权重用 133 的滚动结论，没有滚动信息就按中性处理。
         let bestWeight = rollings.map(\.weight).max() ?? 0.5
-        // 148：能不能做方向性动作，取决于「有没有一条关系通过预注册前瞻复现」，
-        // 而不是取决于哪条关系的数字最漂亮。
-        var eligibleStudy = studies.first { $0.eligibleForTradingSignal }
+        // 148：跨市场信号要能「拦截」，必须满足「已验证领先关系 + 当前信号」两者同时成立：
+        // 它不能凭一个未验证的海外波动就去暂停用户计划。验证门槛由主链第三道门
+        // （逐 ETF 长期验证 + 预注册前瞻复现）把守——未通过就不进入拦截逻辑。
         let reference = studies.max { lhs, rhs in
             abs(lhs.best?.correlation ?? 0) < abs(rhs.best?.correlation ?? 0)
         }
-        // 长期验证是第三道门。顺序是「统计 → 前瞻复现 → 长期验证」，
-        // 前两道说这条关系「这段时间可能有用」，第三道才说它「不是几天极值撑起来的」。
         var longTermNote: String?
-        if let longTermValidatedLeads, let candidate = eligibleStudy,
+        if let longTermValidatedLeads,
+           let candidate = studies.first(where: { $0.eligibleForTradingSignal }),
            !longTermValidatedLeads.contains(candidate.lead) {
-            eligibleStudy = nil
             if let entry = longTermEntry? {
                 longTermNote = "逐 ETF 长期验证未通过（\(entry.directionalDays) 个方向性交易日、单日集中度 \(Int(entry.concentrationShare * 100))%）：不能升级为稳定领先关系"
             } else {
                 longTermNote = "这条关系还没有逐 ETF 长期验证记录（需要 \(NextEvidenceEngine.minimumSessions) 个独立交易日、留出段要跑赢对照组、且不能被单日极值撑起来）"
             }
         }
+        // 拦截成立的唯一条件：当前有信号，且其所在领先市场已通过逐 ETF 长期验证。
+        // 两者缺一 → 跨市场不参与（clear），既不授权也不拦截。
+        let signalValidated = signal.map { sig in
+            longTermValidatedLeads.map { $0.contains(sig.market) } ?? false
+        } ?? false
         let gate = decide(judged: judged, chain: chain, execution: execution,
                           weight: bestWeight, signal: signal,
-                          signalEligible: eligibleStudy != nil,
-                          replicationNote: eligibleStudy == nil ? (longTermNote ?? reference?.signalEligibilityNote) : nil,
+                          signalEligible: signalValidated,
+                          replicationNote: signalValidated ? nil : (longTermNote ?? reference?.signalEligibilityNote),
                           explanation: &explanation)
 
         return NextLoopOutcome(code: code, at: now, gate: gate, signal: signal,
@@ -257,6 +257,11 @@ enum NextCrossMarketLoop {
 
     // MARK: Risk Guard（124/129）
 
+    /// 边界铁律：研究（跨市场信号）不能直接指挥交易。
+    /// 即使信号来自已通过预注册前瞻复现的领先关系，它也**只**作为保守风险拦截器：
+    /// 暂停该标的已有候选计划并要求重算，绝不自行创建价格、份额或交易方向。
+    /// 因此这里只会返回 `.clear`（不参与）或 `.intercept`（暂停并需重算），
+    /// 不再有「允许做T / 只做网格 / 不交易」这类由跨市场直接下达的计划指令。
     static func decide(judged: NextCrossHypothesis,
                        chain: NextReasoningChain,
                        execution: NextExecutionFilter?,
@@ -265,43 +270,36 @@ enum NextCrossMarketLoop {
                        signalEligible: Bool = false,
                        replicationNote: String? = nil,
                        explanation: inout [String]) -> NextCrossGate {
-        // 按链条的固定顺序判定：断在哪一环，就说哪一环，绝不把执行层说成数据不足。
+        // 透明说明：链条哪一环断了、A股 是否确认、执行层是否放行——照实写进解释，
+        // 但不让这些结论变成「跨市场直接下的计划指令」。它们是背景，不是动作。
         if let broken = chain.firstBreak {
             switch broken.stage {
             case "⑤ 本地确认":
-                explanation.append("A股 未确认「\(judged.statement)」（\(judged.state.label)），不交易；这不算错过，是规则要求的取消")
-                return .noTrade(reason: "A股 未确认：\(judged.state.label)")
+                explanation.append("A股 未确认「\(judged.statement)」（\(judged.state.label)），不交易；这不算错过，是规则要求的取消；跨市场仅作背景，不替用户下计划")
             case "⑥ 执行层":
-                let detail = execution?.verdict ?? "当前价格不适合追"
-                explanation.append("执行层拦截：\(detail)")
-                return .noTrade(reason: "执行层拦截：\(detail)")
+                explanation.append("执行层拦截：\(execution?.verdict ?? "当前价格不适合追")；跨市场不据此直接下计划")
             default:
-                explanation.append("链条在「\(broken.stage)」断开：\(chain.breakReason ?? "数据不足")，不交易")
-                return .noTrade(reason: "\(broken.stage)未通过：\(chain.breakReason ?? "数据不足")")
+                explanation.append("链条「\(broken.stage)」：\(chain.breakReason ?? "数据不足")；跨市场仅作背景")
             }
+        } else if !judged.state.allowsPlan {
+            explanation.append("A股 未确认「\(judged.statement)」（\(judged.state.label)），不交易；这不算错过，是规则要求的取消；跨市场仅作背景，不替用户下计划")
+        } else if let execution, !execution.allowsChasing {
+            explanation.append("执行层拦截：\(execution.verdict)；跨市场不据此直接下计划")
         }
-        guard judged.state.allowsPlan else {
-            explanation.append("A股 未确认「\(judged.statement)」（\(judged.state.label)），不交易；这不算错过，是规则要求的取消")
-            return .noTrade(reason: "A股 未确认：\(judged.state.label)")
+        if let replicationNote { explanation.append(replicationNote) }
+
+        // 最终闸门：只有「已验证领先关系 + 当前信号」同时成立才拦截；否则跨市场不参与。
+        if signalEligible, let signal {
+            let label = signal.kind.label
+            explanation.append("「\(label)」来自已通过逐 ETF 长期验证 + 预注册前瞻复现的领先关系：按边界它只作为保守风险拦截器——暂停该标的已有候选计划并要求重算，不自行生成价格、份额或交易方向")
+            return .intercept(reason: "跨市场信号（已验证领先关系）作为风险拦截器：暂停已有候选计划并要求重算")
         }
-        if let execution, !execution.allowsChasing {
-            explanation.append("执行层拦截：\(execution.verdict)")
-            return .noTrade(reason: "执行层拦截：\(execution.verdict)")
+        if let signal {
+            explanation.append("跨市场「\(signal.kind.label)」出现，但其领先关系尚未通过逐 ETF 长期验证 + 预注册前瞻复现，不能作为拦截依据，也不参与计划决策")
+        } else {
+            explanation.append("跨市场未形成「已验证领先关系 + 当前信号」的组合，不参与本次计划决策（不拦截、不授权）")
         }
-        let label = signal?.kind.label ?? "跨市场"
-        // 148：权重只是「这条关系有多稳」，不是「它有没有被未来验证过」。
-        // 两者都满足才允许方向性动作；历史拟合得再漂亮，没有前瞻兑现也只做网格。
-        guard signalEligible else {
-            let note = replicationNote ?? "领先关系还没有通过预注册前瞻复现"
-            explanation.append("方向与执行都通过，但\(note)：只做网格，不做方向性做T")
-            return .grid(reason: "前瞻复现未达标：\(note)")
-        }
-        if weight >= 1.0 {
-            explanation.append("方向、执行与前瞻复现都通过，领先关系权重 \(NextRollingValidity.percent(weight))：允许做T，仓位仍按你自己的上限")
-            return .doT(reason: "\(label) 已由 A股 确认且前瞻复现已达标")
-        }
-        explanation.append("已确认但领先关系权重只有 \(NextRollingValidity.percent(weight))：只做网格，不做方向性加仓")
-        return .grid(reason: "领先关系不够稳（权重 \(NextRollingValidity.percent(weight))），只做网格")
+        return .clear(reason: "无已验证的跨市场信号：跨市场不参与本次计划决策")
     }
 }
 
@@ -350,6 +348,8 @@ struct NextLoopReview: Equatable {
 enum NextLoopReviewer {
     /// 复盘只看一件事：当时那个方向，后来有没有发生。
     /// 没有参考价就不给结论，不拿「最近的价」凑一个。
+    /// 注意：跨市场信号现在只是风险拦截器，不会自己下方向——所以复盘不再有「做T兑现」，
+    /// 只判断「暂停/不参与」事后看是不是对的。
     static func review(_ record: NextLoopRecord, laterPrice: Double) -> NextLoopReview {
         guard let reference = record.referencePrice, reference > 0 else {
             return NextLoopReview(code: record.code, outcome: .noSignal, movePercent: nil,
@@ -362,24 +362,23 @@ enum NextLoopReviewer {
         let upward = move > 0.02
         let downward = move < -0.02
         switch record.gate {
-        case .doT:
-            if upward {
-                return NextLoopReview(code: record.code, outcome: .followThrough, movePercent: move,
-                                      note: "按假设做了，之后 \(String(format: "%+.2f%%", move))，方向兑现")
-            }
-            return NextLoopReview(code: record.code, outcome: .failedFollowThrough, movePercent: move,
-                                  note: "按假设做了，之后 \(String(format: "%+.2f%%", move))，未兑现")
-        case .grid, .noTrade:
+        case .intercept:
+            // 跨市场把计划暂停了（没让方向执行）：事后看跌了就是「正确的取消」，
+            // 涨了就是「错过」，都如实记，不算失败。
             if downward {
                 return NextLoopReview(code: record.code, outcome: .avoidedLoss, movePercent: move,
-                                      note: "没有按方向做，之后 \(String(format: "%+.2f%%", move))，取消是对的")
+                                      note: "按风险拦截暂停了计划，之后 \(String(format: "%+.2f%%", move))，暂停是对的")
             }
             if upward {
                 return NextLoopReview(code: record.code, outcome: .missedGain, movePercent: move,
-                                      note: "没有按方向做，之后 \(String(format: "%+.2f%%", move))，属于错过；规则没触发，不算错")
+                                      note: "按风险拦截暂停了计划，之后 \(String(format: "%+.2f%%", move))，属于错过；规则没触发，不算错")
             }
             return NextLoopReview(code: record.code, outcome: .noSignal, movePercent: move,
-                                  note: "之后基本没动（\(String(format: "%+.2f%%", move))），这次判断没有信息量")
+                                  note: "之后基本没动（\(String(format: "%+.2f%%", move))），这次拦截没有信息量")
+        case .clear:
+            // 跨市场未参与：没有方向可复盘，只如实说明。
+            return NextLoopReview(code: record.code, outcome: .noSignal, movePercent: move,
+                                  note: "跨市场本次未参与计划决策，无方向可复盘")
         }
     }
 }

@@ -112,9 +112,9 @@ final class NextCrossMarketLoopTests: XCTestCase {
             volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
             pulse: openPulse(base: base))
         XCTAssertNil(outcome.signal)
-        XCTAssertEqual(outcome.gate, .noTrade(reason: "没有达到门槛的跨市场信号"))
+        XCTAssertEqual(outcome.gate, .clear(reason: "没有达到门槛的跨市场信号"))
         XCTAssertTrue(outcome.headline.contains("不交易"))
-        XCTAssertTrue(outcome.explanation.contains { $0.contains("不交易，且不生成任何计划") })
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("不生成任何计划") })
     }
 
     func test_overseasRepairAloneNeverBecomesDoT() {
@@ -125,15 +125,14 @@ final class NextCrossMarketLoopTests: XCTestCase {
             volumeRecovered: false, studies: [usableStudy()], rollings: [fullWeight()],
             pulse: openPulse(base: base))
         XCTAssertEqual(outcome.signal?.kind, .lunchRepair, "午休修复信号应当被识别出来")
-        guard case let .noTrade(reason) = outcome.gate else {
-            return XCTFail("海外证据不能替代 A股 确认，这里必须是 noTrade")
-        }
-        XCTAssertTrue(reason.contains("未确认"))
+        // 边界：未通过逐 ETF 长期验证 + 预注册前瞻复现的信号，既不能变成 doT，也不能变成拦截。
+        XCTAssertEqual(outcome.gate, .clear, "海外证据不能替代 A股 确认，这里必须是不参与（clear）")
+        XCTAssertFalse(outcome.gate.isInterceptor, "未验证的海外信号不能变成风险拦截")
         XCTAssertEqual(outcome.hypothesis?.state, .pending, "同一时刻提出的假设只能等确认，不能自己变成 confirmed")
         XCTAssertTrue(outcome.explanation.contains { $0.contains("不算错过") })
     }
 
-    func test_expiredHypothesisIsRejectedAndStaysNoTrade() {
+    func test_expiredHypothesisIsRejectedAndStaysClear() {
         let base = afternoon()
         let outcome = NextCrossMarketLoop.evaluate(
             code: "513520", now: base,
@@ -141,40 +140,41 @@ final class NextCrossMarketLoopTests: XCTestCase {
             volumeRecovered: false, studies: [usableStudy()], rollings: [fullWeight()],
             pulse: openPulse(base: base), existing: expiredHypothesis(base: base))
         XCTAssertEqual(outcome.hypothesis?.state, .rejected, "确认窗口已过且没有价格/量能确认 → 失效")
-        guard case let .noTrade(reason) = outcome.gate else { return XCTFail("失效的假设不能变成动作") }
-        XCTAssertTrue(reason.contains("假设失效"))
+        // 失效的假设不能变成任何动作（拦截或下单）：跨市场不参与。
+        XCTAssertEqual(outcome.gate, .clear, "失效的假设不能变成动作")
     }
 
-    // MARK: Risk Guard
+    // MARK: Risk Guard（边界：研究不能直接指挥交易）
 
-    func test_confirmedWithFullWeightAllowsDoT() {
+    /// 即使信号来自「已确认 + 满权重 + 执行层放行 + 已通过预注册前瞻复现」的领先关系，
+    /// 它也只能作为保守风险拦截器——暂停已有候选计划并要求重算，不下达任何计划/价格/方向。
+    func test_confirmedValidatedSignalIsOnlyARiskInterceptor() {
         let base = afternoon()
         let outcome = NextCrossMarketLoop.evaluate(
             code: "513520", now: base,
             overseas: [.japan: repairOverseas(base: base)], local: risingLocal(base: base), vwap: 0.99,
             volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
-            pulse: openPulse(base: base), existing: openHypothesis(base: base))
+            pulse: openPulse(base: base), existing: openHypothesis(base: base),
+            longTermValidatedLeads: [.japan])
         XCTAssertEqual(outcome.hypothesis?.state, .confirmed)
-        XCTAssertTrue(outcome.gate.allowsDirectional, "确认 + 满权重 + 执行层放行 → 允许做T")
-        guard case let .doT(reason) = outcome.gate else { return XCTFail("应为 doT") }
-        XCTAssertTrue(reason.contains("已由 A股 确认"))
+        XCTAssertTrue(outcome.gate.isInterceptor, "已验证领先关系 + 当前信号 → 风险拦截器")
+        guard case let .intercept(reason) = outcome.gate else { return XCTFail("应为 intercept") }
+        XCTAssertTrue(reason.contains("风险拦截"))
+        XCTAssertTrue(reason.contains("暂停"))
     }
 
-    func test_confirmedButDecayedRelationOnlyAllowsGrid() {
+    func test_confirmedButDecayedRelationOnlyIntercepts() {
         let base = afternoon()
         let outcome = NextCrossMarketLoop.evaluate(
             code: "513520", now: base,
             overseas: [.japan: repairOverseas(base: base)], local: risingLocal(base: base), vwap: 0.99,
             volumeRecovered: true, studies: [usableStudy()], rollings: [weakWeight()],
-            pulse: openPulse(base: base), existing: openHypothesis(base: base))
-        guard case .grid = outcome.gate else {
-            return XCTFail("权重不足 1.0 时应降级为网格")
-        }
-        XCTAssertFalse(outcome.gate.allowsDirectional, "关系不稳时只做网格，不做方向")
-        XCTAssertTrue(outcome.gate.allowsAnyPlan)
+            pulse: openPulse(base: base), existing: openHypothesis(base: base),
+            longTermValidatedLeads: [.japan])
+        XCTAssertTrue(outcome.gate.isInterceptor, "关系不稳但已验证时仍只作拦截，不下达网格/方向")
     }
 
-    func test_executionFilterBlocksEvenWhenConfirmed() {
+    func test_executionFilterStillSurfacedButNeverDirectsTrade() {
         let base = afternoon()
         let blocked = NextExecutionFilter(premiumPercent: 2.0, spreadPercent: 0.1,
                                           verdict: "ETF 溢价 2.00% 偏高", allowsChasing: false)
@@ -183,12 +183,11 @@ final class NextCrossMarketLoopTests: XCTestCase {
             overseas: [.japan: repairOverseas(base: base)], local: risingLocal(base: base), vwap: 0.99,
             volumeRecovered: true, execution: blocked,
             studies: [usableStudy()], rollings: [fullWeight()],
-            pulse: openPulse(base: base), existing: openHypothesis(base: base))
-        guard case let .noTrade(reason) = outcome.gate else {
-            return XCTFail("溢价过高时方向再对也不能追")
-        }
-        XCTAssertTrue(reason.contains("执行层拦截"), "执行层拦截不能被说成数据不足")
-        XCTAssertFalse(outcome.gate.allowsAnyPlan)
+            pulse: openPulse(base: base), existing: openHypothesis(base: base),
+            longTermValidatedLeads: [.japan])
+        // 即使已验证，信号也只作拦截；执行层细节进解释，不变成「允许追」或「不交易指令」。
+        XCTAssertTrue(outcome.gate.isInterceptor)
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("执行层拦截") }, "执行层拦截进解释，但跨市场不据此直接下计划")
     }
 
     func test_insufficientArchiveStopsBeforeAnyDecision() {
@@ -198,17 +197,18 @@ final class NextCrossMarketLoopTests: XCTestCase {
             overseas: [.japan: repairOverseas(base: base)], local: risingLocal(base: base), vwap: 0.99,
             volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
             pulse: openPulse(days: 5, base: base), existing: openHypothesis(base: base))
-        guard case let .noTrade(reason) = outcome.gate else {
-            return XCTFail("归档不足 30 天时任何决定都不成立")
+        // 归档不足 30 天 → 领先关系无法被验证 → 跨市场不参与，既不拦截也不授权。
+        guard case .clear = outcome.gate else {
+            return XCTFail("归档不足 30 天时跨市场不参与任何决策")
         }
-        XCTAssertTrue(reason.contains("归档深度"))
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("不参与计划决策") })
     }
 
     // MARK: 144 复盘
 
     func test_reviewCountsCorrectCancellationAsSuccess() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .noTrade(reason: "A股 未确认"),
+                                    gate: .clear(reason: "A股 未确认"),
                                     statement: "午后修复", referencePrice: 1.000)
         let review = NextLoopReviewer.review(record, laterPrice: 0.985)
         XCTAssertEqual(review.outcome, .avoidedLoss)
@@ -218,7 +218,7 @@ final class NextCrossMarketLoopTests: XCTestCase {
 
     func test_reviewRecordsMissAsFactNotFailure() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .noTrade(reason: "A股 未确认"),
+                                    gate: .clear(reason: "A股 未确认"),
                                     statement: "午后修复", referencePrice: 1.000)
         let review = NextLoopReviewer.review(record, laterPrice: 1.012)
         XCTAssertEqual(review.outcome, .missedGain)
@@ -226,17 +226,18 @@ final class NextCrossMarketLoopTests: XCTestCase {
         XCTAssertTrue(review.note.contains("不算错"))
     }
 
-    func test_reviewDoTOutcomeIsJudgedByDirection() {
+    /// 跨市场信号现在是风险拦截器：它暂停计划而非下单，复盘只判断「暂停事后看对不对」。
+    func test_reviewInterceptorIsJudgedByDirection() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .doT(reason: "已确认"),
+                                    gate: .intercept(reason: "风险拦截"),
                                     statement: "午后修复", referencePrice: 1.000)
-        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 0.99).outcome, .failedFollowThrough)
-        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 1.01).outcome, .followThrough)
+        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 0.99).outcome, .avoidedLoss)
+        XCTAssertEqual(NextLoopReviewer.review(record, laterPrice: 1.01).outcome, .missedGain)
     }
 
     func test_reviewWithoutReferencePriceGivesNoConclusion() {
         let record = NextLoopRecord(code: "513520", at: afternoon(),
-                                    gate: .noTrade(reason: "无信号"),
+                                    gate: .clear(reason: "无信号"),
                                     statement: nil, referencePrice: nil)
         let review = NextLoopReviewer.review(record, laterPrice: 1.01)
         XCTAssertEqual(review.outcome, .noSignal)

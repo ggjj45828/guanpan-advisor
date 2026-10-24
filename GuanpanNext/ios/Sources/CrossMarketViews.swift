@@ -252,9 +252,8 @@ struct GPLoopCard: View {
 
     private var gateColor: Color {
         switch outcome.gate {
-        case .doT: return p.risk
-        case .grid: return p.primary
-        case .noTrade: return p.muted
+        case .intercept: return p.risk
+        case .clear: return p.muted
         }
     }
 }

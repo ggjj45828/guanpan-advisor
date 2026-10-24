@@ -27,6 +27,8 @@ enum NextPlanState: String, Codable, Equatable {
     case expired = "已过期"
     case invalidated = "建议作废"
     case withdrawn = "已取消"
+    /// 被跨市场风险拦截器暂停：不自动作废、不执行，等待重算（见 applyCrossMarketIntercepts）。
+    case paused = "已暂停"
 
     var isOpen: Bool { self == .active || self == .triggered }
 }
@@ -63,6 +65,10 @@ struct NextCandidatePlan: Codable, Identifiable, Equatable {
     let cancelBelow: Decimal?
     /// 用户是否看过这条建议（画像里「看了没做」与「没看到」必须分开）。
     var viewedAt: Date? = nil
+    /// 被跨市场风险拦截器暂停后要求重算的标记：true 时计划不应被当作可执行。
+    var recomputeRequired: Bool = false
+    /// 暂停原因（来自跨市场拦截器）；非拦截暂停时为 nil。
+    var interceptionNote: String? = nil
     /// 一键反馈：只放六个粗选项，画像学习直接吃这条信号。
     var feedback: NextPlanFeedback? = nil
     /// 真实成交时填写的价格/份额：与建议值不同即说明 AI 报价口径需要校正。
@@ -240,9 +246,12 @@ enum NextOpportunityScanner {
             var gridPlan: NextGridPlannerResult?
             var riskNotes: [String] = []
             var headline = strategy.kind.rawValue
-            // 129：跨市场闭环的闸门。没有归档时这里没有值，行为与以前完全一致；
-            // 有值且判为「不交易」时，**不生成计划**——不是加一句提示，而是根本不出价。
+            // 129 修订：跨市场闭环的边界是「研究不能直接指挥交易」。
+            // 它只有两种状态：参与（clear，不拦截也不授权）或风险拦截（intercept）。
+            // 拦截时本扫描仍由策略引擎照常产出价格/份额/方向（跨市场不替用户造这些），
+            // 但整条建议被标为「不可直接执行」——真正的副作用是去暂停已有候选计划。
             let crossGate = crossGates[position.code]
+            let crossIntercept = crossGate?.isInterceptor == true
             if let crossGate {
                 riskNotes.append("跨市场闭环：\(crossGate.label) · \(crossGate.reason)")
             }
@@ -252,11 +261,6 @@ enum NextOpportunityScanner {
                                          lotSize: rules[position.code]?.lotSize ?? 100, now: now)
 
             switch strategy.kind {
-            case .tTrade where crossGate.map({ !$0.allowsDirectional }) == true:
-                // 跨市场没过（不交易 / 只做网格）：做T计划直接不生成，headline 写清原因。
-                headline = "不交易 · 跨市场未通过"
-            case .grid where crossGate.map({ !$0.allowsAnyPlan }) == true:
-                headline = "不交易 · 跨市场未通过"
             case .tTrade:
                 var result = NextTradeTPlanner.plan(kind: .reverse, book: book, quote: quote, daily: bars,
                                                     intraday: minutes, rules: rules[position.code],
@@ -303,9 +307,15 @@ enum NextOpportunityScanner {
             let recovery = NextRecoveryAnalyzer.analyze(book: book, quote: quote, rules: rules[position.code],
                                                         goal: goal, tNetGain: tNetGain, now: now)
 
+            // 129 修订：跨市场风险拦截时，本标的的建议整体不可作为可执行动作——
+            // 价格/份额/方向仍由策略引擎产出（供观察），但跨市场不会以任何形式替用户下单。
             var actionable = false
-            if let tPlan, case .ready = tPlan, portfolioNote == nil { actionable = true }
-            if let gridPlan, case .ready = gridPlan { actionable = true }
+            if crossIntercept {
+                riskNotes.append("跨市场信号已作为风险拦截器：已暂停该标的已有候选计划并要求重算；本建议仅作观察，不自行生成方向/份额/价格")
+            } else {
+                if let tPlan, case .ready = tPlan, portfolioNote == nil { actionable = true }
+                if let gridPlan, case .ready = gridPlan { actionable = true }
+            }
 
             var score = 0.0
             if let tPlan, case let .ready(plan) = tPlan {

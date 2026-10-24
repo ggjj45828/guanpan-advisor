@@ -176,6 +176,8 @@ struct LocalPreferences: Codable {
     @Published var dividendEvents: [String: [NextETFDividendEvent]] { didSet { reportSave(repository.save(dividendEvents, filename: "dividend-history-v1.json")) } }
     @Published var patientLimitPlans: [NextPatientLimitPlan] { didSet { reportSave(repository.save(patientLimitPlans, filename: "patient-limit-plans-v1.json")) } }
     @Published var candidatePlans: [NextCandidatePlan] { didSet { reportSave(repository.save(candidatePlans, filename: "candidate-plans-v1.json")) } }
+    /// 本次分析各标的的跨市场闸门（clear / intercept）。拦截器据此暂停已有候选计划。
+    @Published private(set) var crossGates: [String: NextCrossGate] = [:]
     /// 动态投资者画像：只存结论与依据，不存原始成交流水（流水在账本里）。
     @Published var profile: NextInvestorProfile { didSet { reportSave(repository.save(profile, filename: "investor-profile-v1.json")) } }
     /// AI 给过的每一次具体机会：曝光 → 反馈 → 是否真实成交，画像学习只吃这条链。
@@ -791,7 +793,40 @@ struct LocalPreferences: Codable {
                                                    profile: profile, research: nasResearch, news: nasNews,
                                                    crossGates: gates, now: now)
         if crossLoops != loops { crossLoops = loops }
+        // 跨市场闸门只作风险拦截：把「暂停已有候选计划 + 要求重算」落到真实存储的候选计划上。
+        // 它不创建任何新计划/价格/份额/方向——只暂停既有计划并要求重算。
+        if crossGates != gates { crossGates = gates }
+        applyCrossMarketIntercepts(now: now)
         return guidance
+    }
+
+    /// 跨市场风险拦截器：对当前有 intercept 闸门的标的，暂停其处于开放状态的已有候选计划
+    /// 并标记「需重算」；对拦截已解除的标的，恢复为待观察并清除重算标记。
+    /// 关键约束：本方法只**暂停/恢复**既有计划，绝不创建计划、不写价格/份额/方向。
+    func applyCrossMarketIntercepts(now: Date = Date()) {
+        let intercepted = Set(crossGates.filter { $0.value.isInterceptor }.map { $0.key })
+        guard !intercepted.isEmpty || candidatePlans.contains(where: { $0.state == .paused }) else { return }
+        var changed = false
+        for index in candidatePlans.indices {
+            let plan = candidatePlans[index]
+            if intercepted.contains(plan.code) {
+                if plan.state.isOpen {
+                    candidatePlans[index].state = .paused
+                    candidatePlans[index].recomputeRequired = true
+                    candidatePlans[index].interceptionNote = crossGates[plan.code]?.reason
+                    changed = true
+                }
+            } else if plan.state == .paused, plan.interceptionNote != nil {
+                // 拦截解除：恢复待观察，等待下一次分析重新生成；不替用户决定方向。
+                candidatePlans[index].state = .active
+                candidatePlans[index].recomputeRequired = false
+                candidatePlans[index].interceptionNote = nil
+                changed = true
+            }
+        }
+        if changed {
+            notice = "跨市场风险拦截：已暂停相关标的的候选计划并要求重算（跨市场不生成新计划/价格/方向）"
+        }
     }
 
     /// 计划状态自动迁移：过期、行情过期、价格突破作废线，都自动标记并留一条提醒。
@@ -849,6 +884,13 @@ struct LocalPreferences: Codable {
                                      cancelAbove: value.upper, cancelBelow: value.lower)
         } else {
             throw NextError.invalid("这只标的当前没有可保存的具体计划；数据不足时只能观察")
+        }
+        // 跨市场拦截器生效时，新保存的计划也先以「已暂停 + 需重算」落地：
+        // 跨市场信号不替用户定方向，等拦截解除、重新分析后再启用。
+        if let reason = crossGates[item.code]?.isInterceptor == true ? crossGates[item.code]?.reason : nil {
+            plan.state = .paused
+            plan.recomputeRequired = true
+            plan.interceptionNote = reason
         }
         try plan.validate()
         candidatePlans.insert(plan, at: 0)

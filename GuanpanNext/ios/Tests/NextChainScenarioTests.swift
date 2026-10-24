@@ -151,6 +151,33 @@ final class NextChainScenarioTests: XCTestCase {
         XCTAssertFalse(guidance.dataState.contains("离线"))
     }
 
+    // MARK: - 边界：研究（跨市场信号）不能直接指挥交易
+
+    /// 跨市场信号即使触发，也只作为保守风险拦截器：它不删除、也不替代策略引擎算出的
+    /// 价格/份额/方向，只是把整条建议标为「不可直接执行」，并去暂停已有候选计划。
+    func test_crossMarketInterceptorPausesWithoutCreatingOrDeletingPlan() {
+        let closes = oscillatingCloses()
+        let intraday = minutes((0..<60).map { [1.386, 1.412, 1.387, 1.413, 1.388, 1.414][$0 % 6] })
+        let guidance = NextOpportunityScanner.scan(
+            book: book(), quotes: [code: quote(price: 1.400)],
+            daily: [code: bars(closes)], intraday: [code: intraday],
+            rules: [code: rules()], orderBooks: [code: orderBook()],
+            goal: NextGoal(), nasAvailable: true,
+            research: [code: research()], news: [:],
+            crossGates: [code: .intercept(reason: "风险拦截：暂停已有候选计划并要求重算")],
+            now: now)
+        let item = try! XCTUnwrap(guidance.items.first)
+        // 策略引擎照常算出了做T 的价格/份额/方向——跨市场没有替用户造这些，也没删掉它们。
+        guard case let .ready(plan) = item.tPlan else {
+            return XCTFail("跨市场拦截不应删除策略引擎算出的价格/份额/方向：\(String(describing: item.tPlan))")
+        }
+        XCTAssertTrue(plan.buyPrice > 0 && plan.sellPrice > plan.buyPrice, "价格仍由策略引擎产出")
+        XCTAssertEqual(plan.units % 100, 0, "份额仍由策略引擎产出")
+        // 但整条建议被标为不可直接执行：跨市场只作风险拦截，不授权任何交易。
+        XCTAssertFalse(item.isActionable, "跨市场拦截时本标的不可作为可执行建议")
+        XCTAssertTrue(item.riskNotes.contains { $0.contains("风险拦截") }, item.riskNotes.joined(separator: " | "))
+    }
+
     // MARK: - C 多日区间：网格档数由波动率与区间推导，不是固定 4 档
 
     func testScenarioC_GridTiersComeFromVolatilityNotAFixedFour() {
