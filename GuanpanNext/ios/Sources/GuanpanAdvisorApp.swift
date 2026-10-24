@@ -184,6 +184,14 @@ struct RootView: View {
         let tab = NextTab(rawValue: args[index + 1])
         return tab == .overview ? .decision : tab
     }()
+    /// `-screen detail` 时打开哪只标的。默认取样例持仓里的日经ETF——
+    /// 它同时有海外映射与国内溢价，最适合看「外部市场影响」这块的排版。
+    static let detailArgument: String = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-code"), args.indices.contains(index + 1) else { return "513520" }
+        let value = args[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "513520" : value
+    }()
     /// 手动选择优先于场景推断；没选过就跟随场景。
     private var themeSelection: ThemeSelection {
         if let forced = Self.themeArgument { return .fixed(forced) }
@@ -239,6 +247,17 @@ struct RootView: View {
             }
             // 全屏覆盖层不总是继承父级自定义环境值，这里显式再注入一次，
             // 保证截图里的画像页和当前主题完全一致（五套主题读同一份画像数据）。
+            .environment(\.gp, palette)
+            .environment(\.gpAppearance, model.preferences.appearance)
+            .preferredColorScheme(effectiveScheme)
+        }
+        // 截图/回归专用：`-screen detail` 直达标的详情，用来核对「外部市场影响」(141) 与
+        // 「推理链」(145) 在五套主题下的排版。没数据时它显示的正是「暂无稳定领先关系」——
+        // 要验证的就是这个默认样子，而不是拿一份有数据的稿子当默认。
+        .fullScreenCover(isPresented: .constant(Self.screenArgument == "detail")) {
+            NavigationStack {
+                InstrumentDetailScreen(code: Self.detailArgument)
+            }
             .environment(\.gp, palette)
             .environment(\.gpAppearance, model.preferences.appearance)
             .preferredColorScheme(effectiveScheme)

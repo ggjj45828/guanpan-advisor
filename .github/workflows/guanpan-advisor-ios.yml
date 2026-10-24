@@ -225,6 +225,10 @@ jobs:
           shoot "$DEVICE_ID" 6_profile -demo -theme editorial -screen profile
           # 持仓页（assets tab）：回归「持仓结构」环形卡——窄屏下应上下堆叠、图例横排，不塌成竖排。
           shoot "$DEVICE_ID" 9_assets -demo -tab assets
+          # 标的详情：核对「外部市场影响」(141) 与「推理链」(145) 的排版与断链文案。
+          # 这两块在首页看不到，必须单独截，否则只能靠「源码里有」交差。
+          shoot "$DEVICE_ID" 10_detail_editorial -demo -theme editorial -screen detail
+          shoot "$DEVICE_ID" 11_detail_puzzle -demo -theme puzzle -screen detail
           # 小屏（SE 一档）单独跑一遍首页与拼图：专门看长名称、大金额、四联卡会不会挤爆。
           SMALL_ID="$(pick 'SE')"
           if [ -n "$SMALL_ID" ] && [ "$SMALL_ID" != "$DEVICE_ID" ]; then

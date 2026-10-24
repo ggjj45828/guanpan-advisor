@@ -18,7 +18,9 @@ struct GPCrossMarketPulseCard: View {
                     rowView(row)
                 }
             } else {
-                Text("还没有跨市场数据：NAS 归档要先攒起来（每分钟采一次，需要时间）")
+                // 没有归档时只留一句，不再下面再补一句「当前没有可用实时数据」——
+                // 空状态本来就该短，三行都在说「没有」只会把首屏挤满。
+                Text("NAS 还没攒到跨市场快照：每分钟采一次，攒够 \(pulse.minimumDays) 个交易日才谈得上领先关系")
                     .font(.system(size: 11)).foregroundStyle(p.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -27,9 +29,11 @@ struct GPCrossMarketPulseCard: View {
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(p.primaryDeep)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(pulse.footnote)
-                .font(.system(size: 9.5)).foregroundStyle(p.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if pulse.hasAnyData {
+                Text(pulse.footnote)
+                    .font(.system(size: 9.5)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -46,9 +50,12 @@ struct GPCrossMarketPulseCard: View {
                 Text("跨市场脉搏")
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(p.ink)
                 Spacer(minLength: 4)
-                Text(pulse.headline)
-                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(p.muted)
-                    .lineLimit(1).minimumScaleFactor(0.75)
+                // 没有数据时不显示「暂无跨市场数据」——下面那句已经说明了，不必重复。
+                if pulse.hasAnyData {
+                    Text(pulse.headline)
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(p.muted)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                }
             }
             Text(pulse.subtitle)
                 .font(.system(size: 10)).foregroundStyle(p.muted)
