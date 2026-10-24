@@ -103,6 +103,17 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Payload ../GuanpanAdvisor-unsigned.ipa
           unzip -l ../GuanpanAdvisor-unsigned.ipa | tail -15
 
+      # 出包必须排在 UI 测试之前：UI 测试是一套独立的信号，
+      # 它卡住或超时不该让「已经构建好的 IPA」拿不到。
+      # （今天已经踩到两次：一次 Complete job 挂住，一次 UI 测试跑 30 分钟仍未结束。）
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: guanpan-advisor-unsigned-ipa
+          path: GuanpanNext/ios/build/GuanpanAdvisor-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
       # 模拟器 UI 测试失败不阻断出包。这套工程的工具栏入口在无障碍树里登记不稳定，
       # 已经出现过「按钮确实在屏上、但 XCUITest 按 id/label 都查不到」；
       # 出包和 UI 断言是两件事，先保证能拿到 IPA，测试结论单独看日志。
@@ -126,14 +137,6 @@ jobs:
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -resultBundlePath build/sim.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build-ui-tests.log
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: guanpan-advisor-unsigned-ipa
-          path: GuanpanNext/ios/build/GuanpanAdvisor-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload test evidence
         if: always()
