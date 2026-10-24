@@ -1,0 +1,479 @@
+warning: 'ios': found 24 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfileView.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/AIGuidanceViews.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAppModel.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalNotificationService.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NASService.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/GPAssetCards.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/ThemeHome.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/DecisionMemoryView.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/MarketDataService.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/MarketDataSources.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRuleViews.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/ScoreRadar.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/BackupDocument.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/GPDataQualityScore.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/GuanpanAdvisorApp.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/DeepSeekMobile.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/ThemeKit.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/GPDividendScore.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/UnifiedChartView.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/PortfolioSummaryViews.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/Assets.xcassets
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/IndexDetailView.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/CrossMarketViews.swift
+    /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/DesignSystem.swift
+Building for debugging...
+[0/7] /Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/.build/arm64-apple-macosx/debug/GuanpanAdvisorCorePackageTests.derived/runner.swift
+[1/7] Write sources
+[4/7] Write swift-version--79AA4F9932D1E87A.txt
+[6/26] Compiling GuanpanAdvisorCore AppThemeCore.swift
+[7/26] Compiling GuanpanAdvisorCore CloseToOpen.swift
+[8/26] Compiling GuanpanAdvisorCore CrossMarket.swift
+[9/26] Compiling GuanpanAdvisorCore CrossMarketFeed.swift
+[10/26] Compiling GuanpanAdvisorCore CrossMarketLoop.swift
+[11/26] Compiling GuanpanAdvisorCore CrossMarketProfiles.swift
+[12/26] Compiling GuanpanAdvisorCore CrossMarketPulse.swift
+[13/26] Compiling GuanpanAdvisorCore CrossMarketReasoning.swift
+[14/26] Compiling GuanpanAdvisorCore CrossMarketReplay.swift
+[15/26] Emitting module GuanpanAdvisorCore
+[16/35] Compiling GuanpanAdvisorCore CurrencyContext.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[17/35] Compiling GuanpanAdvisorCore GlobalIndices.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[18/35] Compiling GuanpanAdvisorCore InstrumentCatalog.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[19/35] Compiling GuanpanAdvisorCore InvestorProfile.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[20/35] Compiling GuanpanAdvisorCore LeadValidation.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[21/35] Compiling GuanpanAdvisorCore LocalRules.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[22/35] Compiling GuanpanAdvisorCore MarketSourceChain.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[23/35] Compiling GuanpanAdvisorCore NextAIGuide.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[24/35] Compiling GuanpanAdvisorCore NextCandidatePlans.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/InvestorProfile.swift:416:13: warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 414 |         let normalFills = fills.filter { !anomalyIDs.contains($0.id) }
+ 415 |         let buys = normalFills.filter { $0.side == "buy" }
+ 416 |         let sells = normalFills.filter { $0.side == "sell" }
+     |             `- warning: initialization of immutable value 'sells' was never used; consider replacing with assignment to '_' or removing it
+ 417 | 
+ 418 |         // 1) 长期计划（用户明确设定，AI 不改）
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/LocalRules.swift:603:13: warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 601 |         var roomValue = 100.0
+ 602 |         var roomDetail = "未持有或未设单标的上限，仓位空间不打折"
+ 603 |         var roomEstimated = false
+     |             `- warning: variable 'roomEstimated' was never mutated; consider changing to 'let' constant
+ 604 |         if let weightPercent, let positionLimitPercent, positionLimitPercent > 0 {
+ 605 |             roomValue = NextNum.clamp(100 - weightPercent / positionLimitPercent * 100, 0, 100)
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:874:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 872 |         // 区间：近 60 日高低点；再用 NAS 长期分位收敛（超出历史价格带的档位没有依据）。
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextAIGuide.swift:875:41: warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 873 |         let recent = bars.suffix(60)
+ 874 |         guard let rawUpper = recent.map { $0.high ?? $0.close }.max(),
+ 875 |               let rawLower = recent.map { $0.low ?? $0.close }.min(),
+     |                                         `- warning: trailing closure in this context is confusable with the body of the statement; pass as a parenthesized argument to silence this warning
+ 876 |               rawUpper > rawLower, let current = bars.last?.close, current > 0 else {
+ 877 |             return .insufficientData(confidence, ["近 60 日高低点无法计算"])
+[25/35] Compiling GuanpanAdvisorCore NextCore.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[26/35] Compiling GuanpanAdvisorCore NextDecisionMemory.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[27/35] Compiling GuanpanAdvisorCore NextNewsImpact.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[28/35] Compiling GuanpanAdvisorCore OpenAbsorption.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[29/35] Compiling GuanpanAdvisorCore PlanDataGate.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[30/35] Compiling GuanpanAdvisorCore PortfolioSummary.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[31/35] Compiling GuanpanAdvisorCore ReplayFreeze.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[32/35] Compiling GuanpanAdvisorCore SampleFreshness.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[33/35] Compiling GuanpanAdvisorCore SignalReplication.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Sources/NextCore.swift:884:17: warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 882 |         let steps = prices.enumerated().compactMap { index, price -> NextPatientLimitStep? in
+ 883 |             guard price > 0, perStepBudget > fee else { return nil }
+ 884 |             var lotCost = price * Decimal(lotSize)
+     |                 `- warning: variable 'lotCost' was never mutated; consider changing to 'let' constant
+ 885 |             let availableBudget = perStepBudget - fee
+ 886 |             let unroundedLotCount = NSDecimalNumber(decimal: availableBudget)
+[34/50] Compiling GuanpanAdvisorCoreTests NextCrossMarketReasoningTests.swift
+[35/50] Compiling GuanpanAdvisorCoreTests NextCrossMarketReplayTests.swift
+[36/50] Compiling GuanpanAdvisorCoreTests NextCrossMarketTests.swift
+[37/50] Compiling GuanpanAdvisorCoreTests NextDecisionMemoryTests.swift
+[38/50] Compiling GuanpanAdvisorCoreTests NextFXContextTests.swift
+[39/50] Compiling GuanpanAdvisorCoreTests NextLeadSourceRankingTests.swift
+[40/50] Compiling GuanpanAdvisorCoreTests NextLeadValidationTests.swift
+error: emit-module command failed with exit code 1 (use -v to see invocation)
+[41/57] Compiling GuanpanAdvisorCoreTests NextChainScenarioTests.swift
+[42/57] Compiling GuanpanAdvisorCoreTests NextCloseToOpenTests.swift
+[43/57] Compiling GuanpanAdvisorCoreTests NextCoreTests.swift
+[44/57] Compiling GuanpanAdvisorCoreTests NextCrossMarketFeedTests.swift
+[45/57] Compiling GuanpanAdvisorCoreTests NextCrossMarketLoopTests.swift
+[46/57] Compiling GuanpanAdvisorCoreTests NextCrossMarketProfileTests.swift
+[47/57] Compiling GuanpanAdvisorCoreTests NextCrossMarketPulseTests.swift
+[48/57] Emitting module GuanpanAdvisorCoreTests
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[49/57] Compiling GuanpanAdvisorCoreTests NextMarketChainTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[50/57] Compiling GuanpanAdvisorCoreTests NextOpenAbsorptionTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[51/57] Compiling GuanpanAdvisorCoreTests NextPlanDataGateTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[52/57] Compiling GuanpanAdvisorCoreTests NextReplayFreezeTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[53/57] Compiling GuanpanAdvisorCoreTests NextSampleFreshnessTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[54/57] Compiling GuanpanAdvisorCoreTests NextSignalStatisticsTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+[55/57] Compiling GuanpanAdvisorCoreTests NextTRiskMathTests.swift
+/Users/runner/work/guanpan-advisor/guanpan-advisor/GuanpanNext/ios/Tests/NextOpenAbsorptionTests.swift:26:41: error: cannot use instance member 'shanghai' as a default parameter
+ 24 |     /// 引擎只读首尾，中间只为让序列像真的；只有第一根有 open（其余模拟分时 tick 无 open）。
+ 25 |     private func minuteBars(count: Int, firstOpen: Double, lastClose: Double,
+ 26 |                             day: Date = shanghai(2026, 10, 23, 0, 0)) -> [NextChartSample] {
+    |                                         `- error: cannot use instance member 'shanghai' as a default parameter
+ 27 |         var calendar = Calendar(identifier: .gregorian)
+ 28 |         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+error: fatalError
