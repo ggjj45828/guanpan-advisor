@@ -44,6 +44,12 @@
    - `GPSparkline` 遇 NaN/∞ 序列不画（非法坐标进 CoreGraphics 可能崩）；
    - 存储层 `applicationSupportDirectory.first!` → App Support → Documents → 临时目录三级兜底。
 9. **NAS 网页 AI 入口彻底拆除 + 死文件清理**：`market.html` 删「跑 AI 分析/验证 AI」按钮、`runAI()`/`verifyAI()`/`aiHtml()`、DeepSeek Key 提示（点下去打的是恒 410 的退役端点），改为「NAS 归档数据 · 只读」；删除已 410 的 `server/web/classic.html`（1.6 MB 死页面，仍含影子模拟网格 UI）。
+10. **「股息买入参考」改四项评分（回应「单看目标股息率到了不够」）**：`GuanpanAdvisorApp.swift` 的 `DividendAdviceCard` 不再用「目标价 +15% 以内可分批」单规则，改为复用 `DividendBuyScoreEngine`（股息率 40 / 价格位置 35 / 高点回撤 15 / 分红稳定 10）：
+    - 结论 = 综合分 + 档位（≥80 值得关注 / 60–79 可分批 / 40–59 观望 / <40 等待），detail 摊开四项得分；
+    - **日 K 缺失** → 标题直接写「数据不完整，暂不给买入倾向」，说明位置与回撤按 0 分计、只剩股息率一项有效，并提示先去行情页拉日 K；
+    - 日 K < 60 根 → 补「样本偏薄，仅供参考」；
+    - `目标买入价` 降为「仅作对照，不单独构成买入理由」；小节 trailing「推荐」→「四项评分」；
+    - 点「查询」走 `refreshInstrument`（内含 `refreshDaily`），所以首次查询就会带日 K，不会永远显示数据不完整。
 
 ## 3. 当前状态汇总
 

@@ -2409,7 +2409,9 @@ private struct DividendEventRow: View {
 /// 股息买入参考（收息页首卡）。口径对齐常见「股息率更新」表：
 ///   近12个月每份已核实派息 ÷ 现价 = 当前股息率
 ///   目标买入价 = 近12个月每份已核实派息 ÷ 目标股息率
-///   买入点参考「目标价 +15% 以内」（与该表备注一致）
+/// **结论不再由「目标价 +15% 以内」这类单一规则给出**（只看股息率会让人误读成"可以买"）：
+/// 改用与收息页「自选打分」完全相同的四项评分引擎——股息率 40 / 价格位置 35 / 高点回撤 15 / 分红稳定 10。
+/// 日 K 缺失时位置与回撤算不出来，此时明确说「数据不完整、暂不给买入倾向」，不用低分冒充判断。
 /// 只用已核实派息，不用推算值冒充；下次分红按最近一次除息月份外推，标注为预估。
 private struct DividendAdviceCard: View {
     @EnvironmentObject private var model: NextAppModel
@@ -2453,6 +2455,29 @@ private struct DividendAdviceCard: View {
         guard parts.count == 3, let year = Int(parts[0]), let month = Int(parts[1]) else { return nil }
         return "预计 \(year + 1) 年 \(month) 月前后（按最近除息日 \(last) 外推）"
     }
+    /// 这只标的的近 180 日（引擎只取这个窗口）日 K。没有就是没有，不做外推。
+    private var dailySamples: [NextChartSample] {
+        guard let code else { return [] }
+        return model.chartData["\(code):day"]?.orderedSamples ?? []
+    }
+    private var dailyBarCount: Int { dailySamples.filter { $0.close > 0 }.count }
+    /// 四项评分：与收息页「自选打分」共用同一引擎，避免出现两套互相打架的口径。
+    private var score: DividendBuyScore? {
+        guard let code else { return nil }
+        return DividendBuyScoreEngine.evaluate(code: code, perShare: perShare, price: quote?.price,
+                                               iopv: quote?.iopv, samples: dailySamples,
+                                               dividendEvents: events, today: dividendTodayString(),
+                                               targetYieldPercent: targetYield)
+    }
+    /// 价格位置的口径说明：有区间就写区间，没区间就说清是按 0 分计的。
+    private func positionNote(_ score: DividendBuyScore) -> String {
+        if let low = score.windowLow, let high = score.windowHigh {
+            return "近 180 日区间 ¥\(NextMoney.text(low, digits: 3))–¥\(NextMoney.text(high, digits: 3))，越靠下沿分越高"
+        }
+        return "缺近 180 日高低点，该项按 0 分计"
+    }
+    /// 结论只由四项评分推出。日 K 缺失时「位置」「回撤」都算不出来，
+    /// 只剩股息率一项——这种时候说"可以分批"就是误导，必须明确说数据不完整。
     private var advice: (headline: String, detail: String, tone: Color)? {
         guard code != nil else { return nil }
         guard let price = quote?.price, price > 0 else {
@@ -2461,23 +2486,36 @@ private struct DividendAdviceCard: View {
         guard perShare > 0 else {
             return ("近 12 个月没有已核实派息", "无法计算股息率与目标买入价；不会用推算值冒充已核实分红。", p.muted)
         }
-        guard let target = targetPrice, target > 0 else {
+        guard targetYield > 0 else {
             return ("先填目标股息率", "目标买入价 = 近12个月每份 ¥\(NextMoney.text(perShare, digits: 3)) ÷ 目标股息率。", p.muted)
         }
-        let premium = (price / target - 1) * 100
+        guard let score else {
+            return ("数据不完整，暂不给买入倾向", "缺现价或已核实派息，四项评分算不出来。", p.muted)
+        }
         let current = NextMoney.text(perShare / price * 100, digits: 3)
-        if price <= target {
-            return ("现价不高于目标买入价，值得关注", "当前股息率 \(current)%，已达到目标 \(NextMoney.text(targetYield, digits: 3))%。", p.jade)
+        if score.missing.contains(where: { $0.hasPrefix("日K") }) {
+            return ("数据不完整，暂不给买入倾向",
+                    "没有近 180 个交易日的日 K：价格位置与高点回撤两项算不出来（按 0 分计），只剩股息率 \(current)% 一项有效。先去行情页拉一次日 K 再看。",
+                    p.terracotta)
         }
-        if premium <= 15 {
-            return ("在目标价 +15% 以内，可分批", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 3))%。", p.chartGold)
+        let tone: Color
+        switch score.tier {
+        case .attention: tone = p.jade
+        case .batch: tone = p.chartGold
+        case .observe: tone = p.chartBlue
+        case .wait: tone = p.muted
         }
-        return ("高于目标价，建议等回落", "当前股息率 \(current)%，比目标买入价 ¥\(NextMoney.text(target, digits: 3)) 高 \(NextMoney.text(premium, digits: 3))%；价越低股息率越高。", p.terracotta)
+        var detail = "股息率 \(score.yieldPoints)/40 · 位置 \(score.positionPoints)/35 · 回撤 \(score.drawdownPoints)/15 · 稳定 \(score.stabilityPoints)/10。"
+        if dailyBarCount < 60 {
+            detail += "日 K 只有 \(dailyBarCount) 根（不足 60），位置与回撤的样本偏薄，分数仅供参考。"
+        }
+        detail += "四项只描述「现在贵不贵、分红稳不稳」，不预测涨跌，也不单独构成买入理由。"
+        return ("综合 \(score.total) 分 · \(score.tier.rawValue)", detail, tone)
     }
 
     var body: some View {
-        EditorialSection(title: "股息买入参考", trailing: "推荐", accent: p.chartGold) {
-            Text("输入代码查一只标的的股息率、目标买入价与下次分红预估。口径是近 12 个月已核实派息 ÷ 现价；买入点参考「目标价 +15% 以内」，不是下单建议。")
+        EditorialSection(title: "股息买入参考", trailing: "四项评分", accent: p.chartGold) {
+            Text("输入代码查一只标的的股息率、目标买入价与下次分红预估。结论用四项评分给出：股息率 40 · 价格位置 35 · 高点回撤 15 · 分红稳定 10（与收息页「自选打分」同一套算法）。日 K 缺失时位置与回撤算不出来，会直接说数据不完整、不给买入倾向。")
                 .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 TextField("输入 6 位代码，如 159941", text: $entry).keyboardType(.numberPad).textFieldStyle(.roundedBorder).submitLabel(.done)
@@ -2489,8 +2527,22 @@ private struct DividendAdviceCard: View {
                 GPDataRow(title: "现价", value: quote.map { "¥\(NextMoney.text($0.price, digits: 3))" } ?? "—", note: quote.map { "行情 \($0.time.formatted(date: .omitted, time: .shortened))" } ?? "点查询刷新行情")
                 GPDataRow(title: "近12个月每份派息（已核实）", value: perShare > 0 ? "¥\(NextMoney.text(perShare, digits: 3))" : "—", note: perShare > 0 ? "只统计已核实派息" : "无已核实记录")
                 GPDataRow(title: "当前股息率", value: yieldPercent.map { "\(NextMoney.text($0, digits: 3))%" } ?? "—", note: "每份派息 ÷ 现价")
-                GPDataRow(title: "目标买入价", value: targetPrice.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", note: "按目标股息率 \(NextMoney.text(targetYield, digits: 3))% 反推")
+                GPDataRow(title: "目标买入价", value: targetPrice.map { "¥\(NextMoney.text($0, digits: 3))" } ?? "—", note: "按目标股息率 \(NextMoney.text(targetYield, digits: 3))% 反推，仅作对照，不单独构成买入理由")
                 GPDataRow(title: "下次分红", value: nextDividendText ?? "—", note: "按历史除息月份外推，以基金公告为准")
+                if let score {
+                    Divider().overlay(p.line)
+                    GPDataRow(title: "综合评分", value: "\(score.total) 分 · \(score.tier.rawValue)",
+                              note: "四项相加；档位 ≥80 值得关注 · 60–79 可分批 · 40–59 观望 · <40 等待",
+                              valueColor: advice?.tone)
+                    GPDataRow(title: "① 股息率（40 分）", value: "\(score.yieldPoints)/40", note: "达到目标股息率拿满，按比例给分")
+                    GPDataRow(title: "② 价格位置（35 分）", value: "\(score.positionPoints)/35", note: positionNote(score))
+                    GPDataRow(title: "③ 高点回撤（15 分）", value: "\(score.drawdownPoints)/15", note: "相对近 180 日高点回撤 20% 拿满，跌得越深分越高")
+                    GPDataRow(title: "④ 分红稳定（10 分）", value: "\(score.stabilityPoints)/10", note: "近三年有已核实派息的年份：3 年 10 分 / 2 年 7 分 / 1 年 4 分")
+                    if !score.missing.isEmpty {
+                        Text("缺 \(score.missing.joined(separator: "、"))，该项按 0 分计——不拿中性分冒充。")
+                            .font(.caption2).foregroundStyle(p.terracotta).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 if let advice {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(advice.headline).font(.subheadline.weight(.semibold)).foregroundStyle(advice.tone)
