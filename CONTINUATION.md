@@ -31,16 +31,15 @@
 | 状态 | 数量 | 项 |
 |---|---|---|
 | ✅ Verified | 78 | 含 M3/M6 本轮翻绿 |
-| 🟡 Implemented/Not Verified | 0 | — |
-| 🟠 Partial | 3 | B1（端到端实机链）、D4（DataQuality 0–100 总分 UI）、J7（组件命名归拢） |
+| 🟡 Implemented/Not Verified | 1 | D4（DataQuality 0–100 总分 UI，代码已落地，待 Mac 编译验证） |
+| 🟠 Partial | 2 | B1（端到端实机链）、J7（组件命名归拢） |
 | ❌ Missing | 0 | — |
 | ⚠️ 外部验证必需 | 6 | K5 真机推送 / D1 实机多源 / G3 部分成交 / NAS 真实部署 / J8 极端字号 / B1 端到端链 |
 
 ## 4. Partial / Missing 明细与处置
 
 - **B1（端到端实机链）🟠**：源码链路各节点真实存在且相连（已逐节点核对，见矩阵 B1 行）。剩余仅是「真机/NAS 实跑验证」——**环境约束，无法在本轮完成**，留 ⚠️。
-- **D4（DataQuality 0–100 总分 UI）🟠**：`NextDataConfidence`（`NextAIGuide.swift:7`）有 `.assess()` + `.Level` 置信度体系，但无 0–100 聚合总分 UI。属可选增强。
-  - *建议实现*：在 `AIGuidanceViews.swift` 或首页加一个 `NextDataConfidence`→0–100 分数的 `GPScoreRing`/条；分数可由 `quoteAgeSeconds`/`quoteSource`/`dailyBarCount`/`minuteSampleCount` 加权。需 Mac 编译验证，**不可在 Windows 环境盲目改 Swift 以免破坏当前绿 CI**。
+- **D4（DataQuality 0–100 总分 UI）🟡 → 已实现（待 Mac 编译验证）**：本轮已落地——`NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（新文件 GPDataQualityScore.swift，绿/橙/红分档）注入 AIGuidanceViews.swift:128 的 AI 指导列表。出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，分数低不编挂单价。剩余仅「Mac 轮次 swift test + 截图验收」翻 ✅。
 - **J7（组件命名归拢）🟠**：组件以 `GP*` 前缀实现（`GPCard`/`GPStatTile`/`CandidatePlanRow`…），功能齐但命名未完全统一。可选整理，风险同上。
 
 ## 5. 环境约束（决定「本轮回什么、留什么」）
@@ -51,7 +50,8 @@
 
 ## 6. 下一步优先级（下一轮续做）
 
-1. **（高）D4 0–100 总分 UI**：在 Mac 环境实现并 `swift test` + 截图验收。
+1. **（高→已实现待验）D4 0–100 总分 UI**：代码已写（NextAIGuide.swift:32 + GPDataQualityScore.swift + AIGuidanceViews.swift:128 注入）。下一轮在 Mac 跑 `swift test` + 截图确认翻 ✅。
+1. **（中）旧文件全盘清理（本轮已完成）**：删除 `ios/UITests/NativeNavigationTests.swift` 的 `testGridPlanControlsAreVisibleInLaboratory`（断言已下线的「网格实验室/明日挂单表/虚拟账户」）+ `tabs` 数组残留的 `tab.laboratory`；删除过时 `previews/观盘Next-五页界面预览.svg`。保留项（非死代码，已核实）：`BackupDocument.swift` 账本导出、`NASService.downloadAndStageLegacyBook`/`legacyWebBaseURL` 旧网页账本迁移导入、`NextTab.overview/laboratory` 枚举（解码旧存档用）。
 2. **（高）B1 端到端实机链**：需真机 + NAS 真实部署后跑一遍全链（持仓→行情→NAS→新闻→画像→策略→风控→计划→AI→成交→复盘）。
 3. **（中）J7 组件命名归拢**：低风险整理，随 D4 一并做。
 4. **（中）⚠️ 外部项**：K5 真机推送 / D1 多源 / G3 部分成交 / NAS 部署 / J8 极端字号 —— 需真机或部署环境。

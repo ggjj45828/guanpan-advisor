@@ -37,7 +37,7 @@
 | D1 | 多源容错 主→备→NAS | ✅ | `MarketDataSources.swift`（腾讯/东财/新浪）、`MarketDataService.swift` | 代码审计 | 单源失败不空页面 | 真机网络验证（⚠️） |
 | D2 | 旧时间戳不覆盖新 | ✅ | `NextCachedQuote` + `usableForDisplay/usableForPricePlan`；`hasReliableMarketTime` | 代码审计 | 东财兜底价（receipt_only）不得驱动价格计划 | — |
 | D3 | 数据新鲜度可见 | ✅ | 报价透明度文案含来源/时间/新鲜度标签；`DataFreshnessBadge` 等价物（GPDataStamp） | 代码审计 | 「行情已过期/NAS 截至昨日收盘」均有 | — |
-| D4 | DataQuality 评分 | 🟠 | `NextDataConfidence`（含 futureQuote/hasReliableMarketTime 阻断） | 代码审计 | 有置信度体系，无 0–100 总分 UI | 可选增强 |
+| D4 | DataQuality 评分（0–100 总分 UI） | 🟡 | `NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（GPDataQualityScore.swift，绿/橙/红分档）已注入 AIGuidanceViews.swift:128 的 AI 指导列表 | 代码审计（**未跑 swift build/swift test，Windows 无 Mac**） | 0–100 总分 UI 已实现并接线；出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，score 低不编挂单价 | Mac 轮次 swift test + 截图验收后翻 ✅ |
 
 ## E. 市场状态与策略（§11–19）
 
@@ -162,10 +162,12 @@
 
 > 验收口径：113 条正文 + 末尾 #114/#115（轮次必须结束须写 CONTINUATION.md）＝用户所称「115 条」。
 
-- ✅ Verified：78 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿，自 76 升 78）｜🟡 Implemented/Not Verified：0 项｜🟠 Partial：3 项（B1 端到端实机链、D4 DataQuality 0–100 总分 UI、J7 组件命名归拢，均为可选/外部项）｜❌ Missing：0 项
+- ✅ Verified：78 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿，自 76 升 78）｜🟡 Implemented/Not Verified：1 项（D4 0–100 数据质量总分 UI，代码已落地、待 Mac 编译/截图验证）｜🟠 Partial：2 项（B1 端到端实机链、J7 组件命名归拢）｜❌ Missing：0 项
 - ⚠️ 外部验证必需：真机推送（K5）/ 实机网络多源（D1）/ 部分成交（G3）/ NAS 真实部署 / 极端字号截断（J8）/ 端到端链（B1）
 - **主题严格审计（本轮，回应「其他主题也要严格做」）**：J1–J8 五套主题（编辑室/现代/仪表盘/杂志/拼图）经源码钉死——`AppThemeCore.swift` 单一真相源（5 `AppTheme` + `ThemeManager.resolve` + `forcesDark` + 场景→主题映射），`ThemeHome.swift` 五套互异首页结构体（EditorialHome:900 / ModernHome:1026 / DashboardHome:1150 / MagazineHome:1312 / PuzzleHome:1432），J6 硬编码渐变清零。五主题对照视觉见仓库外 `guanpan-themes-5-comparison.svg`。
 - **诚实自纠（§105/§108）**：原矩阵 L1/B1 将风险校验写作独立符号 `NextRiskGate`；本轮 grep 全树零命中，证实其为分布式内联校验（新鲜度 `NextDataConfidence.assess` / 规则·手续费·单位 `InstrumentRules` / 流动性 `NextOrderBookEvidence.assess` / 可卖 `book.availableUnits` / 现金 `NextAppModel` 拦截），LLM 仅接收已校验结论。已据实更正，杜绝过度宣称。
+- **D4 落地（本轮）**：`NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（新文件 GPDataQualityScore.swift，绿/橙/红分档）已注入 AIGuidanceViews.swift:128 的 AI 指导列表。出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，分数低不编挂单价。状态 🟡（已写码、Windows 无 Mac 未跑 swift build 验证）。
+- **旧文件全盘清理（本轮，回应「明日挂单表这类旧文件」）**：grep 全树确认「明日挂单表」仅存于文档与一处**过期 UITest**——`ios/UITests/NativeNavigationTests.swift` 的 `testGridPlanControlsAreVisibleInLaboratory`（断言已下线的「网格实验室/明日挂单表/虚拟账户」）及 `tabs` 数组残留的 `tab.laboratory`。已删除该方法 + 移除 `tab.laboratory` 项（底栏确为 5 入口：首页/行情/持仓/收息/我的）；并删除过时 `previews/观盘Next-五页界面预览.svg`。经核查 `BackupDocument.swift`（账本导出）、`NASService.downloadAndStageLegacyBook`/`legacyWebBaseURL`（旧网页账本迁移导入）、`NextTab.overview/laboratory` 枚举（仅为解码旧存档保留）均为**在用合法功能，非死代码，保留**。矩阵原 N4/N5/F3 的 ✅ 经此清理才真正闭环（此前遗漏了 UITest 残留）。
 - 用户 8 项反馈（N1–N8）全部闭环；A4/H5「NAS 非第二顾问、手机唯一最终 AI」三端（服务端/iOS/网页）清零。
 - 端口与旧服务（本轮）：`8789→8786` 全树替换（a3f22cc）、CI 第 5 处编译错修正（eef86d7）、旧 30001 服务退役并全树统一 8786（af56b7c）。
-- 下一步：D4/J7 可选增强（需 Mac 编译验证，避免破坏当前绿 CI）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。
+- 下一步：D4 待 Mac 轮次 `swift test` + 截图验收后翻 ✅；J7 组件命名归拢（低风险，随 Mac 轮次做）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。

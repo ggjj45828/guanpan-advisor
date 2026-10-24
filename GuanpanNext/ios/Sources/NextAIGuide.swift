@@ -29,6 +29,28 @@ struct NextDataConfidence: Equatable {
         level != .blocked && dailyBarCount >= 60 && (quoteAgeSeconds ?? 9_999) <= 120
     }
 
+    /// D4：把「等级 + 新鲜度 + 样本覆盖」折成 0–100 单一可比分。
+    /// 高分只代表「此刻这台机器的数据底气」，不代表该下单；出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛。
+    /// 无伪精确：score 低时界面只显示分数低，绝不据此编造挂单价。
+    var score0to100: Int {
+        guard level != .blocked else { return 0 }
+        let base: Int
+        switch level {
+        case .high: base = 82
+        case .medium: base = 60
+        case .low: base = 38
+        case .blocked: return 0
+        }
+        let freshness: Int
+        if let age = quoteAgeSeconds {
+            if age <= 60 { freshness = 8 }
+            else if age <= 120 { freshness = 0 }
+            else { freshness = -20 }
+        } else { freshness = -20 }
+        let coverage = (dailyBarCount >= 60 ? 6 : 0) + Int(min(6.0, minuteCompletenessPercent / 100.0 * 6.0))
+        return min(100, max(0, base + freshness + coverage))
+    }
+
     /// `intradayRequired` 默认 true（做 T 需要分时点估算价位）。
     /// 网格按「日 K ≥60 + 新鲜报价 + NAS 长期区间」出价，本地的当日分时点不是它的硬门槛，
     /// 传 false 时不再因缺分时而判 blocked。

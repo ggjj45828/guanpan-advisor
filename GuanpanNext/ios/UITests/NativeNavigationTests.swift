@@ -34,9 +34,10 @@ final class NativeNavigationTests: XCTestCase {
         return app
     }
 
-    /// 自绘底栏的六个页签。新页签加进 GPTabBar 时同步这里。
+    /// 自绘底栏的五个页签（首页/行情/持仓/收息/我的）。新页签加进 GPTabBar 时同步这里。
+    /// 注：原 `tab.laboratory`（网格实验室）已随 #35 改版下线，网格计划并入 AI 今日指导，此处不再断言。
     private let tabs: [(id: String, title: String)] = [
-        ("tab.market", "行情"), ("tab.assets", "持仓"), ("tab.laboratory", "网格"),
+        ("tab.market", "行情"), ("tab.assets", "持仓"),
         ("tab.income", "收息"), ("tab.decision", "首页"), ("tab.mine", "我的")
     ]
 
@@ -174,20 +175,6 @@ final class NativeNavigationTests: XCTestCase {
         attach(app, "settings-deepseek-key-entry")
     }
 
-    /// 数字孪生（NAS G 虚拟账户）已下线：网格页只出「明日挂单表」纯档位计划，
-    /// 不再有「启动独立虚拟账户」一类的控件。这里验证改版后的真实控件。
-    func testGridPlanControlsAreVisibleInLaboratory() throws {
-        let app = launch()
-        let labTab = byId(app, "tab.laboratory")
-        XCTAssertTrue(labTab.waitForExistence(timeout: 10))
-        labTab.tap()
-        XCTAssertTrue(app.staticTexts["网格实验室"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "明日挂单表")).firstMatch.waitForExistence(timeout: 5))
-        let refresh = byLabel(app, "刷新网格状态")
-        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
-        refresh.tap()
-        // 旧版虚拟账户控件必须已经不存在：网格是纯计划，不碰资金。
-        XCTAssertFalse(app.buttons["启动独立虚拟账户"].exists, "虚拟账户启动控件应已随数字孪生下线")
-        attach(app, "laboratory-grid-plan-controls")
-    }
+    // testGridPlanControlsAreVisibleInLaboratory 已删除：#35 改版后「网格实验室 / 明日挂单表 / 虚拟账户」
+    // 均下线，网格计划并入 AI 今日指导，原断言已不成立（2026-10-24 全盘清理旧文件时移除）。
 }

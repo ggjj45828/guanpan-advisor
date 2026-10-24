@@ -125,6 +125,7 @@ struct AIGuidanceSection: View {
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 4) {
+                        GPDataQualityScore(confidence: item.confidence)
                         Text(item.confidence.level.rawValue)
                             .font(.system(size: 9, weight: .semibold))
                             .padding(.horizontal, 6).padding(.vertical, 2.5)
