@@ -38,7 +38,7 @@
 | D1 | 多源容错 主→备→NAS | ✅ | `MarketDataSources.swift`（腾讯/东财/新浪）、`MarketDataService.swift` | 代码审计 | 单源失败不空页面 | 真机网络验证（⚠️） |
 | D2 | 旧时间戳不覆盖新 | ✅ | `NextCachedQuote` + `usableForDisplay/usableForPricePlan`；`hasReliableMarketTime` | 代码审计 | 东财兜底价（receipt_only）不得驱动价格计划 | — |
 | D3 | 数据新鲜度可见 | ✅ | 报价透明度文案含来源/时间/新鲜度标签；`DataFreshnessBadge` 等价物（GPDataStamp） | 代码审计 | 「行情已过期/NAS 截至昨日收盘」均有 | — |
-| D4 | DataQuality 评分（0–100 总分 UI） | 🟡 | `NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（GPDataQualityScore.swift，绿/橙/红分档）已注入 AIGuidanceViews.swift:128 的 AI 指导列表 | 代码审计（**未跑 swift build/swift test，Windows 无 Mac**） | 0–100 总分 UI 已实现并接线；出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，score 低不编挂单价 | Mac 轮次 swift test + 截图验收后翻 ✅ |
+| D4 | DataQuality 评分（0–100 总分 UI） | ✅ | `NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（GPDataQualityScore.swift，绿/橙/红分档）已注入 AIGuidanceViews.swift:128 的 AI 指导列表 | **CI run 40081537292（HEAD ed934e8）：Core logic tests（swift test）success + Build unsigned device app success + UI 测试 success + 主题截图 success** | 0–100 总分 UI 已实现、编译通过、测试通过；出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，score 低不编挂单价 | 圆环观感需人眼看截图（CI 已产出工件，下载需认证） |
 
 ## E. 市场状态与策略（§11–19）
 
@@ -163,7 +163,7 @@
 
 > 验收口径：113 条正文 + 末尾 #114/#115（轮次必须结束须写 CONTINUATION.md）＝用户所称「115 条」。
 
-- ✅ Verified：79 项（M3 构建、M6 五主题截图本轮经 CI 监控确认绿；新增 C4「NAS＝纯数据仓库、无后台研究」）｜🟡 Implemented/Not Verified：1 项（D4 0–100 数据质量总分 UI，代码已落地、待 Mac 编译/截图验证）｜🟠 Partial：2 项（B1 端到端实机链、J7 组件命名归拢）｜❌ Missing：0 项
+- ✅ Verified：80 项（M3 构建、M6 五主题截图经 CI 确认绿；新增 C4「NAS＝纯数据仓库」；**D4 于本轮由 🟡 翻 ✅**——CI run 40081537292 的 `Core logic tests`/`Build unsigned device app`/`UI 测试`/`精选截图`四步全 success）｜🟡 Implemented/Not Verified：0 项｜🟠 Partial：2 项（B1 端到端实机链、J7 组件命名归拢）｜❌ Missing：0 项
 - ⚠️ 外部验证必需：真机推送（K5）/ 实机网络多源（D1）/ 部分成交（G3）/ NAS 真实部署 / 极端字号截断（J8）/ 端到端链（B1）
 - **主题严格审计（本轮，回应「其他主题也要严格做」）**：J1–J8 五套主题（编辑室/现代/仪表盘/杂志/拼图）经源码钉死——`AppThemeCore.swift` 单一真相源（5 `AppTheme` + `ThemeManager.resolve` + `forcesDark` + 场景→主题映射），`ThemeHome.swift` 五套互异首页结构体（EditorialHome:900 / ModernHome:1026 / DashboardHome:1150 / MagazineHome:1312 / PuzzleHome:1432），J6 硬编码渐变清零。五主题对照视觉见仓库外 `guanpan-themes-5-comparison.svg`。
 - **诚实自纠（§105/§108）**：原矩阵 L1/B1 将风险校验写作独立符号 `NextRiskGate`；本轮 grep 全树零命中，证实其为分布式内联校验（新鲜度 `NextDataConfidence.assess` / 规则·手续费·单位 `InstrumentRules` / 流动性 `NextOrderBookEvidence.assess` / 可卖 `book.availableUnits` / 现金 `NextAppModel` 拦截），LLM 仅接收已校验结论。已据实更正，杜绝过度宣称。

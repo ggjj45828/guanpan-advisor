@@ -2,7 +2,7 @@
 
 > 本文件依《完整开发、重构、测试与验收总要求》#114/#115 写入：若执行轮次必须结束，把完整状态写于此，下一轮从此续做。
 > 写入时间：2026-10-24（GMT+8）｜仓库根：`guanpan_next/`｜当前 HEAD：见 `git log -1`（本轮追加：NAS 取消后台研究）
-> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（79✅/1🟡/2🟠/0❌）。
+> 详细逐项矩阵见 `GuanpanNext/MASTER-ACCEPTANCE-MATRIX.md`（80✅/0🟡/2🟠/0❌）。
 
 ---
 
@@ -50,7 +50,7 @@
 | 状态 | 数量 | 项 |
 |---|---|---|
 | ✅ Verified | 79 | 含 M3/M6 本轮翻绿 + 新增 C4（NAS＝纯数据仓库、无后台研究） |
-| 🟡 Implemented/Not Verified | 1 | D4（DataQuality 0–100 总分 UI，代码已落地，待 Mac 编译验证） |
+| 🟡 Implemented/Not Verified | 0 | —（D4 已于 CI run 40081537292 编译+测试通过后翻 ✅） |
 | 🟠 Partial | 2 | B1（端到端实机链）、J7（组件命名归拢） |
 | ❌ Missing | 0 | — |
 | ⚠️ 外部验证必需 | 6 | K5 真机推送 / D1 实机多源 / G3 部分成交 / NAS 真实部署 / J8 极端字号 / B1 端到端链 |
@@ -58,7 +58,7 @@
 ## 4. Partial / Missing 明细与处置
 
 - **B1（端到端实机链）🟠**：源码链路各节点真实存在且相连（已逐节点核对，见矩阵 B1 行）。剩余仅是「真机/NAS 实跑验证」——**环境约束，无法在本轮完成**，留 ⚠️。
-- **D4（DataQuality 0–100 总分 UI）🟡 → 已实现（待 Mac 编译验证）**：本轮已落地——`NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（新文件 GPDataQualityScore.swift，绿/橙/红分档）注入 AIGuidanceViews.swift:128 的 AI 指导列表。出价仍走 canPriceTPlan/canPriceGridPlan 硬门槛，分数低不编挂单价。剩余仅「Mac 轮次 swift test + 截图验收」翻 ✅。
+- **D4（DataQuality 0–100 总分 UI）✅ 已翻绿（2026-10-24 17:35）**：`NextDataConfidence.score0to100`（NextAIGuide.swift:32，纯计算：等级基分 82/60/38 + 新鲜度 ±8/−20 + 样本覆盖 ±6，blocked=0）＋ `GPDataQualityScore` 环形视图（GPDataQualityScore.swift，绿/橙/红分档）注入 AIGuidanceViews.swift:128。**编译验证已拿到**：CI run `40081537292`（HEAD `ed934e8`）四步全 success——`Core logic tests`（swift test）、`Build unsigned device app`、`UI navigation and gesture tests`、`Capture theme screenshots`。换言之本轮重写的 `AIAnswerView` 与三处闪退修复也一并编译/测试通过。剩余只是圆环的观感需人眼看截图（工件在 Actions，下载需认证）。
 - **J7（组件命名归拢）🟠**：组件以 `GP*` 前缀实现（`GPCard`/`GPStatTile`/`CandidatePlanRow`…），功能齐但命名未完全统一。可选整理，风险同上。
 
 ## 5. 环境约束（决定「本轮回什么、留什么」）
