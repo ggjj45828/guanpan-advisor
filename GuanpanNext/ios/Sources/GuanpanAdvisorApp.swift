@@ -843,6 +843,24 @@ private struct DecisionScreen: View {
         let yieldPercent: Double?
         let suggestion: String
     }
+    @ViewBuilder private func inspectRow(_ r: InspectHolding) -> some View {
+        let yldText = r.yieldPercent.map { "股息率 \(NextMoney.text(Decimal($0), digits: 3))%" } ?? "股息率 —"
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(r.name) · \(r.code)").font(.subheadline.weight(.medium)).foregroundStyle(p.ink)
+                Text("占比 \(NextMoney.text(Decimal(r.weight * 100), digits: 0))% · 浮动 \(r.pnlPercent >= 0 ? "+" : "")\(NextMoney.text(Decimal(r.pnlPercent), digits: 3))% · \(yldText)")
+                    .font(.caption2).foregroundStyle(p.muted)
+            }
+            Spacer(minLength: 4)
+            GPPillBadge(text: r.suggestion, color: suggestionColor(r.suggestion))
+        }.padding(.vertical, 6).overlay(alignment: .bottom) { Rectangle().fill(p.line.opacity(0.6)).frame(height: 0.5) }
+    }
+    private func suggestionColor(_ s: String) -> Color {
+        if s.contains("偏重") { return p.risk }
+        if s.contains("达标") { return p.jade }
+        if s.contains("深跌") { return p.chartGold }
+        return p.muted
+    }
     /// 账户体检：按报告方法论，先看账户（集中度、现金覆盖），再看单只资产，最后看执行。
     private func runInspection() {
         inspecting = true

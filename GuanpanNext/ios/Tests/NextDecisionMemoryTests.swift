@@ -203,7 +203,12 @@ final class NextDecisionMemoryTests: XCTestCase {
                               previousClose: Decimal(string: "1.396")!, time: now, source: "test")
         let result = NextTradeTPlanner.plan(kind: .reverse, book: book, quote: quote, daily: dailyBars(),
                                             intraday: oscillatingMinutes(), rules: rules(),
-                                            caps: NextPlanCaps(maxTUnits: 2000, tUnitsNote: "测试上限"),
+                                            orderBook: orderBook(),
+                                            caps: NextPlanCaps(maxTUnits: 2000, tUnitsNote: "测试上限",
+                                                               nasDays: 60, nasVolumeCoverage60: 0.92,
+                                                               nasVwapHighDeviation60: 0.008,
+                                                               nasVwapLowDeviation60: -0.007,
+                                                               nasRoundTrips60: 2.4),
                                             now: now)
         guard case let .ready(plan) = result else {
             return XCTFail("反T 应能出价：\(result)")
@@ -225,7 +230,10 @@ final class NextDecisionMemoryTests: XCTestCase {
                                   reasons: ["区间震荡"], warnings: [])
         let result = NextGridPlanner.plan(book: book, quote: quote, daily: dailyBars(), gridCheck: check,
                                           rules: rules(),
-                                          nasRange: nil,
+                                          nasRange: NextNasRange(low: Decimal(string: "1.3600")!,
+                                                                 high: Decimal(string: "1.4400")!,
+                                                                 days: 60, source: "fixture"),
+                                          orderBook: orderBook(),
                                           caps: NextPlanCaps(maxGridTiers: 2, maxGridCash: Decimal(string: "15000"),
                                                              gridNotes: ["资金封顶 15%"]),
                                           now: now)
@@ -238,6 +246,15 @@ final class NextDecisionMemoryTests: XCTestCase {
     }
 
     // MARK: - 夹具构造
+
+    /// 五档盘口夹具：围绕 1.400 现价，价差约 0.14%，买卖合计深度过百手。
+    private func orderBook() -> NextOrderBookSnapshot {
+        let bids: [(Double, Int)] = [(1.399, 1500), (1.398, 1800), (1.397, 2000), (1.396, 2200), (1.395, 2500)]
+        let asks: [(Double, Int)] = [(1.401, 1500), (1.402, 1800), (1.403, 2000), (1.404, 2200), (1.405, 2500)]
+        return NextOrderBookSnapshot(code: "159941", observedAt: now.addingTimeInterval(-5), source: "fixture",
+                                     bids: bids.map { NextBookLevel(price: Decimal(string: String(format: "%.3f", $0.0))!, units: $0.1) },
+                                     asks: asks.map { NextBookLevel(price: Decimal(string: String(format: "%.3f", $0.0))!, units: $0.1) })
+    }
 
     private func rules() -> NextInstrumentRules {
         NextInstrumentRules(code: "159941", market: "SZ", assetClass: .etf, settlement: .t0, lotSize: 100,

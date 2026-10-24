@@ -55,17 +55,28 @@ final class NextChainScenarioTests: XCTestCase {
         (0..<120).map { [1.388, 1.412, 1.400][$0 % 3] }
     }
 
+    /// 五档盘口夹具：五档有效、价差约 0.14%、买卖合计深度过百手、observedAt 在 30 秒内。
+    private func orderBook() -> NextOrderBookSnapshot {
+        let bids: [(Double, Int)] = [(1.399, 1500), (1.398, 1800), (1.397, 2000), (1.396, 2200), (1.395, 2500)]
+        let asks: [(Double, Int)] = [(1.401, 1500), (1.402, 1800), (1.403, 2000), (1.404, 2200), (1.405, 2500)]
+        return NextOrderBookSnapshot(code: code, observedAt: now.addingTimeInterval(-5), source: "fixture",
+                                     bids: bids.map { NextBookLevel(price: Decimal(string: String(format: "%.3f", $0.0))!, units: $0.1) },
+                                     asks: asks.map { NextBookLevel(price: Decimal(string: String(format: "%.3f", $0.0))!, units: $0.1) })
+    }
+
     private func scan(_ scanBook: NextBook, quote q: NextQuote, daily: [NextChartSample],
                       intraday: [NextChartSample], research: [String: NextNASResearch] = [:],
                       news: [String: [NextNewsInput]] = [:],
-                      profile: NextInvestorProfile? = nil) -> NextDailyGuidance {
+                      profile: NextInvestorProfile? = nil,
+                      orderBooks: [String: NextOrderBookSnapshot] = [:]) -> NextDailyGuidance {
         NextOpportunityScanner.scan(book: scanBook, quotes: [code: q], daily: [code: daily],
                                     intraday: [code: intraday], rules: [code: rules()],
+                                    orderBooks: orderBooks,
                                     goal: NextGoal(), nasAvailable: !research.isEmpty,
                                     profile: profile, research: research, news: news, now: now)
     }
 
-    private func research(days: Int = 20, amplitude: Double = 1.6, roundTrips: Double = 2.4,
+    private func research(days: Int = 60, amplitude: Double = 1.6, roundTrips: Double = 2.4,
                           stale: Bool = false) -> NextNASResearch {
         let window = NextNASMinuteStats.Window(window: 60, daysUsed: days, dayCoverage: 1,
                                               minuteCoverage: 0.95, vwap: "1.3990",
@@ -74,7 +85,10 @@ final class NextChainScenarioTests: XCTestCase {
                                               roundTripsMedian: roundTrips,
                                               support: "1.3600", resistance: "1.4400",
                                               supportP10: "1.3700", resistanceP90: "1.4300",
-                                              volatilityPercent: 1.1)
+                                              volatilityPercent: 1.1,
+                                              vwapHighDeviationMedian: 0.008,
+                                              vwapLowDeviationMedian: -0.007,
+                                              volumeCoverage: 0.92)
         let short = NextNASMinuteStats.Window(window: 20, daysUsed: min(days, 20), dayCoverage: 1,
                                               minuteCoverage: 0.95, vwap: "1.3990",
                                               closeVsVwapPercent: 0.35,
@@ -85,7 +99,7 @@ final class NextChainScenarioTests: XCTestCase {
                                               volatilityPercent: 1.0)
         let stats = NextNASMinuteStats(days: days, minutes: days * 240, lastDay: "2026-10-22",
                                        quality: .init(days: days, minuteCoverage: 0.95, hasVolume: true,
-                                                      enoughForLongTerm: days >= 5),
+                                                      enoughForLongTerm: days >= 60, volumeCoverage: 0.92),
                                        freshness: .init(lastDay: "2026-10-22", ageMinutes: 120,
                                                         isToday: true, stale: stale,
                                                         reason: stale ? "最后一条分时超过一天" : nil),
@@ -116,7 +130,7 @@ final class NextChainScenarioTests: XCTestCase {
         let closes = oscillatingCloses()
         let intraday = minutes((0..<60).map { [1.386, 1.412, 1.387, 1.413, 1.388, 1.414][$0 % 6] })
         let guidance = scan(book(), quote: quote(price: 1.400), daily: bars(closes),
-                            intraday: intraday, research: [code: research()])
+                            intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
         let item = try! XCTUnwrap(guidance.items.first)
         XCTAssertEqual(item.state, .wideRange, item.whyToday.joined(separator: " | "))
         XCTAssertEqual(item.strategy, .tTrade)
@@ -143,9 +157,9 @@ final class NextChainScenarioTests: XCTestCase {
         let intraday = minutes((0..<60).map { 1.390 + Double($0) * 0.0003 })
         // 同一段区间，只把日均振幅从 1.2% 调到 1.8%：档数与间距都必须跟着变。
         let narrow = scan(book(), quote: quote(price: 1.400), daily: bars(oscillatingCloses(), bandPercent: 0.6),
-                          intraday: intraday)
+                          intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
         let wide = scan(book(), quote: quote(price: 1.400), daily: bars(oscillatingCloses(), bandPercent: 0.9),
-                        intraday: intraday)
+                        intraday: intraday, research: [code: research()], orderBooks: [code: orderBook()])
         let item = try! XCTUnwrap(narrow.items.first)
         XCTAssertEqual(item.strategy, .grid, item.whyToday.joined(separator: " | "))
         guard case let .ready(planNarrow)? = item.gridPlan else {
@@ -220,9 +234,11 @@ final class NextChainScenarioTests: XCTestCase {
                                           basis: ["用户设定"], updatedAt: now))
         let closes = oscillatingCloses()
         let intraday = minutes((0..<60).map { [1.386, 1.412, 1.387, 1.413, 1.388, 1.414][$0 % 6] })
-        let plain = scan(book(), quote: quote(price: 1.400), daily: bars(closes), intraday: intraday)
+        let plain = scan(book(), quote: quote(price: 1.400), daily: bars(closes), intraday: intraday,
+                         research: [code: research()], orderBooks: [code: orderBook()])
         let withProfile = scan(book(), quote: quote(price: 1.400), daily: bars(closes),
-                               intraday: intraday, profile: profile)
+                               intraday: intraday, profile: profile,
+                               research: [code: research()], orderBooks: [code: orderBook()])
         let a = try! XCTUnwrap(plain.items.first)
         let b = try! XCTUnwrap(withProfile.items.first)
         guard case let .ready(pa) = a.tPlan!, case let .ready(pb) = b.tPlan! else {
