@@ -252,6 +252,28 @@ class CrossMarketEndpointTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("error", body)
 
+    def test_minutes_endpoint_returns_multiple_days_in_one_request(self):
+        """146 回放要连续 30+ 天分钟线：一次给全，不是一天一个请求。"""
+        rows = []
+        for day in ("2026-10-20", "2026-10-21"):
+            base = datetime.fromisoformat(f"{day}T09:31:00").replace(tzinfo=SH)
+            for index in range(3):
+                rows.append({"timestamp": (base + timedelta(minutes=index)).isoformat(),
+                             "price": f"{1 + index / 1000:.3f}", "volume": str(1000 + index), "iopv": None})
+        self.db.put_minute("159941", rows, datetime.now(timezone.utc).isoformat())
+        status, body = self.get("/v1/market/minutes/159941?days=60")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["dayCount"], 2)
+        self.assertEqual(body["points"], 6)
+        self.assertIn("2026-10-20", body["series"])
+        self.assertNotIn("minuteStats", body, "这个入口只回行情，不能夹带统计结论")
+
+    def test_minutes_endpoint_rejects_bad_window(self):
+        for query in ("days=0", "days=999", "days=abc"):
+            status, body = self.get(f"/v1/market/minutes/159941?{query}")
+            self.assertEqual(status, 400, query)
+            self.assertIn("error", body)
+
 
 if __name__ == "__main__":
     unittest.main()

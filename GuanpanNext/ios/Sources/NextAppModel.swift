@@ -1161,6 +1161,50 @@ struct LocalPreferences: Codable {
                                               pulse: crossMarketPulse)
     }
 
+    // MARK: - 146 历史回放验证器
+
+    /// 最近一次回放报告（按标的）。没有就是没跑过，界面显示「还没验证」。
+    @Published private(set) var replayReports: [String: NextReplayReport] = [:]
+    @Published private(set) var replayRunning = false
+
+    /// 跑一次回放：取 NAS 上的多日分钟线 + 已归档的海外快照，逐日回放。
+    ///
+    /// 这个函数**不产生任何交易建议**：它只回答「12:50 那一刻看到的证据，后来被证实了没有」。
+    /// 数据不足时报告自己会写「没有稳定领先关系」，界面照抄，不做二次美化。
+    func runReplayLab(for code: String, days: Int = 60, rule: NextReplayHypothesisRule = .lunchRepair) async {
+        guard !preferences.nasBaseURL.isEmpty, nasLinkState.isOnline else {
+            notice = "回放需要 NAS 在线：多日分钟线只存在 NAS 上，本机只有今天的分时。"
+            return
+        }
+        guard let archive = crossMarketArchive, archive.totalPoints > 0 else {
+            notice = "还没有跨市场归档，无法验证「日韩领先」这条经验。等 NAS 攒够数据再跑。"
+            return
+        }
+        guard !replayRunning else { return }
+        let base = preferences.nasBaseURL
+        replayRunning = true
+        defer { replayRunning = false }
+        do {
+            let local = try await NextNASService.readMinuteSeries(baseURL: base, code: code, days: days)
+            guard preferences.nasBaseURL == base else { return }
+            guard local.count > 0 else {
+                notice = "NAS 上还没有 \(code) 的多日分时归档，回放无法开始。"
+                return
+            }
+            let material = NextReplayAssembler.days(code: code, name: NextNameBook.resolve(code),
+                                                    localMinutes: local, archive: archive)
+            guard !material.isEmpty else {
+                notice = "分时不足两个交易日，取不到「上一交易日收盘价」，回放会产生假的跳空结论，因此不做。"
+                return
+            }
+            let report = NextReplayEngine.run(days: material, rule: rule)
+            replayReports[code] = report
+            notice = "回放完成：\(report.results.count) 个交易日，结论见报告。"
+        } catch {
+            notice = "回放失败：\(error.localizedDescription)"
+        }
+    }
+
     /// 轻量连通性检测：**只请求很小的 `/health`**，绝不碰账本接口。
     /// `force = true` 用于用户点「测试连接 / 重新检查」；首页自动检测按 45 秒节流。
     /// 返回 nil 表示本次被节流或已有检测在飞。

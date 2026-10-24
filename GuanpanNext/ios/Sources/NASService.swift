@@ -459,6 +459,37 @@ enum NextNASService {
             return NextQuote(code: code, name: name, price: price, previousClose: previous, time: date, source: source, iopv: parsedIOPV, providerInstrumentType: providerInstrumentType, timeQuality: timeQuality)
         }
     }
+    /// 读多日原始分时（回放验证器 146 的本地素材）。
+    /// 一次请求取回连续 N 天，而不是一天一个请求：过隧道 30–60 次又慢又容易断。
+    static func readMinuteSeries(baseURL: String, code: String, days: Int = 60,
+                                 session: URLSession = .shared) async throws -> [NextMarketPoint] {
+        let url = try validateURL(baseURL)
+            .appendingPathComponent("v1").appendingPathComponent("market")
+            .appendingPathComponent("minutes").appendingPathComponent(code)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
+        guard let requestURL = components?.url else { throw NextError.invalid("NAS 分时地址无效") }
+        let (data, response) = try await session.data(for: URLRequest(url: requestURL, timeoutInterval: 30))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NextError.invalid("NAS 历史分时读取失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
+        }
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let series = root["series"] as? [String: Any] else {
+            throw NextError.invalid("NAS 历史分时结构不认识")
+        }
+        var points: [NextMarketPoint] = []
+        for day in series.keys.sorted() {
+            guard let rows = series[day] as? [[String: Any]] else { continue }
+            for row in rows {
+                guard let stampText = row["timestamp"] as? String,
+                      let stamp = NextCrossMarketFeed.date(from: stampText),
+                      let price = NextCrossMarketFeed.double(row["price"]), price > 0 else { continue }
+                points.append(NextMarketPoint(timestamp: stamp, value: price))
+            }
+        }
+        return points.sorted { $0.timestamp < $1.timestamp }
+    }
+
     private static func endpoint(_ baseURL: String) throws -> URL {
         try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("real").appendingPathComponent("books").appendingPathComponent("main")
     }

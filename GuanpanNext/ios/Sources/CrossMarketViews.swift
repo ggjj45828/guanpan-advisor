@@ -134,3 +134,159 @@ struct GPAbroadImpactSection: View {
             .stroke(p.line.opacity(0.5), lineWidth: 0.8))
     }
 }
+
+// MARK: - 146 历史回放验证器（研究工具，不是模拟账户）
+//
+// 这个页面只说一件事：把某一天 12:50 之前能看到的证据交给规则，等 13:00 之后的真实行情出来，
+// 看那条假设有没有被证实。所以它没有份额、没有成本、没有盈亏——**它不是一个账户**。
+// 结论由 `NextReplayEngine` 给，页面照抄：数据不够时就显示「没有稳定领先关系」。
+
+struct GPReplayLabView: View {
+    @EnvironmentObject private var model: NextAppModel
+    @Environment(\.gp) private var p
+    @Environment(\.dismiss) private var dismiss
+    let code: String
+    @State private var days = 60
+
+    private var report: NextReplayReport? { model.replayReports[code] }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    intro
+                    controls
+                    if let report {
+                        verdictCard(report)
+                        dayList(report)
+                    } else {
+                        emptyHint
+                    }
+                }
+                .padding(14)
+            }
+            .background(p.canvas)
+            .navigationTitle("历史回放验证")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { dismiss() }.foregroundStyle(p.primary)
+                }
+            }
+        }
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("这条规矩会被这样检验")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(p.ink)
+            Text("每个交易日只允许看到 12:50 之前的行情：若海外午休期间在修复、且 A股 上午已经下跌，就提出「午后修复」的假设；再把 13:00 之后的真实行情放出来，看 A股 有没有站回上午收盘价。")
+                .font(.system(size: 11)).foregroundStyle(p.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("它不会产生任何订单、份额或盈亏；样本不足 30 天一律写「没有稳定领先关系」。")
+                .font(.system(size: 10.5)).foregroundStyle(p.terracotta)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+    }
+
+    private var controls: some View {
+        HStack(spacing: 10) {
+            Picker("区间", selection: $days) {
+                Text("30 天").tag(30)
+                Text("60 天").tag(60)
+                Text("120 天").tag(120)
+            }
+            .pickerStyle(.segmented)
+            Button {
+                Task { await model.runReplayLab(for: code, days: days) }
+            } label: {
+                HStack(spacing: 4) {
+                    if model.replayRunning { ProgressView().controlSize(.mini) }
+                    Text(model.replayRunning ? "回放中" : "开始回放")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(p.paper)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(p.primary, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.replayRunning)
+        }
+    }
+
+    private var emptyHint: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("还没跑过").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+            Text("回放要先从 NAS 取这只标的多日分钟线。有持仓但归档不足时，结论会直接写「没有稳定领先关系」——那也是有用的答案。")
+                .font(.system(size: 11)).foregroundStyle(p.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+    }
+
+    private func verdictCard(_ report: NextReplayReport) -> some View {
+        let isEvidence: Bool = {
+            if case .evidence = report.verdict { return true }
+            return false
+        }()
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(isEvidence ? "这段历史的结论" : "这段历史的结论：不成立")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+            Text(report.verdict.headline)
+                .font(.system(size: 12)).foregroundStyle(isEvidence ? p.primaryDeep : p.terracotta)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("共 \(report.results.count) 个交易日 · 提出假设 \(report.hypothesisCount) 次 · 确认 \(report.confirmedCount) 次")
+                .font(.system(size: 10)).foregroundStyle(p.muted)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous)
+            .stroke((isEvidence ? p.primary : p.terracotta).opacity(0.35), lineWidth: 0.8))
+    }
+
+    private func dayList(_ report: NextReplayReport) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("逐日结果").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+            ForEach(Array(report.results.suffix(20).enumerated()), id: \.offset) { _, item in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(GPReplayLabView.dayText(item.date))
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(p.muted)
+                        .frame(width: 52, alignment: .leading)
+                    Text(item.outcome.label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(GPReplayLabView.color(item.outcome, p))
+                        .frame(width: 68, alignment: .leading)
+                    Text(item.note)
+                        .font(.system(size: 10)).foregroundStyle(p.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+    }
+
+    static func dayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        formatter.dateFormat = "MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func color(_ outcome: NextReplayOutcome, _ p: GPPalette) -> Color {
+        switch outcome {
+        case .confirmedFollowThrough: return p.risk      // 涨用红
+        case .confirmedFailed: return p.jade             // 跌用绿
+        case .rejectedNoConfirmation: return p.terracotta
+        case .noHypothesis: return p.muted
+        }
+    }
+}

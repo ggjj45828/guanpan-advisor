@@ -220,6 +220,29 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                 try: return self.reply(200, {"symbol": symbol, "bars": fetch_kline(symbol)})
                 except (ValueError, InvalidData) as error: return self.reply(400, {"error": str(error)})
                 except Exception: return self.reply(502, {"error": "index kline source unavailable"})
+            if path.startswith("/v1/market/minutes/"):
+                # 多日分时的**原始行情**，给手机端的「历史回放验证器」(146) 用。
+                # 为什么要有这个入口：回放需要连续 30+ 个交易日的分钟线，而
+                # `/v1/research/{code}` 只回统计结果、`/v1/market/minute/{code}` 只回一天。
+                # 一天一个请求意味着过隧道 30–60 次，慢且更容易断；这里一次给全。
+                # 只回行情，不带任何统计或结论——回放要自己算才有意义。
+                try:
+                    code = path.rsplit("/", 1)[-1]; symbol_for(code)
+                    query = parse_qs(parsed.query)
+                    days_text = query.get("days", ["60"])[0]
+                    try: days = int(days_text)
+                    except (TypeError, ValueError): raise InvalidData("days 必须是整数")
+                    if not 1 <= days <= 120: raise InvalidData("days 取值范围 1–120")
+                    grouped = research.group_by_day(database.get_minute_range(code, days))
+                    return self.reply(200, {
+                        "code": code, "days": days, "source": "NAS 1-minute archive",
+                        "dayCount": len(grouped),
+                        "points": sum(len(items) for items in grouped.values()),
+                        "series": {day: [{"timestamp": item["at"].isoformat(), "price": str(item["price"])}
+                                         for item in items]
+                                   for day, items in sorted(grouped.items())},
+                    })
+                except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/market/minute/"):
                 try:
                     code = path.rsplit("/", 1)[-1]; symbol_for(code)

@@ -75,6 +75,15 @@ enum NextReplayOutcome: String, CaseIterable, Equatable {
     case confirmedFailed
     /// 提出了假设，但 A股 13:00 后没有确认，主动取消。
     case rejectedNoConfirmation
+
+    var label: String {
+        switch self {
+        case .noHypothesis: return "未产生假设"
+        case .confirmedFollowThrough: return "确认后上涨"
+        case .confirmedFailed: return "确认后未涨"
+        case .rejectedNoConfirmation: return "未确认，已取消"
+        }
+    }
 }
 
 struct NextReplayDayResult: Equatable {

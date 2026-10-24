@@ -590,6 +590,7 @@ private struct InstrumentDetailScreen: View {
     @State private var selectedTime: Date?
     @State private var tradeRequest: GPTradeRequest?
     @State private var addIncome = false
+    @State private var showReplayLab = false
     private var dividendEvents: [NextETFDividendEvent] { NextDividendAnalytics.merged(model.book.dividendEvents + (model.dividendEvents[code] ?? [])).filter { $0.code == code } }
     private var recentDividendPerShare: Decimal {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "Asia/Shanghai"); formatter.dateFormat = "yyyy-MM-dd"
@@ -686,7 +687,20 @@ private struct InstrumentDetailScreen: View {
                 WorthBuyPanel(code: code)
                 // 141 外部市场影响：只写「验证过的领先关系」或「暂无稳定领先关系」。
                 // 放在行情图表之后，是因为它是解释「为什么会这样」的背景，不是操作建议。
-                GPAbroadImpactSection(impact: model.abroadImpact(for: code))
+                VStack(alignment: .leading, spacing: 8) {
+                    GPAbroadImpactSection(impact: model.abroadImpact(for: code))
+                    // 146 研究入口：用户自己挑一天回放，看那条经验到底站不站得住。
+                    Button { showReplayLab = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.arrow.circlepath").font(.system(size: 10))
+                            Text("历史回放验证").font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(p.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("crossmarket.replaylab")
+                }
+                .sheet(isPresented: $showReplayLab) { GPReplayLabView(code: code) }
                 EditorialSection(title: "交易盘口", trailing: model.rules[code]?.isVerified == true ? "规则已验证" : "规则待验证", accent: p.chartViolet) {
                     // 不再强解包：盘口字典随时可能因刷新被清空，`!` 会直接把卡片点崩。
                     if let snapshot = model.orderBooks[code], model.rules[code]?.isVerified == true {

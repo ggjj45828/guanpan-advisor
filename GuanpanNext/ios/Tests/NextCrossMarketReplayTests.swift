@@ -146,4 +146,15 @@ final class NextCrossMarketReplayTests: XCTestCase {
         XCTAssertEqual(Set(NextReplayOutcome.allCases.map(\.rawValue)),
                        ["noHypothesis", "confirmedFollowThrough", "confirmedFailed", "rejectedNoConfirmation"])
     }
+
+    /// 146 研究工具页面的显示口径：四种结论都必须有中文标签，
+    /// 且「未产生假设」不能被写成「失败」——不交易也是一个正确结果。
+    func testEveryReplayOutcomeHasChineseLabel() {
+        for outcome in NextReplayOutcome.allCases {
+            XCTAssertFalse(outcome.label.isEmpty)
+            let hasChinese = outcome.label.unicodeScalars.contains { scalar in scalar.value > 0x2E80 }
+            XCTAssertTrue(hasChinese, "\(outcome) 的标签必须是中文，不能把英文枚举名漏到界面上")
+        }
+        XCTAssertEqual(NextReplayOutcome.noHypothesis.label, "未产生假设")
+    }
 }
