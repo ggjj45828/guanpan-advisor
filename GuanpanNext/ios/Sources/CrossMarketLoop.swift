@@ -183,7 +183,7 @@ enum NextCrossMarketLoop {
         if let longTermValidatedLeads,
            let candidate = studies.first(where: { $0.eligibleForTradingSignal }),
            !longTermValidatedLeads.contains(candidate.lead) {
-            if let entry = longTermEntry? {
+            if let entry = longTermEntry {
                 longTermNote = "逐 ETF 长期验证未通过（\(entry.directionalDays) 个方向性交易日、单日集中度 \(Int(entry.concentrationShare * 100))%）：不能升级为稳定领先关系"
             } else {
                 longTermNote = "这条关系还没有逐 ETF 长期验证记录（需要 \(NextEvidenceEngine.minimumSessions) 个独立交易日、留出段要跑赢对照组、且不能被单日极值撑起来）"

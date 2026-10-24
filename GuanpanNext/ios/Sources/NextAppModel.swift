@@ -887,10 +887,10 @@ struct LocalPreferences: Codable {
         }
         // 跨市场拦截器生效时，新保存的计划也先以「已暂停 + 需重算」落地：
         // 跨市场信号不替用户定方向，等拦截解除、重新分析后再启用。
-        if let reason = crossGates[item.code]?.isInterceptor == true ? crossGates[item.code]?.reason : nil {
+        if let gate = crossGates[item.code], gate.isInterceptor {
             plan.state = .paused
             plan.recomputeRequired = true
-            plan.interceptionNote = reason
+            plan.interceptionNote = gate.reason
         }
         try plan.validate()
         candidatePlans.insert(plan, at: 0)
