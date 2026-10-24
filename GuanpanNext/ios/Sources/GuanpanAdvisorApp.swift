@@ -714,6 +714,31 @@ private struct InstrumentDetailScreen: View {
                     }
                     // 145 推理链：把「哪一步站得住、哪一步断了」摊开写，不跳步。
                     GPReasoningChainCard(chain: model.reasoningChain(for: code))
+                    // 121 条件化领先：这条关系在哪种市场状态下才算数。
+                    if let leads = model.conditionalLeads[code], !leads.isEmpty {
+                        GPResearchCard(
+                            title: "条件化领先",
+                            subtitle: leads.first.map { "领先来源：\($0.study.lead.displayName) · 按当日状态分组，各组独立统计" },
+                            lines: leads.map(\.summary),
+                            identifier: "crossmarket.conditional")
+                    }
+                    // 132 分时段画像：开盘 / 上午 / 午后 / 尾盘各自的表现。
+                    if let profiles = model.sessionProfiles[code], !profiles.isEmpty {
+                        GPResearchCard(
+                            title: "分时段画像",
+                            subtitle: "按 A股 时间切段；午休期间的点不属于任何可交易时段",
+                            lines: profiles.map(\.summary),
+                            identifier: "crossmarket.session")
+                    }
+                    // 127 尾盘→次日：只读研究，口径必须自曝。
+                    if let tail = model.closeToOpenStudy(for: code) {
+                        GPResearchCard(
+                            title: "尾盘 → 次日观察",
+                            subtitle: tail.usesIntraday ? "真实分时口径" : "收盘位置代理口径",
+                            lines: [tail.caliberNote] + tail.buckets.map(\.note)
+                                + ["以上是历史频率，不是概率，也不构成入场依据"],
+                            identifier: "crossmarket.closetoopen")
+                    }
                     // 146 研究入口：用户自己挑一天回放，看那条经验到底站不站得住。
                     Button { showReplayLab = true } label: {
                         HStack(spacing: 4) {

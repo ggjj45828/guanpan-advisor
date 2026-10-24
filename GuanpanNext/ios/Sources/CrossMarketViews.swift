@@ -259,6 +259,50 @@ struct GPLoopCard: View {
     }
 }
 
+// MARK: - 121/132/127 研究卡
+//
+// 三个都是研究结论，不是建议。所以卡片只做一件事：把「结论 + 口径 + 样本量」摊开写，
+// 不加「建议买入」这类字眼，也不放任何按钮。
+
+struct GPResearchCard: View {
+    @Environment(\.gp) private var p
+    let title: String
+    let subtitle: String?
+    let lines: [String]
+    let identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(p.ink)
+                Spacer(minLength: 4)
+                Text("只读研究")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(p.muted)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(p.muted.opacity(0.10), in: Capsule())
+            }
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 10)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(size: 10.5)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(p.paperAlt, in: RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.tokens.cardRadius, style: .continuous)
+            .stroke(p.line.opacity(0.5), lineWidth: 0.8))
+        .accessibilityIdentifier(identifier)
+    }
+}
+
 // MARK: - 146 历史回放验证器（研究工具，不是模拟账户）
 //
 // 这个页面只说一件事：把某一天 12:50 之前能看到的证据交给规则，等 13:00 之后的真实行情出来，

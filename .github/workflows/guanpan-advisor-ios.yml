@@ -15,6 +15,13 @@ on:
 permissions:
   contents: write
 
+# 只保留最新一次推送的 run。
+# 之前连续推送会堆好几个 run 同时抢 macOS runner，
+# 旧 run 的截图 job 一旦挂住，后面的推送就全排在队列里跑不动。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build unsigned IPA
