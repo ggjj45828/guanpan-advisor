@@ -165,6 +165,10 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     return self.reply(200, {
                         "pairs": list(fx.PAIRS.keys()),
                         "verifiedSourceNames": list(fx.VERIFIED_SOURCE_NAMES),
+                        # 字段映射是否已核实：为 False 时中点只能当低置信度风险上下文，
+                        # 不得成为高置信度交易依据（更不会单独触发任何计划）。
+                        "fieldMappingVerified": fx.FIELD_MAPPING_VERIFIED,
+                        "parserVersion": fx.PARSER_VERSION,
                         "rows": rows,
                         "counts": database.fx_counts(),
                         "source": "Sina fx (direct fetch by NAS)",

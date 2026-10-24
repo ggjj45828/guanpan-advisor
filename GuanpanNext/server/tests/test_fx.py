@@ -137,6 +137,41 @@ class FXArchiveTests(unittest.TestCase):
         self.assertEqual(rows, [], "没有来源名称 = 来源未验证")
         self.assertEqual(dropped[0]["reason"], "unverifiedSource")
 
+    def test_midOutsideBidAskIsRejected(self):
+        # 中点必须落在买卖价之间：算歪了（或字段认错了）就不能当成汇率。
+        samples = [{"pair": "USDCNY", "bid": 6.6702, "ask": 6.6704, "mid": 7.0,
+                    "sourceAt": NOW.isoformat(), "observedAt": NOW.isoformat(),
+                    "sourceName": "Sina fx"}]
+        rows, dropped = fx.archive_rows(samples, now=NOW)
+        self.assertEqual(rows, [])
+        self.assertEqual(dropped[0]["reason"], "midOutOfRange")
+
+    def test_invertedBidAskIsRejectedNotSwapped(self):
+        # 关键：绝不能把 bid/ask 交换一下就"修好"。
+        # 交换后数值会看起来正常，但这个"正常"是假的——它更可能是字段认错了，
+        # 一旦交换，错误就被永久固化，事后再也发现不了。
+        samples = [{"pair": "USDCNY", "bid": 6.6704, "ask": 6.6702, "mid": 6.6703,
+                    "sourceAt": NOW.isoformat(), "observedAt": NOW.isoformat(),
+                    "sourceName": "Sina fx"}]
+        rows, dropped = fx.archive_rows(samples, now=NOW)
+        self.assertEqual(rows, [], "买价 > 卖价 必须拒收，不许交换字段")
+        self.assertEqual(dropped[0]["reason"], "invalidPrice")
+
+    def test_rawFieldsAndParserVersionAreCarried(self):
+        rows, _ = fx.archive_rows(fx.parse_sina(body_with(), now=NOW), now=NOW)
+        self.assertEqual(len(rows), 1)
+        # 原始字段整条留档：中点是用"我们以为的"字段算出来的，
+        # 留档才能事后推翻它，而不是只剩一个无法追溯的数字。
+        self.assertTrue(rows[0]["rawFields"], "必须保存原始字段")
+        self.assertIn("6.6702", rows[0]["rawFields"])
+        self.assertFalse(rows[0]["fieldMappingVerified"], "字段映射未经核实，必须标明")
+        self.assertGreaterEqual(rows[0]["parserVersion"], 1)
+
+    def test_fieldMappingIsMarkedUnverifiedByDefault(self):
+        # 在拿到官方/可验证字段定义之前，这个开关必须是关闭的。
+        self.assertFalse(fx.FIELD_MAPPING_VERIFIED)
+        self.assertGreaterEqual(fx.PARSER_VERSION, 1)
+
 
 class FXStorageTests(unittest.TestCase):
     def setUp(self):
@@ -197,6 +232,38 @@ class FXStorageTests(unittest.TestCase):
         counts = self.db.fx_counts()
         self.assertEqual(counts["USDCNY"]["samples"], 3)
 
+    def test_rawFieldsAndMappingStateAreStored(self):
+        stamp = (NOW - timedelta(hours=1)).isoformat()
+        rows = [{"pair": "USDCNY", "stamp": stamp, "bid": "6.6702", "ask": "6.6704",
+                 "mid": "6.6703", "observedAt": NOW.isoformat(),
+                 "sourceName": "Sina fx",
+                 "rawFields": ["03:00:01", "6.6702", "6.6704"],
+                 "fieldMappingVerified": False, "parserVersion": 1}]
+        self.db.put_fx_samples(rows, NOW.isoformat())
+        stored = self.db.get_fx_samples()[0]
+        # 原始字段要能取回来：这是事后复核字段语义的唯一凭据。
+        self.assertEqual(stored["rawFields"], ["03:00:01", "6.6702", "6.6704"])
+        self.assertFalse(stored["fieldMappingVerified"])
+        self.assertEqual(stored["parserVersion"], 1)
+
+    def test_storageKeepsFieldMappingUnverifiedByDefault(self):
+        # 不显式声明时，默认就是"未验证"，绝不默认成已验证。
+        stamp = (NOW - timedelta(hours=1)).isoformat()
+        rows = [{"pair": "USDCNY", "stamp": stamp, "bid": "6.6702", "ask": "6.6704",
+                 "mid": "6.6703", "observedAt": NOW.isoformat(), "sourceName": "Sina fx"}]
+        self.db.put_fx_samples(rows, NOW.isoformat())
+        self.assertFalse(self.db.get_fx_samples()[0]["fieldMappingVerified"])
+
+    def test_malformedRawFieldsAreNotFatal(self):
+        # rawFields 类型不对只当空处理，不能因为留档字段把整条有效汇率丢掉。
+        stamp = (NOW - timedelta(hours=1)).isoformat()
+        rows = [{"pair": "USDCNY", "stamp": stamp, "bid": "6.6702", "ask": "6.6704",
+                 "mid": "6.6703", "observedAt": NOW.isoformat(),
+                 "sourceName": "Sina fx", "rawFields": "not-a-list"}]
+        result = self.db.put_fx_samples(rows, NOW.isoformat())
+        self.assertEqual(result["accepted"], 1)
+        self.assertEqual(self.db.get_fx_samples()[0]["rawFields"], [])
+
 
 class FXRouteTests(unittest.TestCase):
     """档案 → 手机研究响应的完整路径。"""
@@ -208,7 +275,9 @@ class FXRouteTests(unittest.TestCase):
             self.db.put_fx_samples(
                 [{"pair": "USDCNY", "stamp": (NOW - timedelta(hours=hours)).isoformat(),
                   "bid": "6.6702", "ask": "6.6704", "mid": "6.6703",
-                  "observedAt": NOW.isoformat(), "sourceName": "Sina fx"}], NOW.isoformat())
+                  "observedAt": NOW.isoformat(), "sourceName": "Sina fx",
+                  "rawFields": ["03:00:01", "6.6702", "6.6704"],
+                  "fieldMappingVerified": False, "parserVersion": 1}], NOW.isoformat())
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.db))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
@@ -249,6 +318,17 @@ class FXRouteTests(unittest.TestCase):
         status, body = self.get("/v1/fx/series")
         self.assertEqual(status, 200)
         self.assertIn("Sina fx", body["verifiedSourceNames"])
+
+    def test_responseMarksFieldMappingUnverified(self):
+        status, body = self.get("/v1/fx/series")
+        self.assertEqual(status, 200)
+        # 字段语义未经核实 → 明确告诉手机端"这是低置信度上下文"。
+        self.assertFalse(body["fieldMappingVerified"])
+        self.assertGreaterEqual(body["parserVersion"], 1)
+        # 每一行都要能追溯到原始字段。
+        for row in body["rows"]:
+            self.assertIn("rawFields", row)
+            self.assertFalse(row["fieldMappingVerified"])
 
     def test_emptyArchiveReturnsEmptyRowsNotFakeValue(self):
         empty = NextDatabase(Path(self.temp.name) / "empty.sqlite3")

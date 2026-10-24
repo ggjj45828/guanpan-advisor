@@ -147,12 +147,22 @@ struct NextFXPoint: Codable, Equatable {
     let source: NextFXSource
     /// 来源名称（如 "Sina fx"）。必须落在 NextFXSourceName.verified 里才有资格被引用。
     let sourceName: String
+    /// 字段映射是否已经过**数据源字段定义核实**。
+    /// 中点是用「我们以为的」买价/卖价算出来的；在拿到可验证字段定义之前，
+    /// 这一项必须是 false，中点只能当低置信度风险上下文，不得成为高置信度交易依据。
+    let fieldMappingVerified: Bool
+    /// 解析器版本：字段映射或解析逻辑一改就必须变，便于事后按版本复核或作废。
+    let parserVersion: Int
 
     /// 排序/归日用：没有源时间戳时退回本机时刻（仅用于排序，不用于判新旧）。
     var orderingTime: Date { exchangeAt ?? receivedAt }
 
     /// 这条汇率的来源名称是否已验证。未验证 → 有数字也不许进决策上下文。
     var isSourceVerified: Bool { NextFXSourceName.isVerified(sourceName) }
+
+    /// 字段映射未经核实 → 这个「中点」本身就是推算出来的，只能低置信度使用。
+    /// 点差守卫只能证明它"看起来合理"，不能证明字段语义正确。
+    var isLowConfidence: Bool { !fieldMappingVerified }
 }
 
 struct NextFXContext: Equatable {
@@ -185,6 +195,13 @@ struct NextFXContext: Equatable {
     let freshness: NextFXFreshness
     /// 来源名称（如 "Sina fx"）。空串 = 未验证。
     let sourceName: String
+    /// 字段映射是否已核实：false 表示中点是用「我们以为的」字段算出来的，只能低置信度。
+    let fieldMappingVerified: Bool
+    /// 解析器版本：字段语义被更正后，能一眼看出旧值是哪一版解析出来的。
+    let parserVersion: Int
+
+    /// 字段映射未经核实 → 只能作低置信度风险上下文，不得成为高置信度交易依据。
+    var isLowConfidence: Bool { !fieldMappingVerified }
 
     /// 能不能当作实时值：既要看新鲜度（源时间戳够新），也要看来源可追溯。
     /// 过期或来源不明 → false，绝不许把旧值说成实时。
@@ -215,6 +232,7 @@ struct NextFXContext: Equatable {
         let verified = isSourceVerified ? "已验证" : "未验证"
         return "来源 \(source.displayName)（\(sourceName.isEmpty ? "无名称" : sourceName)，\(verified)）"
             + " · 交易所时间戳 \(stamp) · 新鲜度 \(freshness.note)"
+            + " · 字段映射\(fieldMappingVerified ? "已核实" : "未核实（低置信度，仅作风险上下文）")"
     }
 
     private static func timeText(_ date: Date) -> String {
@@ -285,8 +303,13 @@ enum NextFXFeed {
                   let mid = Self.number(row["mid"]) else { continue }
             // 来源名称未验证的行一律不进手机：有数字但没有身份证明，等于没有。
             guard NextFXSourceName.isVerified(sourceName) else { continue }
+            // 字段映射是否核实过也要跟着走：没核实就只当低置信度上下文。
+            let mappingVerified = (row["fieldMappingVerified"] as? NSNumber)?.boolValue ?? false
+            let version = (row["parserVersion"] as? NSNumber)?.intValue ?? 0
             points.append(NextFXPoint(exchangeAt: exchangeAt, receivedAt: receivedAt,
-                                      rate: mid, source: .nasArchive, sourceName: sourceName))
+                                      rate: mid, source: .nasArchive, sourceName: sourceName,
+                                      fieldMappingVerified: mappingVerified,
+                                      parserVersion: version))
         }
         return points.sorted { $0.orderingTime < $1.orderingTime }
     }
@@ -345,13 +368,13 @@ enum NextFXContextEngine {
         guard let pair = NextFXPair.pair(for: market) else {
             return NextFXContext(market: market, pair: nil, state: .notApplicable,
                                  source: .unknown, exchangeAt: nil, receivedAt: nil,
-                                 freshness: .unknown, sourceName: "")
+                                 freshness: .unknown, sourceName: "", fieldMappingVerified: false, parserVersion: 0)
         }
         let sorted = series.filter { $0.rate > 0 }.sorted { $0.orderingTime < $1.orderingTime }
         guard let last = sorted.last else {
             return NextFXContext(market: market, pair: pair, state: .missing("没有汇率序列"),
                                  source: .unknown, exchangeAt: nil, receivedAt: nil,
-                                 freshness: .unknown, sourceName: "")
+                                 freshness: .unknown, sourceName: "", fieldMappingVerified: false, parserVersion: 0)
         }
         // ① 来源必须明确：来源不明的汇率一律不当事实，更不当实时值。
         guard last.source.isTraceable else {
@@ -359,7 +382,7 @@ enum NextFXContextEngine {
                                  state: .suspicious("来源不明，无法当作实时汇率"),
                                  source: last.source, exchangeAt: last.exchangeAt,
                                  receivedAt: last.receivedAt, freshness: .unknown,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         // ①′ **来源名称必须先验证**：即使有汇率数字，
         //    名字不在登记名单里就一律判可疑——有数字但没有身份证明，等于没有。
@@ -368,7 +391,7 @@ enum NextFXContextEngine {
                                  state: .suspicious("来源名称未验证（\(last.sourceName.isEmpty ? "无来源名称" : last.sourceName)）"),
                                  source: last.source, exchangeAt: last.exchangeAt,
                                  receivedAt: last.receivedAt, freshness: .unknown,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         // ② 必须有交易所时间戳：没有它就没有「新旧」可言。
         //    这是「不把手机/NAS 的旧值伪装成实时」的核心：剩下的只有
@@ -378,14 +401,14 @@ enum NextFXContextEngine {
                                  state: .missing("源没有给出交易所时间戳，不能判断新旧"),
                                  source: last.source, exchangeAt: nil,
                                  receivedAt: last.receivedAt, freshness: .unknown,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         if exchangeAt > now.addingTimeInterval(60) {
             return NextFXContext(market: market, pair: pair,
                                  state: .suspicious("交易所时间戳晚于当前时间"),
                                  source: last.source, exchangeAt: exchangeAt,
                                  receivedAt: last.receivedAt, freshness: .unknown,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         // ③ 新鲜度只按交易所时间戳算：**刚收到 ≠ 数据新**。
         let ageHours = now.timeIntervalSince(exchangeAt) / 3600
@@ -396,7 +419,7 @@ enum NextFXContextEngine {
                                  state: .stale(String(format: "交易所时间戳是 %.1f 小时前", ageHours)),
                                  source: last.source, exchangeAt: exchangeAt,
                                  receivedAt: last.receivedAt, freshness: freshness,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         let calendar = NextLeadLagEngine.shanghai
         let days = Set(sorted.map { calendar.startOfDay(for: $0.orderingTime) }).count
@@ -405,7 +428,7 @@ enum NextFXContextEngine {
             return NextFXContext(market: market, pair: pair, state: .missing("今天还没有汇率变动数据"),
                                  source: last.source, exchangeAt: exchangeAt,
                                  receivedAt: last.receivedAt, freshness: freshness,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         let percent = (last.rate / firstToday.rate - 1) * 100
         if abs(percent) > jumpThreshold {
@@ -414,13 +437,13 @@ enum NextFXContextEngine {
                                                            percent, jumpThreshold)),
                                  source: last.source, exchangeAt: exchangeAt,
                                  receivedAt: last.receivedAt, freshness: freshness,
-                                 sourceName: last.sourceName)
+                                 sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
         }
         return NextFXContext(market: market, pair: pair,
                              state: .available(days: days, todayPercent: percent),
                              source: last.source, exchangeAt: exchangeAt,
                              receivedAt: last.receivedAt, freshness: freshness,
-                             sourceName: last.sourceName)
+                             sourceName: last.sourceName, fieldMappingVerified: last.fieldMappingVerified, parserVersion: last.parserVersion)
     }
 
     /// 只有「源时间戳够新且来源可追溯」才算实时；否则一律不可当实时值。

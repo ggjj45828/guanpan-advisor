@@ -425,6 +425,11 @@ class NextDatabase:
                     bid TEXT NOT NULL, ask TEXT NOT NULL, mid TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     source_name TEXT NOT NULL,
+                    -- 字段映射的可追溯性：保留原始字段、映射是否已核实、解析器版本。
+                    -- 中点是用「我们以为的」买价/卖价算出来的，这三列就是事后能推翻它的凭据。
+                    raw_fields TEXT NOT NULL,
+                    field_mapping_verified INTEGER NOT NULL,
+                    parser_version INTEGER NOT NULL,
                     PRIMARY KEY(pair, stamp));
                 CREATE INDEX IF NOT EXISTS idx_fx_stamp ON fx_samples(stamp);
             """)
@@ -438,13 +443,17 @@ class NextDatabase:
             # 这张表没有历史数据可留，缺列就直接重建——保证「来源名称」字段一定有值，
             # 否则老库里存着没有来源的汇率，等于把未验证的值伪装成有效汇率。
             fx_columns = {row[1] for row in db.execute("PRAGMA table_info(fx_samples)")}
-            if fx_columns and "source_name" not in fx_columns:
+            fx_required = {"source_name", "raw_fields", "field_mapping_verified", "parser_version"}
+            if fx_columns and not fx_required.issubset(fx_columns):
                 db.execute("DROP TABLE fx_samples")
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS fx_samples ("
                     "pair TEXT NOT NULL, stamp TEXT NOT NULL,"
                     "bid TEXT NOT NULL, ask TEXT NOT NULL, mid TEXT NOT NULL,"
                     "observed_at TEXT NOT NULL, source_name TEXT NOT NULL,"
+                    "raw_fields TEXT NOT NULL,"
+                    "field_mapping_verified INTEGER NOT NULL,"
+                    "parser_version INTEGER NOT NULL,"
                     "PRIMARY KEY(pair, stamp))")
             # 已退役/改名的后台任务（2026-10-24）：NAS 改为纯数据仓库，`factor-research`
             # 研究线程已删除；`dividend-research` 已改名为 `dividend-archive`（它只是分红
@@ -882,10 +891,18 @@ class NextDatabase:
                 if source_name not in FX_VERIFIED_SOURCE_NAMES:
                     rejected += 1
                     continue
+                # 原始字段与映射核实状态一并落库：中点是用「我们以为的」字段算出来的，
+                # 留档才能事后推翻它，而不是只剩一个无法追溯的数字。
+                raw_fields = row.get("rawFields") or []
+                if not isinstance(raw_fields, list):
+                    raw_fields = []
                 db.execute(
-                    "INSERT OR REPLACE INTO fx_samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO fx_samples VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (pair, stamp, str(bid), str(ask), str(mid),
-                     str(row.get("observedAt") or fetched_at), source_name))
+                     str(row.get("observedAt") or fetched_at), source_name,
+                     json.dumps(raw_fields, ensure_ascii=False),
+                     1 if row.get("fieldMappingVerified") else 0,
+                     row.get("parserVersion") if isinstance(row.get("parserVersion"), int) else 0))
                 accepted += 1
         return {"accepted": accepted, "rejected": rejected, "fetchedAt": fetched_at}
 
@@ -910,14 +927,25 @@ class NextDatabase:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
             clauses.append("stamp >= ?")
             args.append(cutoff)
-        sql = "SELECT pair, stamp, bid, ask, mid, observed_at, source_name FROM fx_samples"
+        sql = ("SELECT pair, stamp, bid, ask, mid, observed_at, source_name, "
+               "raw_fields, field_mapping_verified, parser_version FROM fx_samples")
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY stamp"
         with self.connect() as db:
             rows = db.execute(sql, tuple(args)).fetchall()
-        return [{"pair": row[0], "stamp": row[1], "bid": row[2], "ask": row[3],
-                 "mid": row[4], "observedAt": row[5], "sourceName": row[6]} for row in rows]
+        result = []
+        for row in rows:
+            try:
+                raw_fields = json.loads(row[7])
+            except (ValueError, TypeError):
+                raw_fields = []
+            result.append({"pair": row[0], "stamp": row[1], "bid": row[2], "ask": row[3],
+                           "mid": row[4], "observedAt": row[5], "sourceName": row[6],
+                           "rawFields": raw_fields,
+                           "fieldMappingVerified": bool(row[8]),
+                           "parserVersion": row[9]})
+        return result
 
     def fx_counts(self):
         """每个交易对各存了多少行、覆盖到哪天 —— 用于「数据够不够解释涨跌」。"""

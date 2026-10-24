@@ -20,13 +20,17 @@ final class NextFXContextTests: XCTestCase {
     }
 
     /// 造一个来源完整的点：默认「源时间戳 = 收到的时刻」，来源按 NAS 归档，
-    /// 来源名称默认取已验证的 "Sina fx"。
-    /// 要造「刚收到旧值」「来源未验证」这类场景，单独传 receivedAt / source / sourceName。
+    /// 来源名称默认取已验证的 "Sina fx"，字段映射默认**未核实**（当前真实状态）。
+    /// 要造「刚收到旧值」「来源未验证」「字段映射已核实」这类场景，
+    /// 单独传 receivedAt / source / sourceName / fieldMappingVerified。
     private func point(exchangeAt: Date, receivedAt: Date? = nil, rate: Double,
                        source: NextFXSource = .nasArchive,
-                       sourceName: String = "Sina fx") -> NextFXPoint {
+                       sourceName: String = "Sina fx",
+                       fieldMappingVerified: Bool = false,
+                       parserVersion: Int = 1) -> NextFXPoint {
         NextFXPoint(exchangeAt: exchangeAt, receivedAt: receivedAt ?? exchangeAt,
-                    rate: rate, source: source, sourceName: sourceName)
+                    rate: rate, source: source, sourceName: sourceName,
+                    fieldMappingVerified: fieldMappingVerified, parserVersion: parserVersion)
     }
 
     /// 连续 N 个交易日，每天 9:00 一个点，汇率从 startRate 每天 +drift。
@@ -73,7 +77,8 @@ final class NextFXContextTests: XCTestCase {
     func test_missingExchangeTimestampIsNeverRealTime() {
         let now = shanghai(2026, 10, 23, 10, 0)
         let noStamp = NextFXPoint(exchangeAt: nil, receivedAt: now, rate: 100,
-                                  source: .nasArchive, sourceName: "Sina fx")
+                                  source: .nasArchive, sourceName: "Sina fx",
+                                  fieldMappingVerified: false, parserVersion: 1)
         let context = NextFXContextEngine.context(market: .japan, series: [noStamp], now: now)
         guard case let .missing(reason) = context.state else {
             return XCTFail("没有交易所时间戳必须判缺失：\(context.state)")
@@ -188,6 +193,83 @@ final class NextFXContextTests: XCTestCase {
         XCTAssertFalse(NextFXSourceName.isVerified("Some Random Feed"))
         XCTAssertFalse(NextFXSourceName.isVerified(""))
         XCTAssertFalse(NextFXSourceName.isVerified(nil))
+    }
+
+    // MARK: - 字段映射未核实 → 低置信度风险上下文（新浪字段 provisional）
+
+    /// 核心边界：中点是拿「我们以为的」买价/卖价算出来的。在拿到可验证的
+    /// 字段定义之前，这一项必须标低置信度——它还能解释涨跌，但绝不能
+    /// 被当成高置信度依据，更不许单独触发任何计划。
+    func test_unverifiedFieldMappingIsLowConfidence() {
+        let now = shanghai(2026, 10, 23, 10, 0)
+        let points = [point(exchangeAt: shanghai(2026, 10, 23, 9, 0), rate: 100),
+                      point(exchangeAt: shanghai(2026, 10, 23, 9, 45), rate: 100.4)]
+        let context = NextFXContextEngine.context(market: .japan, series: points, now: now)
+        XCTAssertTrue(context.isSourceVerified, "来源名称已验证，只是字段映射没核实")
+        XCTAssertTrue(context.isUsable)
+        XCTAssertFalse(context.fieldMappingVerified)
+        XCTAssertTrue(context.isLowConfidence, "字段映射未核实 → 只能低置信度使用")
+        let note = context.provenanceNote
+        XCTAssertTrue(note.contains("字段映射未核实"), note)
+        XCTAssertTrue(note.contains("低置信度"), note)
+        XCTAssertTrue(note.contains("风险上下文"), note)
+        // 未核实只降置信度，不取消来源验证带来的资格：仍可作低置信度风险上下文。
+        XCTAssertTrue(context.entersDecisionContext, "低置信度仍可作风险上下文进入")
+    }
+
+    /// 字段映射没核实，连"解释层"的授权都还是 never——低置信度
+    /// 既不能升级成高置信度交易依据，也不会让它获得任何计划授权。
+    func test_unverifiedFieldMappingNeverAuthorizes() {
+        let now = shanghai(2026, 10, 23, 10, 0)
+        let bigMove = [point(exchangeAt: shanghai(2026, 10, 23, 9, 0), rate: 100),
+                       point(exchangeAt: shanghai(2026, 10, 23, 9, 45), rate: 101.2)]
+        let context = NextFXContextEngine.context(market: .japan, series: bigMove, now: now)
+        XCTAssertTrue(context.isLowConfidence)
+        XCTAssertEqual(context.planEligibility, .never)
+        XCTAssertTrue(context.planEligibility.note.contains("不能单独触发做T或网格"),
+                      context.planEligibility.note)
+        XCTAssertNil(context.decisionContextGateNote, "低置信度不是被拦的原因，来源未验证才是")
+    }
+
+    /// 字段映射一旦核实，低置信度标记就消失——它是可演进的状态，
+    /// 但只能从"未核实"变成"已核实"，不能反过来悄悄把未核实说成已核实。
+    func test_verifiedFieldMappingClearsLowConfidence() {
+        let now = shanghai(2026, 10, 23, 10, 0)
+        let points = [point(exchangeAt: shanghai(2026, 10, 23, 9, 0), rate: 100,
+                            fieldMappingVerified: true),
+                      point(exchangeAt: shanghai(2026, 10, 23, 9, 45), rate: 100.4,
+                            fieldMappingVerified: true)]
+        let context = NextFXContextEngine.context(market: .japan, series: points, now: now)
+        XCTAssertTrue(context.fieldMappingVerified)
+        XCTAssertFalse(context.isLowConfidence)
+        XCTAssertTrue(context.provenanceNote.contains("字段映射已核实"), context.provenanceNote)
+    }
+
+    /// 数据传输必须把字段映射状态与解析器版本带到手机端：
+    /// 丢了这两项，"低置信度"就成了一句没有出处的口号；
+    /// 来源名称未验证的行仍按硬边界直接丢弃，有数字也不进手机。
+    func test_feedCarriesFieldMappingProvenance() throws {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        let stamp = iso.string(from: shanghai(2026, 10, 23, 9, 45))
+        let observed = iso.string(from: shanghai(2026, 10, 23, 10, 0))
+        // 与 NAS `/v1/fx/series` 的行结构一致（domain.get_fx_samples 的键）。
+        let payload: [String: Any] = [
+            "rows": [
+                ["pair": "JPYCNY", "stamp": stamp, "observedAt": observed,
+                 "sourceName": "Sina fx", "mid": "100.4",
+                 "fieldMappingVerified": false, "parserVersion": 1],
+                ["pair": "JPYCNY", "stamp": stamp, "observedAt": observed,
+                 "sourceName": "Some Random Feed", "mid": "100.4",
+                 "fieldMappingVerified": true, "parserVersion": 2]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let points = try NextFXFeed.parse(data)
+        XCTAssertEqual(points.count, 1, "来源名称未验证的行必须被丢弃，有数字也不进手机")
+        XCTAssertEqual(points[0].sourceName, "Sina fx")
+        XCTAssertFalse(points[0].fieldMappingVerified, "字段映射未核实状态必须随行透传")
+        XCTAssertEqual(points[0].parserVersion, 1, "解析器版本必须随行透传，便于事后按版本复核")
     }
 
     // MARK: - 汇率永远不能单独触发做T/网格

@@ -42,6 +42,24 @@ PAIRS = {
 # 否则采上来的值在手机端会被判「来源未验证」而不得进入决策上下文。
 VERIFIED_SOURCE_NAMES = ("Sina fx",)
 
+# ---------------------------------------------------------------------------
+# 字段映射的核实状态 —— 这是本模块最要紧的一个开关。
+#
+# 上面 `fx_susdcny` 的字段顺序（1=买价、2=卖价）是**从观测数据反推**出来的，
+# 依据是「买价 < 卖价」以及日元对显示买价=卖价。它自洽，但**未经新浪官方字段定义核实**。
+# 点差守卫（<=2%）只能证明数据"看起来合理"，不能证明字段语义正确——
+# 如果 1/2 其实是「今开/昨收」，中点同样会落在一个看起来合理的数值上。
+#
+# 因此在拿到官方/可验证字段定义、并用多组实时样本交叉确认之前，这里必须是 False。
+# 为 False 时：中点只能作为**低置信度风险上下文**，
+# 绝不能成为高置信度交易依据，也不得单独触发做T/网格/买卖（后者由类型层面保证）。
+FIELD_MAPPING_VERIFIED = False
+
+# 解析器版本：字段映射或解析逻辑一改就必须 +1。
+# 存进样本里，这样事后能一眼看出"这条值是用哪一版解析出来的"，
+# 也方便在怀疑字段语义时按版本批量复核/作废。
+PARSER_VERSION = 1
+
 SINA_ENDPOINT = "https://hq.sinajs.cn/list="
 
 # 源时间戳超过这么久，说明这条汇率已经不能代表当下 → 过期即拒收。
@@ -142,6 +160,11 @@ def parse_sina(body, now=None):
             "mid": None if bid is None or ask is None else (bid + ask) / 2,
             "sourceAt": stamp.isoformat() if stamp else None,
             "observedAt": now.astimezone(timezone.utc).isoformat(),
+            # 原始字段整条留档：字段语义有争议时，事后能拿原样去核对，
+            # 而不是只剩一个已经算好的中点（那个中点本身就可能是对的也可能是错的）。
+            "rawFields": list(fields),
+            "fieldMappingVerified": FIELD_MAPPING_VERIFIED,
+            "parserVersion": PARSER_VERSION,
         })
     samples.sort(key=lambda item: item["pair"])
     return samples
@@ -194,8 +217,15 @@ def archive_rows(samples, now=None, max_age_seconds=MAX_AGE_SECONDS,
         if bid is None or ask is None or mid is None or bid <= 0 or ask <= 0 or mid <= 0:
             dropped.append({"pair": pair, "reason": "invalidPrice"})
             continue
+        # 合理性检查：买价 <= 中点 <= 卖价。
+        # 注意这里**绝不做字段交换来"修好"**：bid > ask 更可能是我们把字段认错了
+        # （比如 1/2 其实是今开/昨收），交换之后数值会变得"看起来正常"，
+        # 于是错误就被永久固化下来。认错了就拒收，等核实了字段定义再改。
         if bid > ask:
             dropped.append({"pair": pair, "reason": "invalidPrice"})
+            continue
+        if mid < bid or mid > ask:
+            dropped.append({"pair": pair, "reason": "midOutOfRange"})
             continue
         # 点差过大：源异常或字段错位，不当成真汇率。
         if (ask - bid) / mid > max_spread_ratio:
@@ -227,6 +257,9 @@ def archive_rows(samples, now=None, max_age_seconds=MAX_AGE_SECONDS,
             "mid": str(mid),
             "observedAt": sample.get("observedAt") or now.astimezone(timezone.utc).isoformat(),
             "sourceName": sample.get("sourceName"),
+            "rawFields": sample.get("rawFields") or [],
+            "fieldMappingVerified": FIELD_MAPPING_VERIFIED,
+            "parserVersion": PARSER_VERSION,
         })
     rows.sort(key=lambda item: (item["pair"], item["stamp"]))
     return rows, dropped
