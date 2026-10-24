@@ -69,6 +69,7 @@
     - 时钟用上游响应头 `Date` 反推偏差（不信本机时钟），偏差 >300s 或出现 `certificate_verify_failed` 即判时钟问题——**优先于「没外网」判定**，否则会跑偏；
     - 只解析到 IPv6 且连不通 → 判 DNS/IPv6 黑洞（与当初 dockerpull.org 同源）；连公网 registry 也不通 → 判容器无出口；公网通但行情源全挂 → 判源站被拦/域名漂移；
     - 本地实跑已验证可给出结论（本机 `skewSeconds=1`、结论 ok）。
+15. **交付文档纠偏 + r32 交付**：`README-NAS.md` 仍在写「iOS 顾问页调用 NAS DeepSeek」「网格候选/T+0 做 T 候选」——这些端点早已 410、研究也早已归手机端，属会误导部署的过期文案。已重写为「纯数据仓库」口径：部署步骤去掉大模型密钥、加 `GUANPAN_ARCHIVE_DEMO` 说明；新增 `/v1/diagnose` 自查表（cause → 处理方式）；新增对外接口表（含 `?meta=1` 与恒 410 的退役端点）；`/health` 核对项写明「只应有三条采集线程」。CI run 40083895049（sha b3a42962）Build job 13 step 全 success，据此打出 r32 三件套。
 
 ## 3. 当前状态汇总
 
@@ -99,7 +100,10 @@
 2. **（高）B1 端到端实机链**：需真机 + NAS 真实部署后跑一遍全链（持仓→行情→NAS→新闻→画像→策略→风控→计划→AI→成交→复盘）。
 3. **（中）J7 组件命名归拢**：低风险整理，随 D4 一并做。
 4. **（中）⚠️ 外部项**：K5 真机推送 / D1 多源 / G3 部分成交 / NAS 部署 / J8 极端字号 —— 需真机或部署环境。
-5. **（收尾）r31 三件套已重打（2026-10-24 17:30）**：`deliverable/GuanpanAdvisor-source-r31.zip`（`git archive HEAD`，含 23 处入口去重后的源码）+ `deliverable/nas-advisor-deploy-r31.zip`（15 文件，已核验：`researchOwner` 在、`research_loop` 不在、`classic.html` 不在）；旧 r29/r30 四个 zip 已删，只留 r31（IPA 仍是 CI r29 产物，等新一轮 CI 出了再替换）。
+5. **（收尾）r32 三件套（2026-10-24 18:10，替代 r31/r29）**：
+   - `deliverable/GuanpanAdvisor-unsigned-r32.ipa`：来自 CI run **40083895049**（sha `b3a42962`）的 `guanpan-advisor-unsigned-ipa` 工件。实测校验：`Payload/GuanpanAdvisor.app` + Mach-O 12,695,984 B + 可执行位 `0755` + 图标齐；`CFBundleIdentifier com.guanpan.advisor.ios`、版本 **3.6.0 (build 25)**、`MinimumOSVersion 17.0`；大小 6,113,810 B，`sha256 6caca088d8738910383662d3272722f43741c557c794a048c4595021e31794d3`。**该 run 的 Build job 13 个 step 全 success**（`Core logic tests` / `Build unsigned device app` / `Package unsigned IPA` / `UI navigation and gesture tests` / `Upload IPA`）。
+   - `deliverable/GuanpanAdvisor-source-r32.zip`（`git archive HEAD`）+ `deliverable/nas-advisor-deploy-r32.zip`（**16 文件**，比 r31 多 `server/diagnose.py`；README-NAS.md 已重写为「纯数据仓库」口径，旧版仍在写 NAS 调 DeepSeek/网格候选，属过期文案）。
+   - 旧产物清理：r31 两个 zip、r29 IPA、旧 CI 目录已删；GitHub 侧旧 workflow run 一并清理，只留最新一次。
 
 ## 7. 已提交改动（本轮相关）
 

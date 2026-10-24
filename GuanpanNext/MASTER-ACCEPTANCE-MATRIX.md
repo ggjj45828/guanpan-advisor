@@ -184,4 +184,6 @@
 - **NAS 不再为 4 只 demo ETF 常驻打上游（本轮）**：`DEFAULT_CODES` 原被无条件并进 `tracked()`，服务开着就每 30 分钟为 4 只 demo ETF 打一次日 K、盘中每分钟拉分时、每天查分红，全是白烧的请求。改为 `GUANPAN_ARCHIVE_DEMO` 按需开启（默认空），采集集合只来自 track 登记、真实持仓、已归档代码；空集合时三个线程显示 `idle` +「还没有需要归档的标的」。
 - **新增 `GET /v1/diagnose` 出网自检（本轮）**：把「没外网 / 时钟不准 / DNS-IPv6 黑洞」三种假设变成一次可实测的请求——逐项探测三个行情域名 + 公网对照（registry/baidu），记录 IPv4/IPv6 分别解析、TCP:443、TLS 证书、延迟；时钟用上游响应头 `Date` 反推偏差（>300s 或 `certificate_verify_failed` 即判时钟问题，且**优先于「没外网」判定**，否则会跑偏）。本地实跑已验证（skew 1s、结论 ok）。
 
-- 下一步：D4 待 Mac 轮次 `swift test` + 截图验收后翻 ✅；J7 组件命名归拢（低风险，随 Mac 轮次做）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。
+- **CI 编译通过 → r32 交付（本轮，run 40083895049 / sha b3a42962）**：Build job 13 个 step 全 success（`Core logic tests`、`Build unsigned device app`、`Package unsigned IPA`、`UI navigation and gesture tests`、`Upload IPA`），据此确认本轮 NAS 状态机、`?meta=1`、`chartLong`、缩放钳制、横屏适配、`diagnose.py` 均**编译并通过测试**。IPA 实测：`com.guanpan.advisor.ios` 3.6.0 (build 25)、`MinimumOSVersion 17.0`、Mach-O 12,695,984 B、可执行位 0755、6,113,810 B、`sha256 6caca088…94d3`。同时纠偏 `README-NAS.md`（旧文案仍在写 NAS 调 DeepSeek/网格候选，端点早已 410），重写为纯数据仓库口径 + `/v1/diagnose` 自查表 + 接口表。旧 r31/r29 产物与旧 workflow run 已清理，只留最新。
+
+- **下一步**：D4 已由 CI（`Core logic tests` + `Theme screenshots`）翻 ✅，仅剩圆环观感需人眼看图；J7 组件命名归拢（低风险，随时可做）；B1 等 ⚠️ 项需真机/NAS 实环境；详细续做状态见仓库根 `CONTINUATION.md`。
