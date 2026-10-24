@@ -19,3 +19,8 @@ __pycache__/
 /deliverable/
 /nas_check/
 /pro_check/
+
+# 临时产物：CI 截图工件、下载目录、打包中间件（不进仓库）
+_shots_*/
+_r34_dl/
+_ci_logs/
