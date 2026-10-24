@@ -1390,10 +1390,24 @@ struct LocalPreferences: Codable {
             studies: crossMarketStudies[code] ?? [],
             rollings: ledLagRollings[code] ?? [],
             pulse: crossMarketPulse,
+            // 126：开盘消化的窗口数据与昨收。缺了闭环自己会明说，不猜。
+            minutes: minutes,
+            previousClose: previousClose(for: code, now: now),
             longTermValidatedLeads: longTermCandidateLeads,
             longTermEntry: leadLedger.entries
                 .filter { $0.code == code }
                 .max { $0.sessions < $1.sessions })
+    }
+
+    /// 126 用的昨收：**新鲜行情的 previousClose**，且只用这一个来源。
+    ///
+    /// 口径纪律：分钟线（腾讯分时 / 东财 klt=1）都是不复权原始价，而日 K 是前复权
+    /// （腾讯 qfq / 东财 fqt=1）——拿前复权的昨收去配原始价的开盘，除权日会算出
+    /// 错误的开盘缺口，而缺口正是开盘消化的分母。所以这里不拿日 K 凑；
+    /// 没有新鲜行情就返回 nil，闭环自己会明说「数据不齐」。
+    private func previousClose(for code: String, now: Date) -> Double? {
+        guard let quote = quotes[code]?.quote, quote.isFresh(at: now), quote.previousClose > 0 else { return nil }
+        return NextNum.double(quote.previousClose)
     }
 
     /// 当日成交量加权均价。没有量数据时退回算术均价，并在调用处按「仅供参照」对待。

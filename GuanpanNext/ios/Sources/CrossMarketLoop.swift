@@ -19,10 +19,12 @@ enum NextLoopSignalKind: String, Equatable {
     case lunchWeaken      // 午休期间海外转弱
     case divergenceCatchUp // 海外修复、本地没跟
     case divergenceDrop    // 海外转弱、本地没跟
+    case openAbsorbed      // 开盘半小时隔夜信息已计价
+    case openUnderAbsorbed // 开盘半小时隔夜信息未消化
 
-    var isBullish: Bool {
-        self == .lunchRepair || self == .divergenceCatchUp
-    }
+    // 这里**没有** isBullish：开盘消化两个种类的方向取决于隔夜变化的符号，
+    // 而符号在信号的 evidence 里、不在 kind 里；旧四种的 isBullish 也没有任何消费方，
+    // 留一个按 kind 硬编的方向只会误导读者，所以整个删掉。
 
     var statement: String {
         switch self {
@@ -30,6 +32,8 @@ enum NextLoopSignalKind: String, Equatable {
         case .lunchWeaken: return "午后转弱（午休期间海外风险偏好下降）"
         case .divergenceCatchUp: return "补涨观察（海外已修复、本地尚未跟上）"
         case .divergenceDrop: return "补跌观察（海外已转弱、本地尚未跟上）"
+        case .openAbsorbed: return "开盘半小时隔夜信息已计价，午后不宜按隔夜方向追单"
+        case .openUnderAbsorbed: return "开盘半小时隔夜信息尚未消化，午后仍可能按隔夜方向传导"
         }
     }
 
@@ -39,6 +43,8 @@ enum NextLoopSignalKind: String, Equatable {
         case .lunchWeaken: return "午休转弱"
         case .divergenceCatchUp: return "向上背离"
         case .divergenceDrop: return "向下背离"
+        case .openAbsorbed: return "开盘已消化"
+        case .openUnderAbsorbed: return "开盘未消化"
         }
     }
 }
@@ -121,6 +127,10 @@ enum NextCrossMarketLoop {
                          pulse: NextCrossMarketPulse,
                          calendar: NextMarketCalendar = NextMarketCalendar(),
                          existing: NextCrossHypothesis? = nil,
+                         // 126：当日真实分钟线与昨收。没有就传空——开盘消化这一支
+                         // 会明说「数据不足」，不会拿日线近似充数。
+                         minutes: [NextChartSample] = [],
+                         previousClose: Double? = nil,
                          // 逐 ETF 长期验证通过的领先市场集合。
                          // `nil` = 不做这一层要求（测试与旧路径）；非 nil 时即使前瞻复现达标，
                          // 也必须这条关系在长期验证里走到「候选」才允许方向性做T。
@@ -128,8 +138,9 @@ enum NextCrossMarketLoop {
                          // 该标的的长期验证台账（用于解释为什么没升级），可为空。
                          longTermEntry: NextLeadLedgerEntry? = nil) -> NextLoopOutcome {
         var explanation: [String] = []
-        let signal = detectSignal(now: now, overseas: overseas, local: local, pulse: pulse,
-                                  calendar: calendar, explanation: &explanation)
+        let signal = detectSignal(code: code, now: now, overseas: overseas, local: local, pulse: pulse,
+                                  calendar: calendar, explanation: &explanation,
+                                  minutes: minutes, previousClose: previousClose)
 
         // 没有信号：这是正式结论，不是「本次跳过」。已有假设仍按原节奏裁决（不因今天没信号就作废）。
         guard signal != nil || existing != nil else {
@@ -204,14 +215,18 @@ enum NextCrossMarketLoop {
                                hypothesis: judged, chain: chain, explanation: explanation)
     }
 
-    // MARK: 信号识别（119/122）
+    // MARK: 信号识别（119/122/126）
 
-    static func detectSignal(now: Date,
+    static func detectSignal(code: String,
+                             now: Date,
                              overseas: [NextCrossMarket: [NextMarketPoint]],
                              local: [NextMarketPoint],
                              pulse: NextCrossMarketPulse,
                              calendar: NextMarketCalendar,
-                             explanation: inout [String]) -> NextLoopSignal? {
+                             explanation: inout [String],
+                             // 126：开盘消化的窗口数据。调用方没有传就只走午休/背离两支。
+                             minutes: [NextChartSample] = [],
+                             previousClose: Double? = nil) -> NextLoopSignal? {
         let status = calendar.status(.china, at: now)
         // 午休与午后：优先用午休信息差（同一基准下 11:30 与 12:50 两个时点之差）。
         if status == .lunchBreak || status == .open,
@@ -228,6 +243,50 @@ enum NextCrossMarketLoop {
                 explanation.append(shock.note)
                 return NextLoopSignal(kind: kind, market: market, evidence: shock.note,
                                       strength: abs(shock.shock))
+            }
+        }
+
+        // 126：开盘信息消化。窗口锁 9:30–10:00，只用当日真实分钟线。
+        // 两个时点纪律：
+        // 1. 窗口没走完（10:00 前）只说明「不给结论」，不返回信号；
+        // 2. 只在开盘后一小时内作为信号——午休与午后由午休/背离负责，不重复发言
+        //    （「午后不宜追单」这类假设在 14:00 提出来没有意义）。
+        if status == .open {
+            let minute = calendar.minuteOfDay(now, .china)
+            if minute >= NextOpenAbsorptionEngine.windowStartMinute,
+               minute < NextOpenAbsorptionEngine.windowEndMinute {
+                explanation.append("开盘消化窗口（9:30–10:00）未走完，暂不给消化结论")
+            } else if minute >= NextOpenAbsorptionEngine.windowEndMinute, minute < 11 * 60 + 30 {
+                if let ranked = bestOverseasMarket(pulse: pulse),
+                   let series = overseas[ranked.market], series.count > 1,
+                   let windowEnd = NextCrossMarket.chinaMinute(now, NextOpenAbsorptionEngine.windowEndMinute),
+                   let overnightChange = overseasChangeAtWindowEnd(market: ranked.market, series: series,
+                                                                   pulse: pulse, windowEnd: windowEnd) {
+                    if let absorption = NextOpenAbsorptionEngine.assess(
+                        code: code, at: now, minutes: minutes,
+                        previousClose: previousClose, overnightChange: overnightChange,
+                        calendar: calendar) {
+                        explanation.append(absorption.note)
+                        // 只有两端给信号：≥0.8 已计价、<0.5 未消化。
+                        // 中间带（消化过半但未基本计价）只作说明，不构成闭环信号。
+                        if absorption.absorbedRatio >= 0.8 {
+                            return NextLoopSignal(kind: .openAbsorbed, market: ranked.market,
+                                                  evidence: absorption.note,
+                                                  strength: abs(overnightChange))
+                        }
+                        if absorption.absorbedRatio < 0.5 {
+                            return NextLoopSignal(kind: .openUnderAbsorbed, market: ranked.market,
+                                                  evidence: absorption.note,
+                                                  strength: abs(overnightChange))
+                        }
+                        explanation.append("开盘半小时隔夜信息消化过半但未基本计价，不构成闭环信号")
+                    } else {
+                        // assess 返回 nil 的可能：分钟样本不足、没有昨收、隔夜变动不足门槛——照实说，不猜哪个。
+                        explanation.append("开盘消化所需数据不齐（当日分钟样本需 ≥ \(NextOpenAbsorptionEngine.minimumWindowPoints) 根、需有昨收、隔夜变动需 ≥ \(String(format: "%.1f", NextOpenAbsorptionEngine.minimumOvernightPercent)) 个百分点），不给结论")
+                    }
+                } else {
+                    explanation.append("开盘消化需要海外基准（排名市场的现价、涨跌幅与 10:00 前的观测），当前不齐，不给结论")
+                }
             }
         }
 
@@ -253,6 +312,22 @@ enum NextCrossMarketLoop {
         pulse.rows
             .filter { $0.usable && $0.changePercent != nil }
             .max { abs($0.changePercent ?? 0) < abs($1.changePercent ?? 0) }
+    }
+
+    /// 126：海外侧的同一时刻口径——排名市场从它自己的昨收到「A股 10:00」的值。
+    ///
+    /// 昨收用 pulse 的现价与涨跌幅反解（prevClose = price / (1 + change/100)）：
+    /// 本地窗口锁 9:30–10:00，海外侧也必须锁 10:00 那一刻，否则「日本下午继续跌」
+    /// 会被算进「开盘半小时没消化」里——两个时间基混算，消化度就是假的。
+    /// 拿不到基准（pulse 缺价/涨跌幅、窗口终点前没有观测）就返回 nil，不拿当前涨跌幅近似。
+    static func overseasChangeAtWindowEnd(market: NextCrossMarket, series: [NextMarketPoint],
+                                          pulse: NextCrossMarketPulse, windowEnd: Date) -> Double? {
+        guard let row = pulse.rows.first(where: { $0.market == market }),
+              let price = row.price, price > 0, let change = row.changePercent,
+              let valueAtEnd = NextCrossMarketAlignment.lastPoint(atOrBefore: windowEnd, in: series)?.value,
+              valueAtEnd > 0 else { return nil }
+        let previousClose = price / (1 + change / 100)
+        return NextCrossMarketAlignment.changePercent(from: previousClose, to: valueAtEnd)
     }
 
     // MARK: Risk Guard（124/129）

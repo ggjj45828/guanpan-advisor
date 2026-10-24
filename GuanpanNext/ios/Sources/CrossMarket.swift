@@ -773,11 +773,8 @@ struct NextAbsorptionAssessment: Equatable {
     let sinceOpen: Double
     /// 已被计价的比例（0…1）。方向相反时视为已消化并开始反向修复。
     var absorbedRatio: Double {
-        guard abs(overnightChange) > 0.01 else { return 1 }
-        let travelled = openGap + sinceOpen
-        let sameDirection = (overnightChange > 0) == (travelled > 0)
-        if sameDirection { return min(1, abs(travelled) / abs(overnightChange)) }
-        return min(1, abs(openGap) / abs(overnightChange))
+        NextAbsorptionEngine.absorbedRatio(overnightChange: overnightChange,
+                                           openGap: openGap, sinceOpen: sinceOpen)
     }
     var verdict: String {
         if absorbedRatio >= 0.8 { return "隔夜信息基本已计价，不宜再按隔夜方向追单" }
@@ -787,6 +784,17 @@ struct NextAbsorptionAssessment: Equatable {
 }
 
 enum NextAbsorptionEngine {
+    /// 123/126 共用的已计价比例，两个窗口不允许各算各的。
+    /// 本地累计位移（开盘缺口 + 开盘至今）与隔夜变化同向时，比例 = 累计位移 / 隔夜变化；
+    /// 反向时只认开盘缺口那一段（其后的反向修复不计入「消化隔夜信息」）。
+    static func absorbedRatio(overnightChange: Double, openGap: Double, sinceOpen: Double) -> Double {
+        guard abs(overnightChange) > 0.01 else { return 1 }
+        let travelled = openGap + sinceOpen
+        let sameDirection = (overnightChange > 0) == (travelled > 0)
+        if sameDirection { return min(1, abs(travelled) / abs(overnightChange)) }
+        return min(1, abs(openGap) / abs(overnightChange))
+    }
+
     static func assess(overnightChange: Double, previousClose: Double, openPrice: Double,
                        currentPrice: Double) -> NextAbsorptionAssessment? {
         guard let gap = NextCrossMarketAlignment.changePercent(from: previousClose, to: openPrice),

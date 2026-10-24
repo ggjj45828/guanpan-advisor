@@ -208,6 +208,164 @@ final class NextCrossMarketLoopTests: XCTestCase {
         XCTAssertTrue(outcome.explanation.contains { $0.contains("不参与计划决策") })
     }
 
+    /// 2026-10-23（周五）10:05（上海）：开盘消化窗口（9:30–10:00）已走完，
+    /// 且仍在开盘后一小时内——这是 126 信号能发言的时点。
+    private func morningOpen() -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        var comps = DateComponents()
+        comps.year = 2026; comps.month = 10; comps.day = 23
+        comps.hour = 10; comps.minute = 5
+        return calendar.date(from: comps)!
+    }
+
+    /// 开盘后一小时的脉搏：日本可用、当日 -1.00%（现价 61,380 反解昨收 62,000）。
+    private func morningPulse(base: Date) -> NextCrossMarketPulse {
+        let row = NextCrossMarketPulseRow(
+            market: .japan, status: .open, price: 61_380, changePercent: -1.0,
+            observedAt: base.addingTimeInterval(-60), ageMinutes: 1, usable: true)
+        return NextCrossMarketPulse(generatedAt: base, rows: [row],
+                                    archivedDays: [.japan: 40, .korea: 40, .hongKong: 40],
+                                    minimumDays: 30, lunchNote: nil)
+    }
+
+    /// 日本当日序列：A股 8:00（=日本 9:00）62,000 → A股 9:55（=日本 10:50）61,380。
+    /// A股 10:00 时刻取到的值是 61,380，配合 pulse 反解的昨收 62,000 → 隔夜 -1.00%。
+    private func morningOverseas(base: Date) -> [NextMarketPoint] {
+        [point(base, -125, 62_000), point(base, -10, 61_380)]
+    }
+
+    /// 当日 9:30–10:00 的 30 根分钟线：今开 99.0，10:00 报 lastClose（昨收 100）。
+    private func morningMinutes(lastClose: Double) -> [NextChartSample] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 10, day: 23,
+                                                       hour: 9, minute: 30))!
+        return (0..<30).map { index in
+            let fraction = Double(index) / 29
+            let close = 99.0 + (lastClose - 99.0) * fraction
+            return NextChartSample(timestamp: start.addingTimeInterval(Double(index) * 60),
+                                   open: index == 0 ? Decimal(99.0) : nil,
+                                   high: Decimal(max(99.0, close)), low: Decimal(min(99.0, close)),
+                                   close: Decimal(close), iopv: nil, volume: 100)
+        }
+    }
+
+    // MARK: 126 开盘信息消化（9:30–10:00）
+
+    /// 低开 -1% 后 10:00 仍 -1.1%：隔夜 -1% 已计价 → 「开盘已消化」信号；
+    /// 领先关系已验证时按边界只作风险拦截，不下达任何计划。
+    func test_openAbsorptionSignalInterceptsAfterWindow() {
+        let base = morningOpen()
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 98.9), previousClose: 100,
+            longTermValidatedLeads: [.japan])
+        XCTAssertEqual(outcome.signal?.kind, .openAbsorbed, "开盘半小时已计价必须被识别为信号")
+        XCTAssertTrue(outcome.gate.isInterceptor, "已验证领先关系 + 当前信号 → 只作风险拦截")
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("开盘半小时（9:30–10:00") },
+                      "解释必须带口径与数字，可核对")
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("已计价") })
+    }
+
+    /// 低开 -1% 后 10:00 修复到 -0.5%：隔夜 -1% 远未消化完 → 「开盘未消化」信号。
+    func test_openUnderAbsorbedInterceptsWhenTransmissionRemains() {
+        let base = morningOpen()
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 99.5), previousClose: 100,
+            longTermValidatedLeads: [.japan])
+        XCTAssertEqual(outcome.signal?.kind, .openUnderAbsorbed)
+        XCTAssertTrue(outcome.gate.isInterceptor, "传导仍在时同样只作风险拦截")
+    }
+
+    /// 中间带（消化过半但未基本计价）只作说明，不构成信号——不给「差不多」留门口。
+    func test_openAbsorptionMiddleBandIsNotASignal() {
+        let base = morningOpen()
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 99.3), previousClose: 100,
+            longTermValidatedLeads: [.japan])
+        XCTAssertNil(outcome.signal, "消化 70% 不是信号")
+        guard case .clear = outcome.gate else { return XCTFail("中间带不能变成拦截") }
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("消化过半但未基本计价") })
+    }
+
+    /// 10:00 前窗口没走完：只说明「不给结论」，绝不返回信号。
+    func test_openAbsorptionBeforeWindowGivesNoSignal() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let base = calendar.date(from: DateComponents(year: 2026, month: 10, day: 23,
+                                                      hour: 9, minute: 45))!
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 98.9), previousClose: 100,
+            longTermValidatedLeads: [.japan])
+        XCTAssertNil(outcome.signal, "半截窗口编不出消化度")
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("未走完") })
+    }
+
+    /// 领先关系没过长期验证：信号照认，但闸门必须是不参与（clear）——不拦截也不授权。
+    func test_openAbsorptionWithoutValidatedLeadStaysClear() {
+        let base = morningOpen()
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 98.9), previousClose: 100,
+            longTermValidatedLeads: [])
+        XCTAssertEqual(outcome.signal?.kind, .openAbsorbed, "信号识别与验证门槛是两回事")
+        guard case .clear = outcome.gate else { return XCTFail("未验证的领先关系不能拦截") }
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("尚未通过") })
+    }
+
+    /// 没有分钟线或没有昨收：明说数据不足，不拿日线近似充数。
+    func test_openAbsorptionWithoutMinutesOrPreviousCloseSaysDataMissing() {
+        let base = morningOpen()
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: [], previousClose: nil,
+            longTermValidatedLeads: [.japan])
+        XCTAssertNil(outcome.signal)
+        XCTAssertTrue(outcome.explanation.contains { $0.contains("数据不齐") },
+                      "缺数据必须明说，不能静默跳过")
+    }
+
+    /// 午后评估不再发开盘信号：「午后不宜追单」在 14:00 提出来没有意义，
+    /// 那个时点由午休/背离负责。
+    func test_afternoonEvaluationDoesNotFireOpeningSignal() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let base = calendar.date(from: DateComponents(year: 2026, month: 10, day: 23,
+                                                      hour: 14, minute: 5))!
+        let outcome = NextCrossMarketLoop.evaluate(
+            code: "513520", now: base,
+            overseas: [.japan: morningOverseas(base: base)], local: risingLocal(base: base), vwap: 1.0,
+            volumeRecovered: true, studies: [usableStudy()], rollings: [fullWeight()],
+            pulse: morningPulse(base: base),
+            minutes: morningMinutes(lastClose: 98.9), previousClose: 100,
+            longTermValidatedLeads: [.japan])
+        XCTAssertNil(outcome.signal, "午后不发开盘消化信号")
+        XCTAssertFalse(outcome.explanation.contains { $0.contains("开盘半小时") },
+                       "午后不该出现开盘窗口的解释行")
+    }
+
     // MARK: 144 复盘
 
     /// 跨市场信号现在是风险拦截器：它暂停计划而非下单，复盘只判断「暂停事后看对不对」。
