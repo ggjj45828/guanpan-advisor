@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
+from crossmarket import fetch_snapshots, archive_rows
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 # 演示标的**默认不再常驻采集**。以前这四个代码被无条件并进采集集合，
@@ -77,7 +78,7 @@ def attach_quote_iopv(rows, quote):
     return rows
 
 
-def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute):
+def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fetch_minute, cross_fetcher=fetch_snapshots):
     """Each loop owns its own timer and failure handling; sync APIs never stop them."""
     def tracked():
         with database.connect() as connection:
@@ -148,6 +149,44 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                 update("minute-archive", "idle", "outside mainland market collection window; historical archive remains available")
             time.sleep(60)
 
+    def cross_loop():
+        """跨市场快照采集（116–145 的数据来源）。
+
+        为什么需要一个独立线程：日经/KOSPI/恒生科技/纳指**没有分钟线接口**，
+        只有"此刻一个价"。想验证「午休期间日韩修复 → A股午后修复」，
+        就必须自己按分钟攒出历史；攒不出来就只能永远凭感觉。
+
+        两条克制：
+        1. 只在上海时间 08:00–16:10 采（覆盖日韩全天 + 港股全天）；
+           纳指此时是收盘后的最后价，每天因此只有很少几个点，这是如实记录，
+           不为了凑点数在夜里空转。
+        2. 源时间过期的样本由 `archive_rows` 直接丢掉，不落库。
+           收盘后源会一直返回最后成交价，把它当新观测会让回放凭空多出一段横盘。
+        """
+        update("cross-market", "starting", "worker starting")
+        while True:
+            local = datetime.now(SHANGHAI)
+            in_window = local.weekday() < 5 and (8, 0) <= (local.hour, local.minute) <= (16, 10)
+            if not in_window:
+                update("cross-market", "idle",
+                       "outside 08:00-16:10 Asia/Shanghai sampling window; archived samples remain available")
+                time.sleep(300); continue
+            try:
+                samples = cross_fetcher()
+                rows, dropped = archive_rows(samples, now=datetime.now(timezone.utc))
+                if rows:
+                    result = database.put_cross_samples(rows, datetime.now(timezone.utc).isoformat())
+                    detail = f"{result['accepted']} samples archived from {len({r['market'] for r in rows})} markets; next sample in 1m"
+                    if dropped:
+                        detail += "; dropped " + ", ".join(sorted({f"{d['market']}:{d['reason']}" for d in dropped}))[:160]
+                    update("cross-market", "ok", detail)
+                else:
+                    reasons = ", ".join(sorted({f"{d['market']}:{d['reason']}" for d in dropped})) or "no samples parsed"
+                    update("cross-market", "degraded", f"no fresh sample: {reasons}"[:500])
+            except Exception as error:  # noqa: BLE001 - 采集失败不能影响其它线程
+                update("cross-market", "degraded", f"fetch failed: {type(error).__name__}: {error}"[:500])
+            time.sleep(60)
+
     def dividend_loop():
         update("dividend-archive", "starting", "dividend collector starting")
         while True:
@@ -166,5 +205,6 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
                    f"{collected}/{len(codes)} codes checked; ETF F10 events separated from qfq/raw estimates; history retained{missing_note(failures)}")
             time.sleep(86400)
 
-    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop), ("dividend-archive", dividend_loop)):
+    for name, target in (("daily-archive", daily_loop), ("minute-archive", minute_loop),
+                         ("cross-market", cross_loop), ("dividend-archive", dividend_loop)):
         threading.Thread(target=target, name=name, daemon=True).start()

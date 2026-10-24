@@ -20,6 +20,7 @@ from market import (fetch_indices, fetch_tencent_quotes, fetch_tencent_daily, fe
 from workers import start_workers
 import research
 import diagnose
+import crossmarket
 
 WEB_ROOT = Path(__file__).with_name("web")
 
@@ -125,6 +126,25 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                     converted = convert_legacy_web_book(legacy["data"])
                     return self.reply(200, {"revision": legacy["revision"], **converted})
                 except InvalidData as error: return self.reply(422, {"error": str(error), "revision": database.get_legacy_inbox("main")["revision"]})
+            if path == "/v1/cross/availability":
+                # 跨市场数据「够不够验证领先关系」。手机端据此决定显示结论还是
+                # 显示「暂无稳定领先关系」——这条判定必须由数据说话，不能由愿望说话。
+                try:
+                    rows = database.get_cross_samples()
+                    return self.reply(200, crossmarket.availability(rows))
+                except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
+            if path == "/v1/cross/series":
+                # 只要原始观测，不返回任何统计结论：NAS 是仓库，研究在手机端做。
+                query = parse_qs(parsed.query)
+                market = query.get("market", [None])[0]
+                days_text = query.get("days", [""])[0]
+                try:
+                    days = int(days_text) if days_text else None
+                    rows = database.get_cross_samples(market=market, days=days)
+                    return self.reply(200, {"source": "NAS cross-market snapshot archive",
+                                            "markets": crossmarket.group_series(rows),
+                                            "rows": len(rows)})
+                except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
             if path.startswith("/v1/research/"):
                 try:
                     code = path.rsplit("/", 1)[-1]; symbol_for(code)

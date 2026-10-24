@@ -824,6 +824,7 @@ struct LocalPreferences: Codable {
         return NextDecisionContextBuilder.build(guidance: guidance, book: book, quotes: quoteMap,
                                                 nasResearchLines: researchLines, newsLines: [],
                                                 profileLines: NextProfileEngine.promptLines(profile: profile),
+                                                crossMarketLines: crossMarketNotes,
                                                 now: Date())
     }
 
@@ -1102,6 +1103,44 @@ struct LocalPreferences: Codable {
     }
     /// 最近一次检测时间；没测过就是 nil（界面显示「待检测」，不编时间）。
     var nasCheckedAt: Date? { nasHealth?.checkedAt }
+
+    /// NAS 归档的跨市场快照。**只存数据**，结论一律在手机端算。
+    @Published private(set) var crossMarketArchive: NextCrossMarketArchive?
+    /// 跨市场「数据够不够」的说明行。进决策上下文时原样交出去，不做美化。
+    @Published private(set) var crossMarketNotes: [String] = []
+    private var crossMarketFetchedAt: Date?
+
+    /// 拉 NAS 归档的跨市场快照。节流 15 分钟：这份数据是分钟级攒出来的，
+    /// 每分钟去问一次只会白白走隧道，结论也不会变。
+    /// 离线/未配置时清空——宁可显示「暂无」，也不拿上一次的旧数据冒充现在。
+    func refreshCrossMarket(force: Bool = false) async {
+        let base = preferences.nasBaseURL
+        guard !base.isEmpty, nasLinkState.isOnline else {
+            crossMarketArchive = nil
+            crossMarketNotes = []
+            return
+        }
+        if !force, let last = crossMarketFetchedAt, Date().timeIntervalSince(last) < 15 * 60 { return }
+        do {
+            let archive = try await NextNASService.readCrossMarketSeries(baseURL: base)
+            guard preferences.nasBaseURL == base else { return }
+            crossMarketArchive = archive
+            crossMarketFetchedAt = Date()
+            crossMarketNotes = Self.crossMarketNotes(from: archive)
+        } catch {
+            guard preferences.nasBaseURL == base else { return }
+            crossMarketArchive = nil
+            crossMarketNotes = ["跨市场：读取 NAS 归档失败（\(error.localizedDescription)），本次不参与任何判断"]
+        }
+    }
+
+    /// 把归档的覆盖情况翻成决策上下文能用的话。
+    /// 真正的判定逻辑放在 Core（`NextCrossMarketArchive.decisionContextNotes`），
+    /// 这里只做转发，测试才不用把整个 App 模型拖进去。
+    static func crossMarketNotes(from archive: NextCrossMarketArchive,
+                                 minimumDays: Int = NextCrossMarketFeed.minimumReplayDays) -> [String] {
+        archive.decisionContextNotes(minimumDays: minimumDays)
+    }
 
     /// 轻量连通性检测：**只请求很小的 `/health`**，绝不碰账本接口。
     /// `force = true` 用于用户点「测试连接 / 重新检查」；首页自动检测按 45 秒节流。

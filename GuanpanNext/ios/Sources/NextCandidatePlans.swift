@@ -392,6 +392,9 @@ struct NextDecisionContext: Equatable {
     let holdingsLines: [String]
     let nasResearchLines: [String]
     let newsLines: [String]
+    /// 跨市场（日韩/港股/美股）的覆盖情况与「数据够不够」的结论。
+    /// 只放事实与「暂无稳定领先关系」这类判定，不放方向性预测。
+    let crossMarketLines: [String]
     /// 本次在线 AI 实际收到的画像结论（可解释性：用户能查「AI 用了哪些画像信息」）。
     let profileLines: [String]
     let promptBlock: String
@@ -400,6 +403,7 @@ struct NextDecisionContext: Equatable {
 enum NextDecisionContextBuilder {
     static func build(guidance: NextDailyGuidance, book: NextBook, quotes: [String: NextQuote],
                       nasResearchLines: [String], newsLines: [String], profileLines: [String] = [],
+                      crossMarketLines: [String] = [],
                       now: Date) -> NextDecisionContext {
         var holdings: [String] = []
         for position in book.positions where position.units > 0 {
@@ -435,6 +439,7 @@ enum NextDecisionContextBuilder {
         【持仓】\(holdings.joined(separator: "\n"))
         【市场状态与候选计划】\(planLines.joined(separator: "\n"))
         【NAS 长期归档数据】\(nasResearchLines.isEmpty ? "暂无（NAS 未连接，或归档还没攒够可用统计）" : nasResearchLines.joined(separator: "\n"))
+        【跨市场（日韩/港股/美股）】\(crossMarketLines.isEmpty ? "暂无（NAS 未归档跨市场快照，或本机未连 NAS）" : crossMarketLines.joined(separator: "\n"))
         【新闻】\(newsLines.isEmpty ? "暂无" : newsLines.joined(separator: "\n"))
         【投资画像】\(profileLines.isEmpty ? "暂无足够行为样本，按默认门槛处理" : profileLines.joined(separator: "\n"))
         【今日结论】\(guidance.summary)
@@ -446,9 +451,11 @@ enum NextDecisionContextBuilder {
         5. 投资画像只决定「推荐优先级」和「表达方式」，绝不能修改行情事实、不能降低数据质量与风险门槛、不能为了迎合偏好制造交易机会；当机会低于画像门槛时，如实说「有机会但低于你的执行门槛，因此不主动推荐」；
         6. 不要输出画像里的原始成交明细，只引用上面的结论。
         7. 休市日（周末与法定节假日）不得建议「今天成交」：涉及做T、网格、挂单的计划只能面向下一交易日，并说明原因。
+        8. 跨市场数据只作背景：即便日韩/港股盘中明显修复，也只能写成「值得观察」；上下文写明「暂无稳定领先关系」时，禁止据此推荐任何交易，也不得用海外走势替代 A股 自身的价格与量能确认。
         """
         return NextDecisionContext(generatedAt: now, guidance: guidance, holdingsLines: holdings,
                                    nasResearchLines: nasResearchLines, newsLines: newsLines,
+                                   crossMarketLines: crossMarketLines,
                                    profileLines: profileLines, promptBlock: promptBlock)
     }
 }

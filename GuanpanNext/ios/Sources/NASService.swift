@@ -462,6 +462,25 @@ enum NextNASService {
     private static func endpoint(_ baseURL: String) throws -> URL {
         try validateURL(baseURL).appendingPathComponent("v1").appendingPathComponent("real").appendingPathComponent("books").appendingPathComponent("main")
     }
+
+    /// 读 NAS 归档的跨市场快照序列（116–145 的数据底座）。
+    ///
+    /// 只搬原始观测，不搬任何「领先关系」结论——结论由手机端自己算，
+    /// 这样 NAS 换个算法、或者哪天换了数据源，都不会悄悄改掉手机上的结论。
+    /// `days` 默认 120 个自然日：够覆盖 30 个交易日门槛的 4 倍，又不至于一次拖太多。
+    static func readCrossMarketSeries(baseURL: String, days: Int = 120,
+                                      session: URLSession = .shared) async throws -> NextCrossMarketArchive {
+        var components = URLComponents(url: try validateURL(baseURL)
+            .appendingPathComponent("v1").appendingPathComponent("cross").appendingPathComponent("series"),
+                                       resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
+        guard let url = components?.url else { throw NextError.invalid("NAS 跨市场地址无效") }
+        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 20))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NextError.invalid("NAS 跨市场读取失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
+        }
+        return try NextCrossMarketFeed.parse(data)
+    }
 }
 
 private extension NextBook { func validated() throws -> NextBook { try validate(); return self } }

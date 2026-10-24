@@ -139,6 +139,8 @@ struct ThemeHomeScreen: View {
             // 首页出现时做一次轻量连通检测（只请求 /health，45 秒内不重复）。
             // 不检测就永远显示「待检测」，绝不用「地址填过」冒充在线。
             await model.refreshNASLink()
+            // 通了才去拿跨市场归档（15 分钟节流）；没通就是空，界面如实显示「暂无」。
+            await model.refreshCrossMarket()
         }
     }
 }

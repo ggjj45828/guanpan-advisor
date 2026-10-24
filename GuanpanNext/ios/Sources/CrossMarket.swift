@@ -382,6 +382,144 @@ enum NextLunchBreakEngine {
     }
 }
 
+// MARK: - 120 午后反应统计
+//
+// 回答的是「午休期间出现的新信息，A股午后多久反应、反应多大、最坏能逆行多少」。
+// 这不是预测，是把过去 N 天同一时点的表现摊开：每个检查点用了几天、涨的比例、
+// 中位涨幅、最大不利波动。样本不够就明说「暂无稳定规律」。
+
+/// 一个检查点（相对 13:00 的分钟数；nil 表示收盘）。
+struct NextAfternoonCheckpoint: Equatable {
+    let label: String
+    let minutes: Int?
+    static let standard: [NextAfternoonCheckpoint] = [
+        NextAfternoonCheckpoint(label: "13:05", minutes: 5),
+        NextAfternoonCheckpoint(label: "13:15", minutes: 15),
+        NextAfternoonCheckpoint(label: "13:30", minutes: 30),
+        NextAfternoonCheckpoint(label: "14:00", minutes: 60),
+        NextAfternoonCheckpoint(label: "收盘", minutes: nil),
+    ]
+}
+
+/// 单个检查点的统计。
+struct NextAfternoonReactionBucket: Equatable {
+    let label: String
+    let sampleDays: Int
+    /// 上涨天数占比（0…1）。
+    let positiveRate: Double
+    let meanReturn: Double
+    let medianReturn: Double
+    /// 最大不利波动（最小的那个收益，负数即逆行）。
+    let maxAdverseReturn: Double
+    var text: String {
+        let positive = String(format: "%.0f", positiveRate * 100)
+        return "\(label) 涨 \(positive)% · 中位 \(String(format: "%+.2f", medianReturn))% · 最差 \(String(format: "%+.2f", maxAdverseReturn))%"
+    }
+}
+
+/// 一个交易日午后的原始素材。
+struct NextAfternoonSession: Equatable {
+    let date: Date
+    let lunchEnd: Date
+    /// 当日是否满足前置条件（例如「海外午休修复 ≥0.5pp 且 A股上午下跌」）。
+    let conditionMet: Bool
+    let points: [NextMarketPoint]
+}
+
+struct NextAfternoonReactionStudy: Equatable {
+    let code: String
+    let conditionText: String
+    let totalDays: Int
+    let conditionedDays: Int
+    /// 满足条件的样本。
+    let conditioned: [NextAfternoonReactionBucket]
+    /// 全部样本，用作对照：条件成立时是否真的比平常更好。
+    let unconditional: [NextAfternoonReactionBucket]
+    let hasStablePattern: Bool
+    let note: String
+
+    var summary: String {
+        guard let close = conditioned.last else { return "暂无稳定规律（没有可用样本）" }
+        if !hasStablePattern { return "暂无稳定规律：\(note)" }
+        return "\(conditionText)：\(conditionedDays) 天样本，\(close.text)"
+    }
+}
+
+enum NextAfternoonReactionEngine {
+    /// 少于此天数一律不下结论。
+    static let minimumDays = 20
+    /// 收盘检查点的上涨比例要偏离 50% 至少这么多，才算「有方向」。
+    static let minimumEdge = 0.10
+
+    static func study(code: String, conditionText: String, sessions: [NextAfternoonSession],
+                      checkpoints: [NextAfternoonCheckpoint] = NextAfternoonCheckpoint.standard) -> NextAfternoonReactionStudy {
+        let ordered = sessions.sorted { $0.date < $1.date }
+        let conditionedSessions = ordered.filter { $0.conditionMet }
+        let conditioned = buckets(sessions: conditionedSessions, checkpoints: checkpoints)
+        let unconditional = buckets(sessions: ordered, checkpoints: checkpoints)
+        let closeBucket = conditioned.last
+        let sampleDays = closeBucket?.sampleDays ?? 0
+        var stable = false
+        var note = ""
+        if sampleDays < minimumDays {
+            note = "满足条件的样本只有 \(sampleDays) 天，少于 \(minimumDays) 天，不能下结论"
+        } else if let closeBucket {
+            let edge = abs(closeBucket.positiveRate - 0.5)
+            stable = edge >= minimumEdge
+            if !stable {
+                note = "收盘上涨比例 \(String(format: "%.0f", closeBucket.positiveRate * 100))% 与随机无异（偏离不足 \(String(format: "%.0f", minimumEdge * 100)) 个百分点）"
+            } else {
+                note = "收盘上涨比例 \(String(format: "%.0f", closeBucket.positiveRate * 100))%，样本 \(sampleDays) 天"
+            }
+        } else {
+            note = "没有可用的午后分时"
+        }
+        return NextAfternoonReactionStudy(code: code, conditionText: conditionText,
+                                          totalDays: ordered.count, conditionedDays: sampleDays,
+                                          conditioned: conditioned, unconditional: unconditional,
+                                          hasStablePattern: stable, note: note)
+    }
+
+    static func buckets(sessions: [NextAfternoonSession],
+                        checkpoints: [NextAfternoonCheckpoint]) -> [NextAfternoonReactionBucket] {
+        var result: [NextAfternoonReactionBucket] = []
+        for checkpoint in checkpoints {
+            var returns: [Double] = []
+            for session in sessions {
+                guard let base = NextCrossMarketAlignment.firstPoint(atOrAfter: session.lunchEnd,
+                                                                     in: session.points, tolerance: 15 * 60) else { continue }
+                let target: NextMarketPoint?
+                if let minutes = checkpoint.minutes {
+                    target = NextCrossMarketAlignment.lastPoint(atOrBefore: session.lunchEnd.addingTimeInterval(Double(minutes) * 60),
+                                                                in: session.points)
+                } else {
+                    target = session.points.last
+                }
+                guard let target, target.timestamp > base.timestamp,
+                      let change = NextCrossMarketAlignment.changePercent(from: base.value, to: target.value) else { continue }
+                returns.append(change)
+            }
+            guard !returns.isEmpty else {
+                result.append(NextAfternoonReactionBucket(label: checkpoint.label, sampleDays: 0,
+                                                          positiveRate: 0, meanReturn: 0, medianReturn: 0,
+                                                          maxAdverseReturn: 0))
+                continue
+            }
+            let sorted = returns.sorted()
+            let positive = returns.filter { $0 > 0 }.count
+            let median = sorted.count % 2 == 0
+                ? (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+                : sorted[sorted.count / 2]
+            result.append(NextAfternoonReactionBucket(
+                label: checkpoint.label, sampleDays: returns.count,
+                positiveRate: Double(positive) / Double(returns.count),
+                meanReturn: returns.reduce(0, +) / Double(returns.count),
+                medianReturn: median, maxAdverseReturn: sorted.first ?? 0))
+        }
+        return result
+    }
+}
+
 // MARK: - 122 跨市场背离
 
 enum NextDivergenceDirection: String, Equatable { case potentialCatchUp, potentialDrop }

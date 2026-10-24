@@ -15,6 +15,11 @@ class Conflict(Exception):
     pass
 
 
+# 跨市场快照允许的市场键。与 crossmarket.MARKETS 的键保持一致；
+# 这里不 import crossmarket，避免「数据层依赖采集层」——采集层依赖数据层才对。
+CROSS_MARKETS = ("japan", "korea", "hongKong", "unitedStates")
+
+
 def strict_iso_date(value):
     """Accept only canonical Gregorian YYYY-MM-DD dates used by the iOS wire models."""
     if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
@@ -355,6 +360,14 @@ class NextDatabase:
                 CREATE TABLE IF NOT EXISTS twin_account_history (
                     id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL,
                     PRIMARY KEY(id, revision));
+                -- 跨市场先行信号的数据底座（116–145）。海外 4 个市场只提供快照、
+                -- 不提供分钟线，所以这里存的是「我们每分钟看到的价格」，一行一个观测。
+                -- 主键用 (market, stamp)：同一时刻重复采到不会写两行。
+                CREATE TABLE IF NOT EXISTS cross_market_samples (
+                    market TEXT NOT NULL, stamp TEXT NOT NULL, price TEXT NOT NULL,
+                    change_percent TEXT, source TEXT, observed_at TEXT NOT NULL,
+                    PRIMARY KEY(market, stamp));
+                CREATE INDEX IF NOT EXISTS idx_cross_market_stamp ON cross_market_samples(stamp);
             """)
             # 老库升级：`dividend_archive` 早期没有 rules_version 列。
             # 加不上（列已存在）就忽略 —— SQLite 没有 ADD COLUMN IF NOT EXISTS。
@@ -675,6 +688,87 @@ class NextDatabase:
             rows = db.execute("SELECT body FROM minute_archive WHERE code=? AND stamp >= ? ORDER BY stamp",
                               (code, cutoff)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    # MARK: 跨市场快照归档（116–145 的数据底座）
+
+    def put_cross_samples(self, rows, fetched_at):
+        """写海外市场快照。只做校验与去重，**不计算任何领先关系**。
+
+        校验口径：market 必须在登记表里，stamp 必须是带时区的 ISO 时间，
+        price 必须是正的有限数。任一不合法整行丢弃（不是整批失败）——
+        一个市场源坏了不能把另外三个市场的样本一起丢。
+        """
+        if not isinstance(rows, list):
+            raise InvalidData("invalid cross market rows")
+        accepted, rejected = 0, 0
+        with self.connect() as db:
+            for row in rows:
+                if not isinstance(row, dict):
+                    rejected += 1
+                    continue
+                market = row.get("market")
+                stamp = row.get("stamp")
+                if market not in CROSS_MARKETS:
+                    rejected += 1
+                    continue
+                if not isinstance(stamp, str) or "T" not in stamp:
+                    rejected += 1
+                    continue
+                try:
+                    price = Decimal(str(row.get("price")))
+                    change = (None if row.get("changePercent") in (None, "")
+                              else Decimal(str(row.get("changePercent"))))
+                except (InvalidOperation, ValueError):
+                    rejected += 1
+                    continue
+                if not price.is_finite() or price <= 0 or (change is not None and not change.is_finite()):
+                    rejected += 1
+                    continue
+                db.execute(
+                    "INSERT OR REPLACE INTO cross_market_samples VALUES (?, ?, ?, ?, ?, ?)",
+                    (market, stamp, str(price),
+                     None if change is None else str(change),
+                     str(row.get("source") or ""),
+                     str(row.get("observedAt") or fetched_at)))
+                accepted += 1
+        return {"accepted": accepted, "rejected": rejected, "fetchedAt": fetched_at}
+
+    def get_cross_samples(self, market=None, days=None, since=None):
+        """按市场取快照（升序）。days 表示「最近 N 个自然日」，since 表示起始日期。"""
+        if market is not None and market not in CROSS_MARKETS:
+            raise InvalidData("invalid cross market")
+        clauses, args = [], []
+        if market:
+            clauses.append("market=?")
+            args.append(market)
+        if since:
+            try:
+                date.fromisoformat(since)
+            except (ValueError, TypeError):
+                raise InvalidData("invalid since date")
+            clauses.append("stamp >= ?")
+            args.append(since)
+        elif days:
+            if not isinstance(days, int) or days <= 0 or days > 400:
+                raise InvalidData("invalid cross market window")
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+            clauses.append("stamp >= ?")
+            args.append(cutoff)
+        sql = "SELECT market, stamp, price, change_percent FROM cross_market_samples"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY stamp"
+        with self.connect() as db:
+            rows = db.execute(sql, tuple(args)).fetchall()
+        return [{"market": row[0], "stamp": row[1], "price": row[2], "changePercent": row[3]} for row in rows]
+
+    def cross_market_counts(self):
+        """每个市场各存了多少行、覆盖到哪天 —— 用于「数据够不够做研究」的判断。"""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT market, COUNT(*), MIN(stamp), MAX(stamp) FROM cross_market_samples GROUP BY market"
+            ).fetchall()
+        return {row[0]: {"samples": row[1], "firstAt": row[2], "lastAt": row[3]} for row in rows}
 
     def get_research(self, run_id):
         self.validate_id(run_id)
