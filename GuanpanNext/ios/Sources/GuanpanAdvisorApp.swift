@@ -149,8 +149,7 @@ struct RootView: View {
         case .market: return .market
         case .assets: return .holdings
         case .income: return .aiReport
-        case .income: return .aiReport
-        case .mine, .overview: return .detail
+        case .mine, .overview, .laboratory: return .detail
         }
     }
     /// 截图/回归专用启动参数：`-theme editorial|modern|dashboard|magazine|puzzle`
