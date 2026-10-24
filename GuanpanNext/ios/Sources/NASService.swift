@@ -26,6 +26,88 @@ struct NextNASHealth: Decodable {
     let service: String
     let schemaVersion: Int
 }
+
+/// 最近一次 NAS 健康检查的结果：什么时候测的、通没通、为什么不通、快不快。
+/// **不持久化**：重启 App 后宁可显示「待检测」，也不拿上次的 online 冒充现在在线。
+struct NextNASHealthRecord: Equatable {
+    let ok: Bool
+    let checkedAt: Date
+    let latencyMS: Int?
+    let reason: String?
+}
+
+/// NAS 连通状态——首页五套主题与设置页共用这一个判定，不再各自拿「地址填没填」当在线。
+/// 三条铁律：填了地址 ≠ 在线；同步过账本 ≠ 在线；只有「最近一次 `/health` 成功且未过期」才叫在线。
+enum NextNASLinkState: Equatable {
+    case unconfigured
+    case unchecked
+    case online(checkedAt: Date, latencyMS: Int?)
+    /// 测过且通了，但已经超过有效期：降级为「待复核」，不继续显示在线。
+    case expired(checkedAt: Date)
+    case offline(checkedAt: Date, reason: String)
+
+    /// 在线结论的有效期。定了时长就必须真的按它降级，否则「在线」还是会赖着不走。
+    static let ttl: TimeInterval = 10 * 60
+
+    var isOnline: Bool {
+        if case .online = self { return true }
+        return false
+    }
+
+    /// 短标签，给首页徽标用。
+    var badge: String {
+        switch self {
+        case .unconfigured: return "未配置"
+        case .unchecked: return "待检测"
+        case .online: return "在线"
+        case .expired: return "待复核"
+        case .offline: return "离线"
+        }
+    }
+
+    /// 一句话细节：必须带「什么时候检测的」。只说「在线」而不说检测时间，等于又让人误以为实时。
+    var detail: String {
+        switch self {
+        case .unconfigured: return "还没填 NAS 地址"
+        case .unchecked: return "尚未检测"
+        case .online(let at, let ms):
+            let stamp = NextNASLinkState.timeText(at)
+            return ms.map { "\(stamp) 检测通过 · \($0)ms" } ?? "\(stamp) 检测通过"
+        case .expired(let at):
+            return "上次检测 \(NextNASLinkState.timeText(at))，已超 10 分钟未复核"
+        case .offline(let at, let reason):
+            return "\(NextNASLinkState.timeText(at)) 检测失败 · \(reason)"
+        }
+    }
+
+    /// 语义色，具体颜色交给主题层映射，避免在这层写死某个主题的色值。
+    enum Tone { case ok, bad, idle }
+
+    var tone: Tone {
+        switch self {
+        case .online: return .ok
+        case .offline: return .bad
+        default: return .idle
+        }
+    }
+
+    static func timeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// 由「最近一次检查结果」推出状态。过期只降级，绝不猜在线。
+    static func resolve(configured: Bool, record: NextNASHealthRecord?, now: Date) -> NextNASLinkState {
+        guard configured else { return .unconfigured }
+        guard let record else { return .unchecked }
+        guard record.ok else { return .offline(checkedAt: record.checkedAt, reason: record.reason ?? "健康检查失败") }
+        guard now.timeIntervalSince(record.checkedAt) <= ttl else { return .expired(checkedAt: record.checkedAt) }
+        return .online(checkedAt: record.checkedAt, latencyMS: record.latencyMS)
+    }
+}
 struct NextLegacyBookSummary: Decodable {
     let positions: Int
     let fills: Int
@@ -153,6 +235,24 @@ enum NextNASService {
         let value = try JSONDecoder().decode(RemoteBook.self, from: data)
         let book = try value.bookJSON.map { try JSONDecoder().decode(NextBook.self, from: Data($0.utf8)).validated() }
         return NextNASStatus(revision: value.revision, hasBook: value.bookJSON != nil, book: book)
+    }
+    private struct RemoteBookMeta: Decodable {
+        let revision: Int
+        let hasBook: Bool?
+    }
+    /// 只问「修订几、有没有账本」，**不带整份账本正文**（走 `?meta=1`）。
+    /// 连通性检查、自动上传前的修订核对都该用它：账本正文只在真正上传/下载时才传。
+    /// 旧版 NAS 若不认 `meta=1` 会照常回整份账本——此时只解元信息，功能不受影响。
+    static func readRevision(baseURL: String, session: URLSession = .shared) async throws -> NextNASStatus {
+        var components = URLComponents(url: try endpoint(baseURL), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "meta", value: "1")]
+        guard let url = components?.url else { throw NextError.invalid("NAS 地址无法拼出修订查询地址") }
+        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 10))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NextError.invalid("NAS 修订读取失败：\(serverMessage(data, status: (response as? HTTPURLResponse)?.statusCode ?? -1))")
+        }
+        let value = try JSONDecoder().decode(RemoteBookMeta.self, from: data)
+        return NextNASStatus(revision: value.revision, hasBook: value.hasBook ?? (value.revision > 0), book: nil)
     }
     static func pushBook(_ book: NextBook, expectedRevision: Int, baseURL: String, session: URLSession = .shared) async throws -> Int {
         let bookData = try JSONEncoder().encode(book)

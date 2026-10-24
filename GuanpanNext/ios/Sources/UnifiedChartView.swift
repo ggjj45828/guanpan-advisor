@@ -15,6 +15,8 @@ enum NextSubchartKind: String, CaseIterable, Identifiable {
 struct UnifiedChartView: View {
     @EnvironmentObject private var model: NextAppModel
     @Environment(\.gp) private var p
+    /// 横屏（verticalSizeClass == .compact）时纵向只剩 ~390pt，高度必须另算。
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     let dataset: NextChartDataset?
     let interval: Binding<NextChartInterval>
     let costPerUnit: Decimal?
@@ -26,11 +28,32 @@ struct UnifiedChartView: View {
     private var zoomAllowed: Bool { interval.wrappedValue != .intraday }
     /// 分时图比日 K 更吃高度。同花顺的分时主图几乎占满一屏，副图（MACD/量）也要能看清。
     /// 之前统一 250 / 430，手机上主图被压得只剩一条带，MACD 柱挤成一条缝。
+    /// 横屏时高度收紧：主图还占 440/320，副图和图例就会被顶出屏幕，用户只能看到半张图。
+    /// 宽度在横屏翻倍，可视 K 线根数由宽度决定，所以收紧高度不会让人看少。
+    private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var chartHeight: CGFloat {
         let isIntraday = interval.wrappedValue == .intraday
-        if expanded { return isIntraday ? 700 : 560 }
-        return isIntraday ? 440 : 320
+        if expanded { return isIntraday ? (isCompactHeight ? 560 : 700) : (isCompactHeight ? 460 : 560) }
+        return isIntraday ? (isCompactHeight ? 340 : 440) : (isCompactHeight ? 260 : 320)
     }
+    /// 一屏最少留多少根 K 线。上限不再写死 8 倍：1000 根日 K 放大到 8 倍还剩 125 根，
+    /// 一根蜡烛不到 3 个点，等于没放大。改成按「至少留 20 根」反推上限，长历史才真能看清。
+    private static let minimumVisibleBars: Double = 20
+    private var windowBarCount: Int {
+        switch interval.wrappedValue {
+        case .fiveDay: return 5
+        case .threeMonth: return 66
+        case .year: return 252
+        default: return activeDataset?.orderedSamples.count ?? 0
+        }
+    }
+    private var maxMagnification: Double {
+        guard zoomAllowed else { return 1 }
+        let usable = Double(min(activeDataset?.orderedSamples.count ?? 0, windowBarCount))
+        guard usable > Self.minimumVisibleBars else { return 1 }
+        return max(1, usable / Self.minimumVisibleBars)
+    }
+    private func clampZoom(_ value: Double) -> Double { min(maxMagnification, max(1, value)) }
     @State private var magnification = 1.0
     @State private var pinchBase: Double?
     @State private var intradaySessionDate = Date()
@@ -209,7 +232,7 @@ struct UnifiedChartView: View {
                 }
                 Spacer(minLength: 0)
                 if zoomAllowed {
-                    Button { magnification = magnification >= 4 ? 1 : magnification * 1.6; saveChartState() } label: { Image(systemName: "plus.magnifyingglass").font(.system(size: 12)).foregroundStyle(p.forest).frame(minWidth: 30, minHeight: 30) }.accessibilityLabel("缩放图表")
+                    Button { magnification = magnification >= maxMagnification - 0.001 ? 1 : clampZoom(magnification * 1.6); saveChartState() } label: { Image(systemName: "plus.magnifyingglass").font(.system(size: 12)).foregroundStyle(p.forest).frame(minWidth: 30, minHeight: 30) }.accessibilityLabel("缩放图表")
                 }
             }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -262,7 +285,8 @@ struct UnifiedChartView: View {
                     Canvas { context, size in draw(context: &context, size: size) }
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 8).onChanged { value in
-                            guard value.startLocation.x > 26, let range = visibleTimeDomain else { return }
+                            // 左轴 26pt 不再算死区：从价格刻度上按下也能拖出十字线（比例已钳到 0…1）。
+                            guard let range = visibleTimeDomain else { return }
                             let rightAxis: CGFloat = 12
                             let ratio = min(1, max(0, (value.location.x - 43) / max(1, geometry.size.width - 43 - rightAxis)))
                             if interval.wrappedValue == .intraday {
@@ -275,14 +299,14 @@ struct UnifiedChartView: View {
                         .simultaneousGesture(MagnifyGesture().onChanged { value in
                             guard zoomAllowed else { return }
                             if pinchBase == nil { pinchBase = magnification }
-                            magnification = min(8, max(1, (pinchBase ?? magnification) * Double(value.magnification)))
+                            magnification = clampZoom((pinchBase ?? magnification) * Double(value.magnification))
                         }.onEnded { _ in pinchBase = nil; saveChartState() })
                         .accessibilityElement(children: .ignore)
                         .accessibilityIdentifier("chart.plot")
                         .accessibilityLabel("价格、IOPV、成交量共用价格纵轴的图表")
                         .accessibilityValue(selectedSample.map { "\($0.timestamp.formatted(date: .numeric, time: .shortened))，价格 ¥\(NextMoney.text($0.close, digits: 3))" } ?? "拖动或使用前后数据点操作查看历史")
-                        .accessibilityAction(named: "放大图表") { guard zoomAllowed else { return }; magnification = min(8, magnification * 1.5); saveChartState() }
-                        .accessibilityAction(named: "缩小图表") { guard zoomAllowed else { return }; magnification = max(1, magnification / 1.5); saveChartState() }
+                        .accessibilityAction(named: "放大图表") { guard zoomAllowed else { return }; magnification = clampZoom(magnification * 1.5); saveChartState() }
+                        .accessibilityAction(named: "缩小图表") { guard zoomAllowed else { return }; magnification = clampZoom(magnification / 1.5); saveChartState() }
                         .accessibilityAction(named: "上一个数据点") { moveCrosshair(-1) }
                         .accessibilityAction(named: "下一个数据点") { moveCrosshair(1) }
                 }.frame(height: chartHeight)
@@ -296,7 +320,7 @@ struct UnifiedChartView: View {
                         if visibleLayers.contains("ma60") && activeDataset?.interval == .day && (activeDataset?.orderedSamples.count ?? 0) >= 60 { legend("MA60", color: p.chartViolet) }
                         if visibleLayers.contains("ma250") && activeDataset?.interval == .day {
                             let bars = activeDataset?.orderedSamples.count ?? 0
-                            legend(bars >= 250 ? "MA250" : "MA250·\(bars)根", color: p.terracotta)
+                            legend(bars >= 250 ? "MA250" : "MA250·\(bars)根", color: p.chartLong)
                         }
                         if visibleLayers.contains("previous") && activeDataset?.interval == .intraday { legend("昨收", color: p.muted) }
                         if activeDataset?.iopvSource != nil { legend("IOPV · 同轴", color: p.chartViolet) }
@@ -410,7 +434,7 @@ struct UnifiedChartView: View {
         }
         // Moving averages include earlier bars outside the zoom window.
         let fullSamples = workingSamples
-        for (key, period, color, width) in [("ma5", 5, p.chartGold, 1.2), ("ma10", 10, p.chartBlue, 1.1), ("ma20", 20, p.jade, 1.15), ("ma60", 60, p.chartViolet, 1.1), ("ma250", 250, p.terracotta, 1.25)]
+        for (key, period, color, width) in [("ma5", 5, p.chartGold, 1.2), ("ma10", 10, p.chartBlue, 1.1), ("ma20", 20, p.jade, 1.15), ("ma60", 60, p.chartViolet, 1.1), ("ma250", 250, p.chartLong, 1.25)]
         where visibleLayers.contains(key)
             && fullSamples.count >= (key == "ma250" ? 2 : period)
             && (key != "ma250" || dataset.interval == .day) {
@@ -646,7 +670,7 @@ struct UnifiedChartView: View {
         if !restored.visibleLayers.isEmpty { visibleLayers = restored.visibleLayers }
         selectedTime = state.crosshairTime
         // 分时窗口固定，历史缩放值不再套用，避免切到分时后还带着日 K 的放大倍数。
-        magnification = zoomAllowed ? min(8, max(1, state.scale)) : 1
+        magnification = zoomAllowed ? clampZoom(state.scale) : 1
         let datasetDay = dataset?.orderedSamples.last?.timestamp
         latestIntradaySessionDate = state.latestIntradaySessionDate ?? datasetDay ?? Date()
         intradaySessionDate = state.intradaySessionDate ?? datasetDay ?? latestIntradaySessionDate
@@ -696,7 +720,7 @@ struct UnifiedChartView: View {
         case "ma60": indicatorColor = p.chartViolet
         case "iopv": indicatorColor = p.chartViolet
         case "ma20", "trades": indicatorColor = p.jade
-        case "ma250": indicatorColor = p.terracotta
+        case "ma250": indicatorColor = p.chartLong
         case "cost": indicatorColor = p.chartCost
         case "price": indicatorColor = p.chartBlue
         default: indicatorColor = p.forest

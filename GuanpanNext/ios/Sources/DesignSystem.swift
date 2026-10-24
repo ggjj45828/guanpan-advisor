@@ -125,6 +125,9 @@ struct GPPalette {
     var heroSurface: Color { tokens.heroSurface }
     var chartBlue: Color { tokens.chartBlue }
     var chartViolet: Color { tokens.chartViolet }
+    /// 年线 MA250 专用色。别再拿 terracotta 当 MA250：东方主题里 secondary 与 chartViolet
+    /// 是同一个 hex，MA60/MA250 会画成两条一模一样的紫线。
+    var chartLong: Color { tokens.chartLong }
     var chartGold: Color { tokens.chartGold }
     var chartCost: Color { tokens.chartCost }
     /// 涨跌语义色（全局唯一来源）：国内口径「红涨绿跌」。

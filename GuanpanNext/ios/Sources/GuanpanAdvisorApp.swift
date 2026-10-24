@@ -12,6 +12,16 @@ import UniformTypeIdentifiers
     var body: some Scene { WindowGroup { RootView().environmentObject(model) } }
 }
 
+/// NAS 连通状态的语义色 → 当前主题色。仅按「最近一次检测结果」上色：
+/// 通了才绿，没过期才绿；没测过 / 过期 / 失败都不得用绿色冒充。
+private func nasLinkColor(_ state: NextNASLinkState, _ p: GPPalette) -> Color {
+    switch state.tone {
+    case .ok: return p.jade
+    case .bad: return p.terracotta
+    case .idle: return p.muted
+    }
+}
+
 enum GPRoute: Hashable { case instrument(String), chart(String), decision(String?), dividends(String?), news, settings, alerts, fills, history, backups, worthOverview, indexDetail(String), profile }
 private extension GPRoute {
     var persisted: NextRoute {
@@ -2022,7 +2032,12 @@ private struct SettingsScreen: View {
                             }))
                             .font(.caption)
                             .accessibilityIdentifier("settings.nas.autoUpload")
-                        GPDataRow(title: "NAS 服务", value: model.syncStatus)
+                        // 连通结论只来自最近一次 /health：地址填过、账本传过都不算在线。
+                        GPDataRow(title: "NAS 连通", value: model.nasProbing ? "检测中…" : model.nasLinkState.badge,
+                                  note: model.nasLinkState.detail + (model.nasProbing ? " · 正在请求 /health" : ""),
+                                  valueColor: nasLinkColor(model.nasLinkState, p))
+                        GPDataRow(title: "NAS 服务", value: model.syncStatus,
+                                  note: "「测试连接 / 重新检查」只请求 /health 与修订号，不搬账本正文")
                         GPDataRow(title: "行情服务", value: model.status,
                                   note: "盘中每 10 秒自动刷新，分时每 60 秒；收盘后每 5 分钟。打开应用即刷一次")
                         GPDataRow(title: "同步通道", value: "账本(自动+手动) · 行情 · 研究，三条互相独立")

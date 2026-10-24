@@ -19,6 +19,7 @@ from market import (fetch_indices, fetch_tencent_quotes, fetch_tencent_daily, fe
                     symbol_for, DIVIDEND_RULES_VERSION as dividend_rules_version)
 from workers import start_workers
 import research
+import diagnose
 
 WEB_ROOT = Path(__file__).with_name("web")
 
@@ -97,6 +98,13 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                 return self.reply(200, {"service": "guanpan-advisor", "schemaVersion": 1, "authentication": "none", "web": True,
                                         "codeVersion": code_version(), "codeSource": code_source(),
                                         "workers": database.worker_health()})
+            if path == "/v1/diagnose":
+                # 出网自检：把「没外网 / 时钟不准 / DNS-IPv6 黑洞」三种原因分开。
+                # 只读、不写库；探测有超时上限，不会拖死服务。
+                try:
+                    return self.reply(200, diagnose.collect())
+                except Exception as error:  # noqa: BLE001 - 自检本身失败也要给出原因
+                    return self.reply(503, {"error": f"diagnose failed: {type(error).__name__}: {error}"})
             if path == "/v1/ai/verify":
                 # NAS 不再代理任何大模型：手机端 API key 只保存在本机钥匙串，
                 # 连通性在手机上直接验证。NAS 只是数据仓库，不是研究员、也不是第二个顾问。
@@ -253,6 +261,11 @@ def make_handler(database, market_fetcher=fetch_quotes, daily_fetcher=fetch_dail
                         if len(parts) == 6:
                             return self.reply(200, database.real_history_body(parts[3], int(parts[5])))
                         return self.reply(200, database.real_history(parts[3]))
+                    # ?meta=1 只回修订号与 hasBook，不带 bookJSON。
+                    # 手机端做连通性检查、上传前修订核对都该走这里；
+                    # 账本正文只在真正上传/下载时才传，别让一次检测顺着隧道搬整份账本。
+                    if parse_qs(parsed.query).get("meta", ["0"])[0] in ("1", "true", "yes"):
+                        return self.reply(200, database.get_real_meta(parts[3]))
                     return self.reply(200, database.get_real(parts[3]))
                 except (InvalidData, ValueError) as error: return self.reply(400, {"error": str(error)})
             self.reply(404, {"error": "unknown route"})

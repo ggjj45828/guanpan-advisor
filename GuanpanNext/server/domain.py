@@ -382,6 +382,18 @@ class NextDatabase:
             row = db.execute("SELECT revision, body FROM real_books WHERE id=?", (book_id,)).fetchone()
         return {"revision": row[0], "bookJSON": row[1]} if row else {"revision": 0, "bookJSON": None}
 
+    def get_real_meta(self, book_id):
+        """只回修订号与「有没有账本」，不带正文。
+
+        手机端做连通性检查、上传前修订核对走这里。`body IS NOT NULL` 在库里就地判断，
+        不把正文读进内存也不上线，避免一次检测顺着隧道搬整份账本。
+        """
+        self.validate_id(book_id)
+        with self.connect() as db:
+            row = db.execute("SELECT revision, (body IS NOT NULL) AS has_book FROM real_books WHERE id=?",
+                             (book_id,)).fetchone()
+        return {"revision": row[0] if row else 0, "hasBook": bool(row and row[1])}
+
     def put_real(self, book_id, expected, book_json):
         self.validate_id(book_id)
         if type(expected) is not int or expected < 0:

@@ -23,6 +23,10 @@ struct DesignTokens {
     let heroSurface: Color
     let chartBlue: Color
     let chartViolet: Color
+    /// 年线 MA250 专用色。原来它借用 secondary（东方主题里 secondary 与 chartViolet 是同一个
+    /// hex 0x7C5CE0），MA60 和 MA250 在图上颜色完全一样，根本分不出哪条是年线。
+    /// 这里给年线一个中性的石墨色：与金/蓝/绿/紫四条均线都不同色相，也不会被误读成涨跌色。
+    let chartLong: Color
     let chartGold: Color
     let chartCost: Color
     let up: Color
@@ -50,7 +54,7 @@ struct DesignTokens {
                             raised: base.raised, ink: ink, muted: base.muted, line: base.line,
                             primary: base.primary, primaryDeep: base.primaryDeep, secondary: base.secondary,
                             jade: base.jade, risk: base.risk, tint: base.tint, heroSurface: base.heroSurface,
-                            chartBlue: base.chartBlue, chartViolet: base.chartViolet, chartGold: base.chartGold,
+                            chartBlue: base.chartBlue, chartViolet: base.chartViolet, chartLong: base.chartLong, chartGold: base.chartGold,
                             chartCost: base.chartCost, up: base.up, down: base.down,
                             heroStart: base.heroStart, heroEnd: base.heroEnd,
                             heroInk: base.heroInk, heroMutedInk: base.heroMutedInk,
@@ -83,6 +87,7 @@ private extension AppTheme {
                 heroSurface: dark ? Color(hex: 0x362A19) : Color(hex: 0xFBEBCB),
                 chartBlue: dark ? Color(hex: 0x8FB6F0) : Color(hex: 0x3E7BD6),
                 chartViolet: dark ? Color(hex: 0xB69BF0) : Color(hex: 0x7C5CE0),
+                chartLong: dark ? Color(hex: 0xCFC0A8) : Color(hex: 0x5F564A),
                 chartGold: dark ? Color(hex: 0xE9B45C) : Color(hex: 0xC08A2E),
                 chartCost: dark ? Color(hex: 0xD9A0A8) : Color(hex: 0xA85F6C),
                 up: dark ? Color(hex: 0xFF7A6B) : Color(hex: 0xD93B2B),
@@ -112,6 +117,7 @@ private extension AppTheme {
                 heroSurface: dark ? Color(hex: 0x1B2B4A) : Color(hex: 0xE9F0FF),
                 chartBlue: dark ? Color(hex: 0x7AA7FF) : Color(hex: 0x2F6BFF),
                 chartViolet: dark ? Color(hex: 0xA99BFF) : Color(hex: 0x6B5CE8),
+                chartLong: dark ? Color(hex: 0xA9B8CC) : Color(hex: 0x64748B),
                 chartGold: dark ? Color(hex: 0xE9B45C) : Color(hex: 0xD08C1E),
                 chartCost: dark ? Color(hex: 0xE39FB0) : Color(hex: 0xB0576E),
                 up: dark ? Color(hex: 0xFF6F63) : Color(hex: 0xDB3B34),
@@ -140,6 +146,7 @@ private extension AppTheme {
                 heroSurface: Color(hex: 0x1A1F45),
                 chartBlue: Color(hex: 0x5B8CFF),
                 chartViolet: Color(hex: 0xA78BFA),
+                chartLong: Color(hex: 0x94A7C4),
                 chartGold: Color(hex: 0xF0B44C),
                 chartCost: Color(hex: 0xE389A6),
                 up: Color(hex: 0xFF5F52),
@@ -168,6 +175,7 @@ private extension AppTheme {
                 heroSurface: dark ? Color(hex: 0x2A2023) : Color(hex: 0xFDF1E4),
                 chartBlue: dark ? Color(hex: 0x9FB6E8) : Color(hex: 0x4A6FA5),
                 chartViolet: dark ? Color(hex: 0xD3A8C6) : Color(hex: 0x9A5B84),
+                chartLong: dark ? Color(hex: 0xD0BDB6) : Color(hex: 0x6B5C57),
                 chartGold: dark ? Color(hex: 0xE0B98F) : Color(hex: 0xB4813E),
                 chartCost: dark ? Color(hex: 0xDFA0A0) : Color(hex: 0xA5575F),
                 up: dark ? Color(hex: 0xF97F70) : Color(hex: 0xC43C2F),
@@ -197,6 +205,7 @@ private extension AppTheme {
                 heroSurface: dark ? Color(hex: 0x2B2340) : Color(hex: 0xFFF3CF),
                 chartBlue: dark ? Color(hex: 0x8AA8FF) : Color(hex: 0x3F72F0),
                 chartViolet: dark ? Color(hex: 0xB79BFF) : Color(hex: 0x7C5CE0),
+                chartLong: dark ? Color(hex: 0xC7BCDD) : Color(hex: 0x605A70),
                 chartGold: dark ? Color(hex: 0xFFC65C) : Color(hex: 0xE0A02A),
                 chartCost: dark ? Color(hex: 0xE8A2B8) : Color(hex: 0xB05A76),
                 up: dark ? Color(hex: 0xFF7565) : Color(hex: 0xD93B34),

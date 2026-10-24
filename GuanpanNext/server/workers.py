@@ -6,6 +6,7 @@ NAS 的定位是「纯数据仓库」——只负责采集/归档（日 K、分�
 属于正常的数据同步。
 """
 import json
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,7 +17,14 @@ from zoneinfo import ZoneInfo
 from market import symbol_for, fetch_tencent_daily, fetch_dividend_events
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-DEFAULT_CODES = ("159941", "563020", "159545", "159352")
+# 演示标的**默认不再常驻采集**。以前这四个代码被无条件并进采集集合，
+# 结果是：服务只要开着，每 30 分钟为 4 只用户可能根本不看的 demo ETF 打一次上游日 K，
+# 盘中每分钟还要为它们拉一次分时，每天再查一次分红——全是白烧的请求。
+# 真正需要归档的标的来自：手机 /v1/market/track 登记过的、账本里的真实持仓、已归档过的。
+# 想预热演示数据就显式设 GUANPAN_ARCHIVE_DEMO=159941,563020，空着就老实待着。
+DEFAULT_CODES = tuple(code.strip() for code in os.environ.get("GUANPAN_ARCHIVE_DEMO", "").split(",") if code.strip())
+EMPTY_NOTE = ("还没有需要归档的标的：手机还没请求过任何行情。"
+              "打开某只标的或加自选会调用 /v1/market/track 登记，之后自动开始归档。")
 
 
 def parse_minute(body, code):
@@ -104,7 +112,11 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
     def daily_loop():
         update("daily-archive", "starting", "worker starting")
         while True:
-            codes = tracked(); failures = []
+            codes = tracked()
+            if not codes:
+                update("daily-archive", "idle", EMPTY_NOTE)
+                time.sleep(1800); continue
+            failures = []
             for code in codes:
                 try: database.put_daily(code, daily_fetcher(code), datetime.now(timezone.utc).isoformat())
                 except Exception as error: failures.append(f"{code}:{type(error).__name__}")  # Last verified archive stays available.
@@ -117,7 +129,11 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
         while True:
             local = datetime.now(SHANGHAI)
             if local.weekday() < 5 and ((9, 15) <= (local.hour, local.minute) <= (11, 35) or (13, 0) <= (local.hour, local.minute) <= (15, 5)):
-                codes = tracked(); failures = []
+                codes = tracked()
+                if not codes:
+                    update("minute-archive", "idle", EMPTY_NOTE)
+                    time.sleep(60); continue
+                failures = []
                 for code in codes:
                     try:
                         # 分时归档是研究工作的重要数据（用户 2026-10-24 明确要求保留）。
@@ -135,7 +151,11 @@ def start_workers(database, daily_fetcher=fetch_tencent_daily, minute_fetcher=fe
     def dividend_loop():
         update("dividend-archive", "starting", "dividend collector starting")
         while True:
-            codes = tracked(); failures = []; collected = 0
+            codes = tracked()
+            if not codes:
+                update("dividend-archive", "idle", EMPTY_NOTE)
+                time.sleep(86400); continue
+            failures = []; collected = 0
             for code in codes:
                 try:
                     events = fetch_dividend_events(code)

@@ -15,8 +15,8 @@ struct HomeSnapshot {
     let pnlAmount: Decimal?
     let pnlPercent: Double?
     let cashPercent: Double
-    let nasConfigured: Bool
-    let nasSyncedAt: Date?
+    /// NAS 连通状态：五套主题共用这一个结论，不再有第二处「地址非空 = 在线」的判断。
+    let nasState: NextNASLinkState
     let actionableCount: Int
     let profileTags: [String]
     let openPlanCount: Int
@@ -66,14 +66,11 @@ struct HomeSnapshot {
         return lead.whyToday.first ?? "按日 K 与分时结构判断"
     }
 
-    var nasText: String {
-        if !nasConfigured { return "未连接" }
-        guard let nasSyncedAt else { return "已连接" }
-        let minutes = Int(max(0, Date().timeIntervalSince(nasSyncedAt)) / 60)
-        if minutes < 1 { return "刚刚同步" }
-        if minutes < 60 { return "\(minutes) 分钟前" }
-        return "\(minutes / 60) 小时前"
-    }
+    /// NAS 状态细节，必带「最近检测时间」；没测过就说没测过，不编「已连接」。
+    var nasText: String { nasState.detail }
+    /// 短标签：未配置 / 待检测 / 在线 / 待复核 / 离线。
+    var nasBadge: String { nasState.badge }
+    var nasOnline: Bool { nasState.isOnline }
 
     @MainActor
     static func make(model: NextAppModel) -> HomeSnapshot {
@@ -98,8 +95,7 @@ struct HomeSnapshot {
         return HomeSnapshot(now: Date(), guidance: guidance, lead: lead, positions: positions,
                             quotes: quotes, totalEquity: equity, pnlAmount: costBasis > 0 ? marketValue - costBasis : nil,
                             pnlPercent: pnl, cashPercent: cashPercent,
-                            nasConfigured: !model.preferences.nasBaseURL.isEmpty,
-                            nasSyncedAt: model.preferences.nasSyncedAt,
+                            nasState: model.nasLinkState,
                             actionableCount: items.filter(\.isActionable).count,
                             profileTags: model.profile.styleTags,
                             openPlanCount: model.candidatePlans.filter { $0.state.isOpen }.count,
@@ -109,6 +105,16 @@ struct HomeSnapshot {
 }
 
 // MARK: - 首页入口
+
+/// 连接状态语义色 → 当前主题色。五套主题共用这一份映射，
+/// 免得「在线」在某个主题里是绿的、在另一个主题里还是绿的（哪怕 NAS 已经关了）。
+private func nasStatusColor(_ state: NextNASLinkState, _ p: GPPalette) -> Color {
+    switch state.tone {
+    case .ok: return p.jade
+    case .bad: return p.terracotta
+    case .idle: return p.muted
+    }
+}
 
 struct ThemeHomeScreen: View {
     @EnvironmentObject private var model: NextAppModel
@@ -130,6 +136,9 @@ struct ThemeHomeScreen: View {
         }
         .task {
             if model.dailyGuidance == nil { await model.refreshGuidance() }
+            // 首页出现时做一次轻量连通检测（只请求 /health，45 秒内不重复）。
+            // 不检测就永远显示「待检测」，绝不用「地址填过」冒充在线。
+            await model.refreshNASLink()
         }
     }
 }
@@ -525,8 +534,8 @@ private struct HomeIndexBoard: View {
         let snapshot = HomeSnapshot.make(model: model)
         return VStack(alignment: .leading, spacing: 3) {
             Text("NAS").font(.system(size: 9.5, weight: .medium)).foregroundStyle(p.muted).lineLimit(1)
-            Text(snapshot.nasConfigured ? "在线" : "未连").font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted).lineLimit(1)
+            Text(snapshot.nasBadge).font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(nasStatusColor(snapshot.nasState, p)).lineLimit(1)
             Text(snapshot.nasText).font(.system(size: 9)).foregroundStyle(p.muted).lineLimit(1)
         }
         .padding(.horizontal, 7).padding(.vertical, 7)
@@ -1002,7 +1011,10 @@ private struct EditorialHome: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 0)
-            Text("NAS \(snapshot.nasText)").font(.system(size: 9)).foregroundStyle(p.muted)
+            HStack(spacing: 3) {
+                Text("NAS \(snapshot.nasBadge)").font(.system(size: 9)).foregroundStyle(nasStatusColor(snapshot.nasState, p)).lineLimit(1)
+                Text(snapshot.nasText).font(.system(size: 9)).foregroundStyle(p.muted).lineLimit(1)
+            }
         }
         .padding(.top, 4)
     }
@@ -1114,7 +1126,9 @@ private struct ModernHome: View {
     private var nasRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 12)).foregroundStyle(p.forest)
-            Text("NAS 长期归档：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
+            Text("NAS 长期归档：").font(.system(size: 10)).foregroundStyle(p.muted)
+            Text(snapshot.nasBadge).font(.system(size: 10, weight: .semibold)).foregroundStyle(nasStatusColor(snapshot.nasState, p))
+            Text(snapshot.nasText).font(.system(size: 10)).foregroundStyle(p.muted).lineLimit(1)
             Spacer()
             Button { model.push(.profile, in: .decision) } label: {
                 Text("AI 对我的了解").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.forest)
@@ -1390,11 +1404,9 @@ private struct MagazineHome: View {
     private var nasRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 12)).foregroundStyle(p.forest)
-            Text("NAS 长期归档：\(snapshot.nasText)").font(.system(size: 10)).foregroundStyle(p.muted)
-            Spacer()
-            Text(snapshot.nasConfigured ? "在线" : "未连")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted)
+            Text("NAS 长期归档：").font(.system(size: 10)).foregroundStyle(p.muted)
+            Text(snapshot.nasBadge).font(.system(size: 10, weight: .semibold)).foregroundStyle(nasStatusColor(snapshot.nasState, p))
+            Text(snapshot.nasText).font(.system(size: 10)).foregroundStyle(p.muted).lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -1498,8 +1510,10 @@ private struct PuzzleHome: View {
                     tile(tone: p.paper, width: nil) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("NAS 状态").font(.system(size: 9.5)).foregroundStyle(p.muted)
-                            Text(snapshot.nasText).font(.system(size: 13, weight: .heavy, design: .rounded))
-                                .foregroundStyle(snapshot.nasConfigured ? p.jade : p.muted)
+                            Text(snapshot.nasBadge).font(.system(size: 13, weight: .heavy, design: .rounded))
+                                .foregroundStyle(nasStatusColor(snapshot.nasState, p))
+                            Text(snapshot.nasText).font(.system(size: 9)).foregroundStyle(p.muted)
+                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                             // 文案必须和落点一致：NAS 是纯数据仓库（归档日K/分时/分红/新闻），
                             // 研究与判断全部在手机端，这里只是数据源状态，不是第二顾问。
                             Text("数据归档 · 不构成第二建议").font(.system(size: 9)).foregroundStyle(p.muted)

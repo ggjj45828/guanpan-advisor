@@ -50,6 +50,25 @@
     - 日 K < 60 根 → 补「样本偏薄，仅供参考」；
     - `目标买入价` 降为「仅作对照，不单独构成买入理由」；小节 trailing「推荐」→「四项评分」；
     - 点「查询」走 `refreshInstrument`（内含 `refreshDaily`），所以首次查询就会带日 K，不会永远显示数据不完整。
+11. **首页「NAS 已连接」误报修根（回应「不应只因为填了地址就显示在线」）**：原判定有两个错：① `nasText` 只要地址非空就返回「已连接」，② 「上次同步时间」被拿来辅助显示，于是 NAS 关机也报在线。而且**五套主题并不严格统一**：`nasText` 是共用字段，但「在线/未连」还另外硬编码在 `HomeIndexBoard`、`MagazineHome`、`PuzzleHome` 三处，各自只读 `nasConfigured`——只改 `nasText` 这三处仍会误报。
+    - 新增 `NextNASLinkState`（`NASService.swift`）：`unconfigured` / `unchecked`（待检测）/ `online(checkedAt, latencyMS)` / `expired`（待复核）/ `offline(checkedAt, reason)`；在线结论 TTL **10 分钟**，过期自动降级为「待复核」，不再冒充在线。
+    - `NextAppModel` 新增唯一判定源：`nasHealth`（最近一次 `/health` 结果，**不持久化**——重启后宁可「待检测」）、`nasLinkState`、`nasCheckedAt`、`refreshNASLink(force:)`（45 秒节流，只打 `/health`）。
+    - `HomeSnapshot` 的 `nasConfigured/nasSyncedAt` 两个字段整体删除，换成 `nasState`；五套主题 + 设置页全部改读 `nasBadge/nasText/nasState.tone`，色值走统一映射 `nasStatusColor`，杜绝「这处绿、那处也绿」。
+    - 每处状态都带**最近检测时间**（`HH:mm 检测通过 · 132ms` / `HH:mm 检测失败 · 原因`）；`lastSync`（`nasSyncedAt`）只继续用于「账本同步时间」，不再参与在线判定。
+    - 「测试连接」原先 = 健康检查 + `readStatus`（读整份账本），首页一检测就顺着隧道搬账本。现在 `/health` 只做连通性；需要修订号时走新增的 `?meta=1`（`NASService.readRevision` + 服务端 `get_real_meta`，只回 `revision/hasBook`，`body IS NOT NULL` 在库里判断，正文不上线）。自动上传、手动上传、旧账本迁移的修订核对全部改走 meta；**账本正文只在真正下载/上传时才传**。
+12. **图表可读性与均线撞色（回应「看不清、放大不够」+「MA60/MA250 同色」）**：
+    - 撞色属实且只在东方主题暴露：`.editorial` 的 `secondary`（= terracotta，MA250 用色）与 `chartViolet`（MA60）是**同一个 hex `0x7C5CE0`**（深色同为 `0xB69BF0`）。新增独立令牌 `chartLong`（年线石墨色）覆盖五套主题（editorial `0x5F564A` / modern `0x64748B` / dashboard `0x94A7C4` / magazine `0x6B5C57` / puzzle `0x605A70`，各带深色值），MA250 的图例、绘制线、图层按钮三处全部改用它。
+    - 缩放上限原为固定 **8 倍**：1000 根日 K 放大到顶仍剩 125 根，一根蜡烛不到 3 点。改为按「一屏至少留 20 根」反推 `maxMagnification`（`clampZoom`），捏合、无障碍放大/缩小、右上角按钮、恢复已保存缩放四处统一走钳制；按钮到顶再点回 1 倍。
+    - 手势命中区：左轴 26pt 原为死区（从价格刻度按下整段没反应），去掉该 guard，比例本就钳在 0…1，落轴上即取第一根。
+    - 横屏布局：`chartHeight` 原为固定常数，横屏（`verticalSizeClass == .compact`，可用高约 390pt）会把副图和图例顶出屏幕。改为横屏收紧（分时 440→340 / 日 K 320→260，展开态 700/560→560/460）；宽度翻倍本身会显示更多 K 线，收紧高度不减少信息。
+13. **NAS 不再为 4 只 demo ETF 常驻打上游（回应「服务在跑就每天白烧 API」）**：`workers.py` 的 `DEFAULT_CODES = ("159941","563020","159545","159352")` 被**无条件**并进 `tracked()`，等于服务只要开着就每 30 分钟为这 4 只打一次日 K、盘中每分钟拉一次分时、每天查一次分红。
+    - 改为 `GUANPAN_ARCHIVE_DEMO` 环境变量按需开启（默认空）；采集集合只来自 `/v1/market/track` 登记、账本真实持仓、已归档过的代码。
+    - 三个线程均加空集合分支，`/health` 里老实显示 `idle` + 「还没有需要归档的标的」，不再刷 `0/0 codes archived` 这种假装在干活的文案。
+14. **新增 NAS 出网自检 `GET /v1/diagnose`（回应「没外网 / 时钟不准 / DNS-IPv6 黑洞，这些问题有吗」）**：手机只看到 502/503 看不出原因，故把三种假设做成可实测的一条请求（`server/diagnose.py`，也可 `docker exec ... python diagnose.py` 直接跑）：
+    - 逐项探测 `qt.gtimg.cn` / `web.ifzq.gtimg.cn` / `push2.eastmoney.com` + 公网对照 `registry-1.docker.io`、`www.baidu.com`，记录 DNS 的 **IPv4/IPv6 分别解析结果**、TCP:443、TLS 证书与延迟；
+    - 时钟用上游响应头 `Date` 反推偏差（不信本机时钟），偏差 >300s 或出现 `certificate_verify_failed` 即判时钟问题——**优先于「没外网」判定**，否则会跑偏；
+    - 只解析到 IPv6 且连不通 → 判 DNS/IPv6 黑洞（与当初 dockerpull.org 同源）；连公网 registry 也不通 → 判容器无出口；公网通但行情源全挂 → 判源站被拦/域名漂移；
+    - 本地实跑已验证可给出结论（本机 `skewSeconds=1`、结论 ok）。
 
 ## 3. 当前状态汇总
 

@@ -192,6 +192,15 @@ struct LocalPreferences: Codable {
     @Published var unifiedAIIsRunning = false
     @Published var status = "行情尚未刷新 · 缓存可离线查看"
     @Published var syncStatus = "NAS 未连接"
+    // MARK: - NAS 连通状态（在线判定的唯一来源）
+    /// 最近一次 `/health` 的结果。首页五套主题、设置页都读它，
+    /// 不再各自用「地址非空」「上次同步时间」推算在线。
+    @Published private(set) var nasHealth: NextNASHealthRecord?
+    @Published private(set) var nasProbing = false
+    /// 自动轻量检测的节流点：首页每次出现都打一次 `/health` 没必要。
+    private var nasAutoProbeAt: Date?
+    /// 自动检测最小间隔（秒）。
+    private let nasAutoProbeInterval: TimeInterval = 45
     @Published var legacyImportPreview: NextLegacyBookPreview?
     @Published var dailyErrors: [String: String] = [:]
     @Published var notificationStatus = "尚未检查系统通知权限"
@@ -1040,7 +1049,7 @@ struct LocalPreferences: Codable {
     func downloadLegacyWebToPhone() async {
         do {
             try requireEmptyNativeLedger()
-            let destination = try await NextNASService.readStatus(baseURL: preferences.nasBaseURL)
+            let destination = try await NextNASService.readRevision(baseURL: preferences.nasBaseURL)
             guard !destination.hasBook && destination.revision == 0 else { throw NextError.invalid("新版 NAS 已有真实账本；迁移只允许用于初始化，不会覆盖现有账本。") }
             guard repository.integrityWarning == nil else { throw NextError.invalid("本机数据完整性待恢复；迁移已停止") }
             let stagedRevision = try await NextNASService.downloadAndStageLegacyBook(legacyBaseURL: preferences.legacyWebBaseURL, newNASBaseURL: preferences.nasBaseURL)
@@ -1060,7 +1069,7 @@ struct LocalPreferences: Codable {
             let latest = try await NextNASService.previewLegacyBook(baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址在迁移确认期间发生变化；请重新连接并下载预览") }
             guard latest.revision == preview.revision else { throw NextError.invalid("迁移预览版本已变化；请重新下载核对") }
-            let destination = try await NextNASService.readStatus(baseURL: baseURL)
+            let destination = try await NextNASService.readRevision(baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址在迁移确认期间发生变化；未导入本机账本") }
             guard !destination.hasBook && destination.revision == 0 else { throw NextError.invalid("新版 NAS 已有真实账本；为避免覆盖，导入已取消") }
             guard book == originalBook else { throw NextError.invalid("预览期间本机账本发生变化；迁移已停止，请重新核对") }
@@ -1087,19 +1096,64 @@ struct LocalPreferences: Codable {
         }
     }
     func cancelLegacyWebImport() { legacyImportPreview = nil }
-    func probeNAS() async {
+    /// 当前 NAS 连通状态。所有界面都只读这一处结论。
+    var nasLinkState: NextNASLinkState {
+        NextNASLinkState.resolve(configured: !preferences.nasBaseURL.isEmpty, record: nasHealth, now: Date())
+    }
+    /// 最近一次检测时间；没测过就是 nil（界面显示「待检测」，不编时间）。
+    var nasCheckedAt: Date? { nasHealth?.checkedAt }
+
+    /// 轻量连通性检测：**只请求很小的 `/health`**，绝不碰账本接口。
+    /// `force = true` 用于用户点「测试连接 / 重新检查」；首页自动检测按 45 秒节流。
+    /// 返回 nil 表示本次被节流或已有检测在飞。
+    @discardableResult
+    func refreshNASLink(force: Bool = false) async -> NextNASHealthRecord? {
+        let base = preferences.nasBaseURL
+        guard !base.isEmpty else { nasHealth = nil; return nil }
+        let now = Date()
+        if !force, let last = nasAutoProbeAt, now.timeIntervalSince(last) < nasAutoProbeInterval { return nil }
+        if nasProbing { return nil }
+        nasAutoProbeAt = now
+        nasProbing = true
+        defer { nasProbing = false }
+        let started = Date()
         do {
-            _ = try await NextNASService.checkHealth(baseURL: preferences.nasBaseURL)
+            _ = try await NextNASService.checkHealth(baseURL: base)
+            let record = NextNASHealthRecord(ok: true, checkedAt: Date(),
+                                             latencyMS: Int(Date().timeIntervalSince(started) * 1000), reason: nil)
+            // 检测期间地址被改掉，就不把这结果记到新地址头上。
+            guard preferences.nasBaseURL == base else { return record }
+            nasHealth = record
+            return record
         } catch {
-            syncStatus = "NAS 离线或健康检查失败 · \(error.localizedDescription)"
-            postLocalAlert(level: "NAS", fingerprint: "nas-connectivity", title: "NAS 连接不可用", detail: "\(error.localizedDescription)。本机账本和缓存仍可使用。", stamp: NextDataStamp(source: "NAS 连通性检查", observedAt: Date(), quality: .stale, detail: "用户触发检查"))
+            let record = NextNASHealthRecord(ok: false, checkedAt: Date(), latencyMS: nil,
+                                             reason: error.localizedDescription)
+            guard preferences.nasBaseURL == base else { return record }
+            nasHealth = record
+            return record
+        }
+    }
+
+    /// 用户主动「测试连接」：先只做 `/health`；通了才顺带问修订号（`?meta=1`，不带账本正文）。
+    /// 以前这里是「健康检查 + 读整份账本」，首页一检测就把账本顺着隧道搬一遍——没必要。
+    func probeNAS() async {
+        guard !preferences.nasBaseURL.isEmpty else { syncStatus = "还没填 NAS 地址"; return }
+        let base = preferences.nasBaseURL
+        guard let record = await refreshNASLink(force: true) else { return }
+        guard preferences.nasBaseURL == base else { return }
+        guard record.ok else {
+            syncStatus = "NAS 离线 · \(record.reason ?? "健康检查失败") · 检测于 \(NextNASLinkState.timeText(record.checkedAt))"
+            postLocalAlert(level: "NAS", fingerprint: "nas-connectivity", title: "NAS 连接不可用",
+                           detail: "\(record.reason ?? "健康检查失败")。本机账本和缓存仍可使用。",
+                           stamp: NextDataStamp(source: "NAS 连通性检查", observedAt: record.checkedAt,
+                                               quality: .stale, detail: "用户触发检查，只请求 /health"))
             return
         }
         do {
-            let remote = try await NextNASService.readStatus(baseURL: preferences.nasBaseURL)
-            syncStatus = "NAS 可连接 · 修订 \(remote.revision) · \(remote.hasBook ? "已有数据，可下载" : "空账本")"
+            let meta = try await NextNASService.readRevision(baseURL: base)
+            syncStatus = "NAS 在线 · 修订 \(meta.revision) · \(meta.hasBook ? "已有数据，可下载" : "空账本") · 检测于 \(NextNASLinkState.timeText(record.checkedAt))"
         } catch {
-            syncStatus = "NAS 在线 · 账本接口读取失败：\(error.localizedDescription)"
+            syncStatus = "NAS 在线（/health 通过）· 修订号读取失败：\(error.localizedDescription)"
         }
     }
     func downloadBookManually() async {
@@ -1128,7 +1182,8 @@ struct LocalPreferences: Codable {
         let baseURL = preferences.nasBaseURL
         let knownRevision = preferences.nasRevision
         do {
-            let remote = try await NextNASService.readStatus(baseURL: baseURL)
+            // 只核对修订号，不搬账本正文：正文在这次上传时才真正上行。
+            let remote = try await NextNASService.readRevision(baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL else { throw NextError.invalid("NAS 地址在同步过程中发生变化；本次未上传") }
             guard book == snapshot, preferences.nasRevision == knownRevision else { throw NextError.invalid("本机账本或同步修订在连接期间发生变化；请重新核对后同步") }
             if !force {
@@ -1191,7 +1246,8 @@ struct LocalPreferences: Codable {
         let fingerprint = snapshot.syncFingerprint
         let baseURL = preferences.nasBaseURL
         do {
-            let remote = try await NextNASService.readStatus(baseURL: baseURL)
+            // 自动上传前只拿修订号（`?meta=1`）；账本正文只在真要写的时候才传。
+            let remote = try await NextNASService.readRevision(baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL, book.syncFingerprint == fingerprint else { return }
             if let known = preferences.nasRevision {
                 guard remote.revision == known else {

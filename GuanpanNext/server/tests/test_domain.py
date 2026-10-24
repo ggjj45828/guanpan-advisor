@@ -77,6 +77,18 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(self.db.put_real("main", 0, text), 1)
         self.assertEqual(self.db.get_real("main")["bookJSON"], text)
 
+    def test_meta_query_reports_revision_without_returning_book_body(self):
+        """手机端连通性检查 / 上传前核对走 ?meta=1：只回修订号与 hasBook，不回正文。
+
+        首页状态如果每次都把整份账本读一遍，一次「在不在线」的检测就会顺着隧道搬几十 KB，
+        这正是要避免的流量。这里钉住接口形状，避免以后有人图省事又改回 get_real。
+        """
+        self.assertEqual(self.db.get_real_meta("main"), {"revision": 0, "hasBook": False})
+        self.assertEqual(self.db.put_real("main", 0, json.dumps(book())), 1)
+        meta = self.db.get_real_meta("main")
+        self.assertEqual(meta, {"revision": 1, "hasBook": True})
+        self.assertNotIn("bookJSON", meta)
+
     def test_duplicate_or_invalid_positions_rejected(self):
         for value in [-1, True, 0.5, "100"]:
             data = book(); data["positions"][0]["units"] = value
