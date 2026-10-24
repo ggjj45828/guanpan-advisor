@@ -2018,7 +2018,7 @@ private struct SettingsScreen: View {
                     GPActionButton(title: "从 NAS 下载账本", secondary: true, systemImage: "arrow.down.doc") { confirmDownload = true }
                     GPActionButton(title: "上传本机账本到 NAS", secondary: true, systemImage: "arrow.up.doc") { confirmSync = true }
                     Divider().padding(.vertical, 4)
-                    Text("此并行顾问服务默认地址为 http://NAS内网地址:8786；原服务仍为 30001。公网连接必须使用 HTTPS。新服务使用独立数据库，账本同步采用修订号保护。")
+                    Text("NAS 顾问服务默认地址为 http://NAS内网地址:8786。公网连接必须使用 HTTPS。服务使用独立数据库，账本同步采用修订号保护。")
                         .font(.caption).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
                     }
                 }

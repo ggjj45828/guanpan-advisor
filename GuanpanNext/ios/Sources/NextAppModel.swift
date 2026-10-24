@@ -1478,7 +1478,7 @@ struct LocalPreferences: Codable {
         do {
             let report = try await NextNASService.fetchResearch(code: code, baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL else {
-                researchStatus[code] = "NAS 地址已变更 · 保留原缓存，未混用新旧服务"
+                researchStatus[code] = "NAS 地址已变更 · 保留原缓存，未混用不同 NAS"
                 return
             }
             nasResearch[code] = report
@@ -1499,7 +1499,7 @@ struct LocalPreferences: Codable {
         do {
             let result = try await NextNASService.fetchNews(code: code, baseURL: baseURL)
             guard preferences.nasBaseURL == baseURL else {
-                newsStatus[code] = "NAS 地址已变更 · 保留原新闻缓存，未混用新旧服务"
+                newsStatus[code] = "NAS 地址已变更 · 保留原新闻缓存，未混用不同 NAS"
                 return
             }
             if !result.items.isEmpty { nasNews[code] = result.items }

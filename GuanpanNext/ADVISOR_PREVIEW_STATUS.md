@@ -1,6 +1,6 @@
-# 真实持仓顾问：并行部署预览
+# 真实持仓顾问：部署预览
 
-本包是可并行部署的开发预览，不是可用于交易的最终版本。新服务绑定 `GUANPAN_ADVISOR_PORT`（默认 8786）、新 Compose 项目 `guanpan-advisor` 和新 named volume `guanpan_advisor_data`；代码直接构建进新镜像，不挂载旧版源码；旧服务 30001 与数据库保持独立。
+本包是观盘顾问服务（已取代旧 30001 服务），不是可用于交易的最终版本。服务绑定 `GUANPAN_ADVISOR_PORT`（默认 8786）、Compose 项目 `guanpan-advisor` 和新 named volume `guanpan_advisor_data`；代码直接构建进镜像。
 
 ## 已添加
 
