@@ -730,7 +730,17 @@ private struct InstrumentDetailScreen: View {
                             lines: profiles.map(\.summary),
                             identifier: "crossmarket.session")
                     }
-                    // 127 尾盘→次日：只读研究，口径必须自曝。
+                    // 125 汇率上下文：跨境 ETF 的涨跌里有一层汇率，拆开才看得清。
+                    // 汇率没接入时这张卡照常显示，写的是「未接入」，而不是假装汇率没变。
+                    if let top = model.leadSourceRanking(for: code).top,
+                       let pair = NextFXPair.pair(for: top.lead) {
+                        let fx = model.fxContext(for: top.lead)
+                        GPResearchCard(
+                            title: "汇率上下文",
+                            subtitle: "\(top.lead.displayName) · \(pair.displayName)",
+                            lines: [fx.note] + (model.fxAdjustment(for: top.lead).map { [$0.note] } ?? []),
+                            identifier: "crossmarket.fx")
+                    }
                     if let tail = model.closeToOpenStudy(for: code) {
                         GPResearchCard(
                             title: "尾盘 → 次日观察",

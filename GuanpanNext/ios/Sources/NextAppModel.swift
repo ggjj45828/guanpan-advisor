@@ -190,6 +190,9 @@ struct LocalPreferences: Codable {
     @Published private(set) var intradayFreshness: [String: NextSampleFreshness] = [:]
     /// 121 条件化领先：按领先市场当天的状态分组，看关系在哪种状态下才算数。
     @Published private(set) var conditionalLeads: [String: [NextConditionalLead]] = [:]
+    /// 125 汇率序列（按市场代码存）。**目前没有接入数据源**，
+    /// 所以 `fxContext` 会明确返回「未接入」，而不是假设汇率为 0。
+    @Published private(set) var fxSeries: [String: [NextFXPoint]] = [:]
     /// 132 分时段画像：开盘/上午/午后/尾盘各自的关系表现。
     @Published private(set) var sessionProfiles: [String: [NextSessionProfile]] = [:]
     /// 每只持仓的最新新闻标题（只存标题与来源，不存正文）。新闻→持仓→计划的影响在扫描时统一计算。
@@ -1736,6 +1739,26 @@ struct LocalPreferences: Codable {
         guard let daily = chartData["\(code):day"], daily.samples.count > 1 else { return nil }
         let minute = chartData[code]?.samples ?? []
         return NextCloseToOpenEngine.study(code: code, daily: daily.samples, minute: minute)
+    }
+
+    /// 125 汇率上下文：只做解释，不产生信号。
+    /// 没有汇率数据时返回「未接入」的明确状态——**不会**假设汇率为 0，
+    /// 因为那等于把汇率造成的影响算到标的头上。
+    func fxContext(for market: NextCrossMarket) -> NextFXContext {
+        NextFXContextEngine.context(market: market,
+                                    series: fxSeries[market.rawValue] ?? [],
+                                    now: Date())
+    }
+
+    /// 把**海外标的**今天的涨跌拆成「标的 + 汇率」。汇率不可用时返回 nil，不给拆分。
+    /// 注意用的是海外市场自己的涨跌，不是这只 ETF 的人民币计价涨跌——
+    /// 拿已经是人民币口径的数字再和汇率拆一次，等于把汇率算两遍。
+    func fxAdjustment(for market: NextCrossMarket) -> NextFXAdjustment? {
+        let context = fxContext(for: market)
+        guard case .available = context.state else { return nil }
+        guard let row = crossMarketPulse.rows.first(where: { $0.market == market }),
+              let change = row.changePercent else { return nil }
+        return NextFXContextEngine.adjust(localPercent: change, context: context)
     }
 
     /// 缓存里的分时还能不能当「今天的」用。
